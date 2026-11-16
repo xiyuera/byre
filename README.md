@@ -3,8 +3,9 @@
 **A lease-based SSH gateway.** A client presents a public key; it gets one instance for the whole
 session, and that instance is held exclusively until the lease expires.
 
-> Status: **M0 (skeleton)** — interfaces, configuration and ADRs are in place; the SSH front end and
-> lease manager land in M1/M2. Nothing here is production-ready yet.
+> Status: **M1** — configuration, lease manager and SSH front end (publickey identity, session/exec,
+> `-L`, `-R`) work against the `static` backend. The Kubernetes backend, warm pool and adoption land in
+> M2/M3. Not production-ready: single replica, no e2e gate yet.
 
 ## Why "per connection" is wrong
 

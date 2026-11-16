@@ -1,8 +1,5 @@
 // Command keypod is a lease-based SSH gateway: a client authenticates with a public key and receives
 // one instance for the whole session, held exclusively until the lease expires.
-//
-// M0 scope: configuration loading, strict validation, and the health endpoint. The SSH front end and
-// the lease manager are wired in M1/M2.
 package main
 
 import (
@@ -17,7 +14,10 @@ import (
 	"syscall"
 	"time"
 
+	"keypod/internal/backend"
 	"keypod/internal/config"
+	"keypod/internal/lease"
+	"keypod/internal/sshfront"
 	"keypod/internal/version"
 )
 
@@ -46,11 +46,23 @@ func main() {
 	if *listen != "" {
 		cfg.Listen = *listen
 	}
+
+	backends, err := buildBackends(cfg)
+	if err != nil {
+		logger.Error("configuration rejected", "error", err)
+		os.Exit(2)
+	}
+	identities, err := buildIdentities(cfg, backends)
+	if err != nil {
+		logger.Error("configuration rejected", "error", err)
+		os.Exit(2)
+	}
 	logger.Info("configuration accepted",
 		"listen", cfg.Listen,
-		"backends", len(cfg.Backends),
-		"identities", len(cfg.Identities),
+		"backends", len(backends),
+		"identities", len(identities),
 		"ttl", cfg.Lease.TTL.String(),
+		"grace", cfg.Lease.Grace.String(),
 		"pool_size", cfg.Lease.PoolSize,
 		"version", version.String(),
 	)
@@ -58,9 +70,37 @@ func main() {
 		return
 	}
 
-	// TODO(M1): start the SSH front end on cfg.Listen.
-	// TODO(M2): start the lease manager and warm the pool.
-	// TODO(M3): expose real metrics; /metrics below is a placeholder.
+	mgr, err := lease.New(cfg.Lease.TTL.Std(), cfg.Lease.Grace.Std(), backends)
+	if err != nil {
+		logger.Error("lease manager", "error", err)
+		os.Exit(1)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go mgr.RunReaper(ctx, 30*time.Second)
+
+	front, err := sshfront.New(sshfront.Config{
+		Listen:     cfg.Listen,
+		Identities: identities,
+		Leases:     mgr,
+		Logger:     logger,
+	})
+	if err != nil {
+		logger.Error("ssh front end", "error", err)
+		os.Exit(1)
+	}
+	if err := front.Listen(); err != nil {
+		logger.Error("ssh front end", "error", err)
+		os.Exit(1)
+	}
+	go func() {
+		if err := front.Serve(ctx); err != nil {
+			logger.Error("ssh front end stopped", "error", err)
+			stop()
+		}
+	}()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -68,31 +108,71 @@ func main() {
 		fmt.Fprintf(w, "ok %s\n", version.String())
 	})
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		active, idle := mgr.Stats()
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		fmt.Fprintf(w, "# HELP keypod_up Whether the process is running.\n# TYPE keypod_up gauge\nkeypod_up 1\n")
+		fmt.Fprintf(w, "# HELP keypod_leases_active Leases with at least one open connection.\n# TYPE keypod_leases_active gauge\nkeypod_leases_active %d\n", active)
+		fmt.Fprintf(w, "# HELP keypod_leases_idle Leases without connections, waiting to be reaped.\n# TYPE keypod_leases_idle gauge\nkeypod_leases_idle %d\n", idle)
 	})
-
-	srv := &http.Server{
-		Addr:              ":8099",
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	health := &http.Server{Addr: ":8099", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
-		logger.Info("health endpoint listening", "addr", srv.Addr)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Info("health endpoint listening", "addr", health.Addr)
+		if err := health.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("health endpoint failed", "error", err)
-			os.Exit(1)
+			stop()
 		}
 	}()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	<-ctx.Done()
-
 	logger.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Warn("health endpoint shutdown", "error", err)
+	_ = health.Shutdown(shutdownCtx)
+	_ = front.Close()
+}
+
+// buildBackends instantiates one driver per configured backend.
+func buildBackends(cfg *config.Config) (map[string]backend.Backend, error) {
+	out := make(map[string]backend.Backend, len(cfg.Backends))
+	for _, b := range cfg.Backends {
+		switch b.Type {
+		case config.TypeStatic:
+			drv, err := backend.NewStatic(backend.StaticConfig{
+				Name:          b.Name,
+				Endpoints:     b.Endpoints,
+				User:          b.SSH.User,
+				PrivateKey:    b.SSH.PrivateKey,
+				HostKeyPolicy: b.SSH.HostKeyPolicy,
+			})
+			if err != nil {
+				return nil, err
+			}
+			out[b.Name] = drv
+		case config.TypeKubernetes:
+			return nil, fmt.Errorf("backend %q: type %s is not implemented yet (M2)", b.Name, b.Type)
+		default:
+			return nil, fmt.Errorf("backend %q: unknown type %q", b.Name, b.Type)
+		}
 	}
+	return out, nil
+}
+
+// buildIdentities normalises fingerprints so two spellings of one key cannot become two identities,
+// and checks that every identity names a driver that exists.
+func buildIdentities(cfg *config.Config, backends map[string]backend.Backend) (map[string]sshfront.Identity, error) {
+	out := make(map[string]sshfront.Identity, len(cfg.Identities))
+	for _, id := range cfg.Identities {
+		fp, err := config.NormalizeFingerprint(id.Fingerprint)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := backends[id.Backend]; !ok {
+			return nil, fmt.Errorf("identity %s: unknown backend %q", fp, id.Backend)
+		}
+		if _, dup := out[fp]; dup {
+			return nil, fmt.Errorf("identity %s: duplicate fingerprint", fp)
+		}
+		out[fp] = sshfront.Identity{Fingerprint: fp, Backend: id.Backend, Aliases: id.Aliases}
+	}
+	return out, nil
 }
