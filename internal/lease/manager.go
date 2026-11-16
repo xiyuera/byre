@@ -116,6 +116,17 @@ func (m *Manager) Acquire(ctx context.Context, identity, backendName string) (En
 		return Entry{}, fmt.Errorf("backend %q returned an unusable instance: %w", backendName, err)
 	}
 
+	// A pooled instance exists before the identity does, so the binding has to be written now. Without
+	// it a restart cannot distinguish a live lease from stale warm capacity.
+	if fromPool {
+		if binder, ok := drv.(backend.Binder); ok {
+			if err := binder.Bind(ctx, in, identity); err != nil {
+				_ = drv.Release(ctx, in)
+				return Entry{}, fmt.Errorf("bind pooled instance on %q: %w", backendName, err)
+			}
+		}
+	}
+
 	e := &Entry{
 		Identity: identity,
 		Backend:  backendName,
@@ -232,6 +243,9 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 		for _, in := range ins {
 			id := in.Annotations[backend.LabelIdentity]
 			if id == "" {
+				// Warm capacity left over from a previous process: destroy it rather than leave an
+				// object nobody tracks. The pool is refilled right after adoption.
+				_ = drv.Release(ctx, in)
 				continue
 			}
 			if _, exists := m.byIdentity[id]; exists {

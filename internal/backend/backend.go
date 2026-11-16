@@ -75,5 +75,14 @@ type Backend interface {
 	Adopt(ctx context.Context, ins []Instance) error
 }
 
+// Binder is implemented by drivers whose instances can record which identity holds them.
+//
+// It exists because a pooled instance is created *before* an identity asks for it: without a bind step
+// the object would never carry the identity, and a restart could not tell a live lease from stale
+// capacity.
+type Binder interface {
+	Bind(ctx context.Context, in Instance, identity string) error
+}
+
 // ErrNoCapacity is returned by Acquire when the driver is exhausted.
 var ErrNoCapacity = errors.New("no capacity")

@@ -106,6 +106,7 @@ type Provider struct {
 	APIGroup      string   `yaml:"api_group"`
 	APIVersion    string   `yaml:"api_version"`
 	ClaimResource string   `yaml:"claim_resource"`
+	ClaimKind     string   `yaml:"claim_kind"`
 	EndpointField []string `yaml:"endpoint_field"`
 }
 
@@ -267,13 +268,16 @@ func (c *Config) Validate() error {
 func validateProvider(where string, b Backend, fail func(string, ...any)) {
 	switch b.Provider.Kind {
 	case KindSandboxClaim:
-		if strings.TrimSpace(b.Provider.Template) == "" {
-			fail("%s (%s): provider.template is required for kind %s", where, b.Name, KindSandboxClaim)
+		// Claim APIs differ: some instantiate a named template, some only claim from a warm pool.
+		// Require at least one selector instead of insisting on a shape the target API may not have.
+		if strings.TrimSpace(b.Provider.Template) == "" && strings.TrimSpace(b.Provider.WarmPool) == "" {
+			fail("%s (%s): provider.template or provider.warm_pool is required for kind %s", where, b.Name, KindSandboxClaim)
 		}
 		if strings.TrimSpace(b.Provider.APIGroup) == "" ||
 			strings.TrimSpace(b.Provider.APIVersion) == "" ||
-			strings.TrimSpace(b.Provider.ClaimResource) == "" {
-			fail("%s (%s): provider.api_group, api_version and claim_resource are required for kind %s (no CRD is hardcoded)",
+			strings.TrimSpace(b.Provider.ClaimResource) == "" ||
+			strings.TrimSpace(b.Provider.ClaimKind) == "" {
+			fail("%s (%s): provider.api_group, api_version, claim_resource and claim_kind are required for kind %s (no CRD is hardcoded)",
 				where, b.Name, KindSandboxClaim)
 		}
 	case KindPod:

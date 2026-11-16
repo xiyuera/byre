@@ -65,6 +65,7 @@ backends:
       api_group: "<crd-group>"          # e.g. your.sandbox.api
       api_version: "<crd-version>"
       claim_resource: "<plural-resource>"
+      claim_kind: "<Kind>"
       endpoint_field: ["status", "sandbox", "serviceFQDN"]
     ssh:
       port: 22

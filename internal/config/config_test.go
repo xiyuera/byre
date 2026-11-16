@@ -20,7 +20,7 @@ func baseConfig() *Config {
 			Namespace: "sandbox-system",
 			Provider: Provider{
 				Kind: KindSandboxClaim, Template: "sandbox",
-				APIGroup: "example.io", APIVersion: "v1", ClaimResource: "sandboxclaims",
+				APIGroup: "example.io", APIVersion: "v1", ClaimResource: "sandboxclaims", ClaimKind: "SandboxClaim",
 			},
 			SSH: SSH{Port: 22, User: "sandbox", PrivateKey: "/keys/pool", HostKeyPolicy: "accept-new"},
 		}},
@@ -66,8 +66,11 @@ func TestValidateRejects(t *testing.T) {
 		{"no identities", func(c *Config) { c.Identities = nil }, "at least one identity"},
 		{"unknown type", func(c *Config) { c.Backends[0].Type = "docker" }, "unknown type"},
 		{"missing namespace", func(c *Config) { c.Backends[0].Namespace = "" }, "namespace is required"},
-		{"missing template", func(c *Config) { c.Backends[0].Provider.Template = "" }, "provider.template is required"},
-		{"missing gvk", func(c *Config) { c.Backends[0].Provider.APIGroup = "" }, "api_group, api_version and claim_resource"},
+		{"no selector", func(c *Config) {
+			c.Backends[0].Provider.Template = ""
+			c.Backends[0].Provider.WarmPool = ""
+		}, "provider.template or provider.warm_pool is required"},
+		{"missing gvk", func(c *Config) { c.Backends[0].Provider.APIGroup = "" }, "api_group, api_version, claim_resource and claim_kind"},
 		{"missing endpoint field is fine", func(c *Config) { c.Backends[0].Provider.EndpointField = nil }, ""},
 		{"unknown kind", func(c *Config) { c.Backends[0].Provider.Kind = "vm" }, "unknown provider.kind"},
 		{"missing image", func(c *Config) { c.Backends[0].Provider = Provider{Kind: KindPod} }, "provider.image is required"},
@@ -166,6 +169,7 @@ backends:
       api_group: example.io
       api_version: v1
       claim_resource: sandboxclaims
+      claim_kind: SandboxClaim
     ssh:
       port: 22
       user: sandbox

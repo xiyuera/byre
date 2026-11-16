@@ -29,6 +29,7 @@ backends:
       api_group: "<crd-group>"
       api_version: "<crd-version>"
       claim_resource: "<plural-resource>"
+      claim_kind: "<Kind>"           # e.g. SandboxClaim — sent verbatim, never guessed
       endpoint_field: ["status", "sandbox", "serviceFQDN"]
     ssh:
       port: 22

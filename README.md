@@ -3,9 +3,10 @@
 **A lease-based SSH gateway.** A client presents a public key; it gets one instance for the whole
 session, and that instance is held exclusively until the lease expires.
 
-> Status: **M1** — configuration, lease manager and SSH front end (publickey identity, session/exec,
-> `-L`, `-R`) work against the `static` backend. The Kubernetes backend, warm pool and adoption land in
-> M2/M3. Not production-ready: single replica, no e2e gate yet.
+> Status: **M4** — the lease gateway works end to end: publickey identity, session/exec, `-L`, `-R`,
+> warm pool, claim and pod backends, adoption after restart, and real-cluster acceptance with a
+> non-default client identity (see `docs/acceptance/`). Still single-replica and without an automated
+> e2e gate; hardening is M5.
 
 ## Why "per connection" is wrong
 

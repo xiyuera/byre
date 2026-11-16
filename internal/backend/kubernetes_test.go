@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -40,12 +41,12 @@ func TestNewKubernetesValidation(t *testing.T) {
 		{"no user", func(c *KubernetesConfig) { c.SSHUser = "" }, "ssh user and private key"},
 		{"pod without image", func(c *KubernetesConfig) { c.Provider.Image = "" }, "provider.image is required"},
 		{"unknown kind", func(c *KubernetesConfig) { c.Provider.Kind = "vm" }, "unknown provider.kind"},
-		{"claim without template", func(c *KubernetesConfig) {
+		{"claim without selector", func(c *KubernetesConfig) {
 			c.Provider = ProviderSpec{Kind: KindSandboxClaim, APIGroup: "g", APIVersion: "v1", ClaimResource: "claims"}
-		}, "provider.template is required"},
+		}, "provider.template or provider.warm_pool is required"},
 		{"claim without gvk", func(c *KubernetesConfig) {
 			c.Provider = ProviderSpec{Kind: KindSandboxClaim, Template: "t"}
-		}, "api_group, api_version and claim_resource"},
+		}, "api_group, api_version, claim_resource and claim_kind"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -182,11 +183,13 @@ func claimConfig() KubernetesConfig {
 		APIGroup:      claimGVR.Group,
 		APIVersion:    claimGVR.Version,
 		ClaimResource: claimGVR.Resource,
+		ClaimKind:     "SandboxClaim",
 	}
 	return cfg
 }
 
 func TestClaimCreateUsesConfiguredGVKAndEndpointField(t *testing.T) {
+	withProbe(t, func(context.Context, string) error { return nil })
 	cfg := claimConfig()
 	cfg.Client = fake.NewSimpleClientset()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
@@ -220,13 +223,13 @@ func TestClaimCreateUsesConfiguredGVKAndEndpointField(t *testing.T) {
 	if len(list.Items) != 1 {
 		t.Fatalf("claims = %d, want 1", len(list.Items))
 	}
-	tmpl, _, _ := unstructured.NestedString(list.Items[0].Object, "spec", "templateRef", "name")
-	if tmpl != "sandbox" {
-		t.Fatalf("templateRef.name = %q", tmpl)
-	}
 	pool, _, _ := unstructured.NestedString(list.Items[0].Object, "spec", "warmPoolRef", "name")
 	if pool != "sandbox" {
 		t.Fatalf("warmPoolRef.name = %q", pool)
+	}
+	tmpl, _, _ := unstructured.NestedString(list.Items[0].Object, "spec", "templateRef", "name")
+	if tmpl != "sandbox" {
+		t.Fatalf("templateRef.name = %q", tmpl)
 	}
 
 	if err := k.Release(context.Background(), in); err != nil {
@@ -239,6 +242,7 @@ func TestClaimCreateUsesConfiguredGVKAndEndpointField(t *testing.T) {
 }
 
 func TestClaimTimeoutCleansUp(t *testing.T) {
+	withProbe(t, func(context.Context, string) error { return errors.New("connection refused") })
 	cfg := claimConfig()
 	cfg.Provider.ReadyTimeout = 300 * time.Millisecond
 	cfg.Client = fake.NewSimpleClientset()
@@ -273,5 +277,121 @@ func TestEndpointFieldNormalisesPort(t *testing.T) {
 	}
 	if got := k.endpointFromObject(&unstructured.Unstructured{Object: map[string]any{}}); got != "" {
 		t.Fatalf("missing field returned %q", got)
+	}
+}
+
+// withProbe replaces the readiness probe for the duration of one test.
+func withProbe(t *testing.T, fn func(ctx context.Context, addr string) error) {
+	t.Helper()
+	orig := probeAddr
+	probeAddr = fn
+	t.Cleanup(func() { probeAddr = orig })
+}
+
+func TestClaimIsNotReadyUntilEndpointResolves(t *testing.T) {
+	cfg := claimConfig()
+	cfg.Provider.ReadyTimeout = 400 * time.Millisecond
+	cfg.Client = fake.NewSimpleClientset()
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{claimGVR: "SandboxClaimList"})
+	dyn.PrependReactor("create", claimGVR.Resource, func(action ktesting.Action) (bool, runtime.Object, error) {
+		obj := action.(ktesting.CreateAction).GetObject().(*unstructured.Unstructured)
+		obj.Object["status"] = map[string]any{
+			"sandbox": map[string]any{"serviceFQDN": "keypod-1.instances.svc.cluster.local"},
+		}
+		return false, nil, nil
+	})
+	cfg.Dynamic = dyn
+
+	// The controller publishes the field before DNS answers: this is the real-world race.
+	withProbe(t, func(context.Context, string) error { return errors.New("connection refused") })
+
+	k, err := NewKubernetes(cfg)
+	if err != nil {
+		t.Fatalf("NewKubernetes: %v", err)
+	}
+	if _, err := k.Create(context.Background()); err == nil {
+		t.Fatal("expected a timeout while the endpoint stays unresolvable")
+	}
+	list, _ := dyn.Resource(claimGVR).Namespace("instances").List(context.Background(), metav1.ListOptions{})
+	if len(list.Items) != 0 {
+		t.Fatalf("unresolvable claim was left behind (%d)", len(list.Items))
+	}
+}
+
+func TestClaimSucceedsOnceDNSAnswers(t *testing.T) {
+	cfg := claimConfig()
+	cfg.Client = fake.NewSimpleClientset()
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{claimGVR: "SandboxClaimList"})
+	dyn.PrependReactor("create", claimGVR.Resource, func(action ktesting.Action) (bool, runtime.Object, error) {
+		obj := action.(ktesting.CreateAction).GetObject().(*unstructured.Unstructured)
+		obj.Object["status"] = map[string]any{
+			"sandbox": map[string]any{"serviceFQDN": "keypod-1.instances.svc.cluster.local"},
+		}
+		return false, nil, nil
+	})
+	cfg.Dynamic = dyn
+
+	var calls int
+	withProbe(t, func(context.Context, string) error {
+		calls++
+		if calls < 3 {
+			return errors.New("connection refused")
+		}
+		return nil
+	})
+
+	k, err := NewKubernetes(cfg)
+	if err != nil {
+		t.Fatalf("NewKubernetes: %v", err)
+	}
+	in, err := k.Create(context.Background())
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if in.Addr != "keypod-1.instances.svc.cluster.local:22" {
+		t.Fatalf("addr = %q", in.Addr)
+	}
+	if calls < 3 {
+		t.Fatalf("resolved after %d calls, want >= 3", calls)
+	}
+}
+
+func TestClaimFallsBackToPodIPWhenServiceNameDoesNotAnswer(t *testing.T) {
+	cfg := claimConfig()
+	cfg.Client = fake.NewSimpleClientset()
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{claimGVR: "SandboxClaimList"})
+	dyn.PrependReactor("create", claimGVR.Resource, func(action ktesting.Action) (bool, runtime.Object, error) {
+		obj := action.(ktesting.CreateAction).GetObject().(*unstructured.Unstructured)
+		obj.Object["status"] = map[string]any{
+			"sandbox": map[string]any{
+				"serviceFQDN": "keypod-1.instances.svc.cluster.local",
+				"podIPs":      []any{"192.0.2.9"},
+			},
+		}
+		return false, nil, nil
+	})
+	cfg.Dynamic = dyn
+
+	// The service name is not answering yet; the pod IP is.
+	withProbe(t, func(_ context.Context, addr string) error {
+		if strings.HasPrefix(addr, "keypod-1.") {
+			return errors.New("no such host")
+		}
+		return nil
+	})
+
+	k, err := NewKubernetes(cfg)
+	if err != nil {
+		t.Fatalf("NewKubernetes: %v", err)
+	}
+	in, err := k.Create(context.Background())
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if in.Addr != "192.0.2.9:22" {
+		t.Fatalf("addr = %q, want the pod IP fallback", in.Addr)
 	}
 }

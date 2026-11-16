@@ -86,6 +86,14 @@ func main() {
 		}
 	}
 
+	// Adoption must happen before warming: an unannotated instance found at startup is stale pool
+	// capacity and gets destroyed, while warming would immediately create more of it.
+	if n, err := mgr.Adopt(ctx); err != nil {
+		logger.Warn("adoption incomplete", "adopted", n, "error", err)
+	} else if n > 0 {
+		logger.Info("adopted existing leases", "count", n)
+	}
+
 	go mgr.RunReaper(ctx, 30*time.Second)
 	if cfg.Lease.PoolSize > 0 {
 		go mgr.RunWarmer(ctx, 15*time.Second)
@@ -107,12 +115,6 @@ func main() {
 		logger.Error("ssh front end", "error", err)
 		os.Exit(1)
 	}
-	if n, err := mgr.Adopt(ctx); err != nil {
-		logger.Warn("adoption incomplete", "adopted", n, "error", err)
-	} else if n > 0 {
-		logger.Info("adopted existing leases", "count", n)
-	}
-
 	if err := front.Listen(); err != nil {
 		logger.Error("ssh front end", "error", err)
 		os.Exit(1)
@@ -189,6 +191,7 @@ func buildBackends(cfg *config.Config, logger *slog.Logger) (map[string]backend.
 					APIGroup:      b.Provider.APIGroup,
 					APIVersion:    b.Provider.APIVersion,
 					ClaimResource: b.Provider.ClaimResource,
+					ClaimKind:     b.Provider.ClaimKind,
 					EndpointField: b.Provider.EndpointField,
 				},
 				SSHUser:       b.SSH.User,

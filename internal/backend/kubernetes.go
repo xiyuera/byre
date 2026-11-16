@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
@@ -52,6 +53,7 @@ type ProviderSpec struct {
 	APIGroup      string
 	APIVersion    string
 	ClaimResource string
+	ClaimKind     string
 
 	// SandboxClaim status field that carries the SSH endpoint ("host:port" or bare host).
 	// Defaults to status.sandbox.serviceFQDN.
@@ -105,11 +107,11 @@ func NewKubernetes(cfg KubernetesConfig) (*Kubernetes, error) {
 			return nil, fmt.Errorf("kubernetes backend %q: provider.image is required for kind %s", cfg.Name, KindPod)
 		}
 	case KindSandboxClaim:
-		if cfg.Provider.Template == "" {
-			return nil, fmt.Errorf("kubernetes backend %q: provider.template is required for kind %s", cfg.Name, KindSandboxClaim)
+		if cfg.Provider.Template == "" && cfg.Provider.WarmPool == "" {
+			return nil, fmt.Errorf("kubernetes backend %q: provider.template or provider.warm_pool is required for kind %s", cfg.Name, KindSandboxClaim)
 		}
-		if cfg.Provider.APIGroup == "" || cfg.Provider.APIVersion == "" || cfg.Provider.ClaimResource == "" {
-			return nil, fmt.Errorf("kubernetes backend %q: provider.api_group, api_version and claim_resource are required for kind %s", cfg.Name, KindSandboxClaim)
+		if cfg.Provider.APIGroup == "" || cfg.Provider.APIVersion == "" || cfg.Provider.ClaimResource == "" || cfg.Provider.ClaimKind == "" {
+			return nil, fmt.Errorf("kubernetes backend %q: provider.api_group, api_version, claim_resource and claim_kind are required for kind %s", cfg.Name, KindSandboxClaim)
 		}
 		if len(cfg.Provider.EndpointField) == 0 {
 			cfg.Provider.EndpointField = []string{"status", "sandbox", "serviceFQDN"}
@@ -186,6 +188,15 @@ func (k *Kubernetes) Acquire(ctx context.Context, identity string) (Instance, er
 	}
 	in.Annotations = merged
 	return in, nil
+}
+
+// Bind records the identity on a pooled instance (implements backend.Binder).
+func (k *Kubernetes) Bind(ctx context.Context, in Instance, identity string) error {
+	ann := map[string]string{LabelIdentity: identity, LabelInstance: in.ID}
+	if err := k.annotate(ctx, in.ID, ann); err != nil {
+		return fmt.Errorf("annotate %s: %w", in.ID, err)
+	}
+	return nil
 }
 
 // annotate merges annotations onto the object behind an instance.
@@ -354,15 +365,18 @@ func (k *Kubernetes) gvr() schema.GroupVersionResource {
 
 func (k *Kubernetes) createClaim(ctx context.Context) (Instance, error) {
 	name := "keypod-" + randomSuffix()
-	spec := map[string]any{
-		"templateRef": map[string]any{"name": k.cfg.Provider.Template},
-	}
+	// Only the selectors that were configured are sent: CRD schemas reject unknown or mutually
+	// exclusive fields, so inventing one would make the backend unusable for that cluster.
+	spec := map[string]any{}
 	if k.cfg.Provider.WarmPool != "" {
 		spec["warmPoolRef"] = map[string]any{"name": k.cfg.Provider.WarmPool}
 	}
+	if k.cfg.Provider.Template != "" {
+		spec["templateRef"] = map[string]any{"name": k.cfg.Provider.Template}
+	}
 	obj := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": k.cfg.Provider.APIGroup + "/" + k.cfg.Provider.APIVersion,
-		"kind":       claimKind(k.cfg.Provider.ClaimResource),
+		"kind":       k.claimKind(),
 		"metadata": map[string]any{
 			"name":      name,
 			"namespace": k.cfg.Namespace,
@@ -384,6 +398,20 @@ func (k *Kubernetes) createClaim(ctx context.Context) (Instance, error) {
 	return k.instance(addr, created.GetName(), nil), nil
 }
 
+// probeAddr is how readiness is judged: a TCP connect, not a DNS lookup.
+//
+// Name resolution is not trustworthy here — on a network with fake-IP DNS, any nonsense name answers
+// with a synthetic address — so the only honest question is "can I open the port". Tests replace this
+// variable to simulate lag without a cluster.
+var probeAddr = func(ctx context.Context, addr string) error {
+	d := net.Dialer{Timeout: 2 * time.Second}
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
+}
+
 func (k *Kubernetes) waitForClaim(ctx context.Context, name string) (string, error) {
 	var addr string
 	err := wait.PollUntilContextTimeout(ctx, 250*time.Millisecond, k.cfg.Provider.ReadyTimeout, true,
@@ -392,8 +420,14 @@ func (k *Kubernetes) waitForClaim(ctx context.Context, name string) (string, err
 			if err != nil {
 				return false, err
 			}
-			if a := k.endpointFromObject(obj); a != "" {
-				addr = a
+			// The controller publishes the endpoint before the Service is resolvable, and this network
+			// adds fake-IP DNS on top. Readiness therefore means "one advertised address answers on
+			// port 22 from here", tried in preference order.
+			for _, candidate := range k.endpointCandidates(obj) {
+				if err := probeAddr(ctx, candidate); err != nil {
+					continue
+				}
+				addr = candidate
 				return true, nil
 			}
 			return false, nil
@@ -411,20 +445,37 @@ func (k *Kubernetes) endpointFromObject(obj *unstructured.Unstructured) string {
 	if err != nil || !found || raw == "" {
 		return ""
 	}
-	if strings.Contains(raw, ":") {
-		return raw
-	}
-	return raw + ":22"
+	return withDefaultPort(raw)
 }
 
-func claimKind(resource string) string {
-	// "sandboxclaims" -> "SandboxClaim": the CRD kind is conventionally the singular in lower camel.
-	s := strings.TrimSuffix(resource, "s")
-	if s == "" {
-		return resource
+// endpointCandidates lists every address the object advertises, most preferred first.
+//
+// The service name appears in status before its DNS record does, and the pod IP is usable immediately;
+// listing both lets readiness mean "one of these answers on 22" instead of "a string is present".
+func (k *Kubernetes) endpointCandidates(obj *unstructured.Unstructured) []string {
+	var out []string
+	if a := k.endpointFromObject(obj); a != "" {
+		out = append(out, a)
 	}
-	return strings.ToUpper(s[:1]) + s[1:]
+	if ips, found, err := unstructured.NestedStringSlice(obj.Object, "status", "sandbox", "podIPs"); err == nil && found {
+		for _, ip := range ips {
+			out = append(out, withDefaultPort(ip))
+		}
+	}
+	return out
 }
+
+func withDefaultPort(addr string) string {
+	if strings.Contains(addr, ":") {
+		return addr
+	}
+	return addr + ":22"
+}
+
+// claimKind returns the Kind to send. It is configured, not derived: "sandboxclaims" minus the plural
+// "s" is "sandboxclaim", and the API server accepts only "SandboxClaim" — guessing here fails on the
+// first real cluster.
+func (k *Kubernetes) claimKind() string { return k.cfg.Provider.ClaimKind }
 
 // ---------------------------------------------------------------- helpers
 
