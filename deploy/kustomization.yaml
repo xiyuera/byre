@@ -1,0 +1,28 @@
+# keypod deployment (kustomize).
+#
+# Instances are created in a namespace of your choice — set backend.namespace in the ConfigMap and make
+# sure RBAC exists there too (see rbac.yaml, which is namespaced to the target below).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: keypod-system
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - rbac.yaml
+  - deployment.yaml
+  - service.yaml
+
+# The example configuration doubles as the shipped default: one file, no drift.
+configMapGenerator:
+  - name: keypod-config
+    files:
+      - config.yaml=config.example.yaml
+
+images:
+  - name: keypod
+    newTag: dev
+
+# The pool key is not managed here on purpose: create it yourself so it never lands in git.
+#   kubectl -n keypod-system create secret generic keypod-pool-key --from-file=id_key=/path/to/key

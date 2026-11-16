@@ -1,0 +1,13 @@
+bin/
+dist/
+*.test
+*.out
+coverage.txt
+.idea/
+.vscode/
+# never commit secrets
+config.local.yaml
+*.pem
+*.key
+id_*
+!deploy/secret.example.yaml

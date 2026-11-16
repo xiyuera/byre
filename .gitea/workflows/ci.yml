@@ -1,0 +1,44 @@
+name: ci
+
+# Needs a runner registered with this Gitea instance (act_runner). Until one exists, run
+# `make lint test && go test -race ./...` locally — that is exactly what this workflow does.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Format and vet
+        run: make fmt vet
+
+      - name: Unit tests
+        run: go test ./...
+
+      - name: Race detector
+        run: go test -race ./...
+
+      - name: Build
+        run: make build
+
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate kustomize output
+        run: |
+          if command -v kubectl >/dev/null 2>&1; then
+            kubectl kustomize deploy/ >/dev/null && echo "deploy/ renders"
+          else
+            echo "kubectl not available - skipped"
+          fi

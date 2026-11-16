@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keypod
+  labels:
+    app.kubernetes.io/name: keypod
+spec:
+  replicas: 1 # single replica by design (docs/roadmap.md: multi-replica is v0.3)
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keypod
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: keypod
+      annotations:
+        # keep a rollout from killing live sessions abruptly: the manager adopts instances on start
+        kubectl.kubernetes.io/default-container: keypod
+    spec:
+      serviceAccountName: keypod
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: keypod
+          image: keypod
+          imagePullPolicy: IfNotPresent
+          args: ["-config", "/etc/keypod/config.yaml"]
+          ports:
+            - name: ssh
+              containerPort: 2222
+            - name: health
+              containerPort: 8099
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/keypod
+              readOnly: true
+            - name: pool-key
+              mountPath: /etc/keypod/keys
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: keypod-config
+        - name: pool-key
+          secret:
+            secretName: keypod-pool-key
+            defaultMode: 0400

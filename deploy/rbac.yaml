@@ -1,0 +1,42 @@
+# RBAC for the namespace where instances are created.
+# If backend.namespace differs from the release namespace, apply this Role/RoleBinding there as well.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: keypod
+  labels:
+    app.kubernetes.io/name: keypod
+rules:
+  # declarative sandbox claims (provider.kind: sandbox-claim)
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxclaims"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["get", "list", "watch", "patch"]
+  # bare pods (provider.kind: pod)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # endpoint resolution for pods/claims
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  # annotation-based adoption
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: keypod
+  labels:
+    app.kubernetes.io/name: keypod
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: keypod
+subjects:
+  - kind: ServiceAccount
+    name: keypod

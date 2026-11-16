@@ -1,0 +1,64 @@
+# keypod configuration — copy, then replace every <placeholder>.
+#
+# Nothing here is specific to the project's own deployment: any SSH-capable unit can be described.
+# Validate before applying:  keypod -config config.yaml -check-config
+
+listen: ":2222"
+
+lease:
+  # Must exceed the client's idle timeout (the reference client idles out at 300s).
+  ttl: 360s
+  # Reconnect window after a disconnect; absorbs ControlMaster/ControlPersist expiry.
+  grace: 60s
+  # Warm instances kept ready. Each idle instance costs one pod-worth of memory.
+  pool_size: 2
+
+backends:
+  # ---------------------------------------------------------------- pooled, declarative instances
+  - name: claims
+    type: kubernetes
+    namespace: "<namespace>"
+    kubeconfig: ""                 # empty = in-cluster service account
+    provider:
+      kind: sandbox-claim          # sandbox-claim | pod
+      template: "<sandbox-template>"
+      warm_pool: "<warm-pool>"     # optional
+      ready_timeout: 120s
+    ssh:
+      port: 22
+      user: "<remote-user>"
+      private_key: /etc/keypod/keys/id_key
+      host_key_policy: accept-new
+
+  # ---------------------------------------------------------------- any image that runs sshd
+  # - name: adhoc
+  #   type: kubernetes
+  #   namespace: "<namespace>"
+  #   provider:
+  #     kind: pod
+  #     image: "<registry>/<image>:<tag>"
+  #     start_command: ["/usr/sbin/sshd", "-D", "-e"]
+  #     ready_timeout: 180s
+  #   ssh:
+  #     port: 22
+  #     user: "<remote-user>"
+  #     private_key: /etc/keypod/keys/id_key
+  #     host_key_policy: accept-new
+
+  # ---------------------------------------------------------------- long-lived hosts, no orchestration
+  # - name: lab
+  #   type: static
+  #   endpoints: ["192.0.2.11:22", "192.0.2.12:22"]
+  #   ssh:
+  #     port: 22
+  #     user: "<remote-user>"
+  #     private_key: /etc/keypod/keys/id_key
+  #     host_key_policy: strict
+
+identities:
+  # Fingerprints of the client public keys allowed in. Print one with:
+  #   ssh-keygen -lf id_ed25519.pub -E sha256
+  # Two spellings of the same key are the same identity ("SHA256:" and padding are normalised away).
+  - fingerprint: "SHA256:<base64-body>"
+    backend: claims
+    aliases: ["<label-for-logs>"]

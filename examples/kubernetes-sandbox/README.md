@@ -1,0 +1,77 @@
+# Example: a declarative, pooled sandbox backend
+
+Use this when the cluster already has a CRD that turns a declarative object into a running workload with
+a stable endpoint (the reference deployments use one; any equivalent works). The gateway only needs the
+two values it cannot invent: **which template to instantiate** and **how long to wait for it**.
+
+## 1. A template (cluster-specific)
+
+```yaml
+# examples/kubernetes-sandbox/template.yaml
+apiVersion: <your.crd.group>/v1beta1
+kind: <SandboxTemplate>
+metadata:
+  name: sandbox
+spec:
+  podTemplate:
+    spec:
+      containers:
+        - name: sandbox
+          image: "<registry>/<sshd-image>:<tag>"
+          ports:
+            - containerPort: 22
+  service: {}
+  # four policies: create/delete/expiry/idle, per your CRD's schema
+```
+
+The template must produce a workload that:
+
+- listens on 22 and accepts the gateway's pool key (mounted or injected by your template);
+- has a stable, resolvable endpoint for as long as the object exists;
+- needs no manual `kubectl port-forward` — the gateway dials it directly from inside the cluster.
+
+## 2. A pool (optional but recommended)
+
+```yaml
+# examples/kubernetes-sandbox/warmpool.yaml
+apiVersion: <your.crd.group>/v1beta1
+kind: <SandboxWarmPool>
+metadata:
+  name: sandbox
+spec:
+  replicas: 2      # keep small: each warm instance costs memory while it waits
+  templateRef:
+    name: sandbox
+```
+
+Claims are then created against `warm_pool: sandbox`, which is faster than cold-creating a template.
+
+## 3. Point keypod at it
+
+```yaml
+backends:
+  - name: claims
+    type: kubernetes
+    namespace: "<namespace>"
+    provider:
+      kind: sandbox-claim
+      template: sandbox
+      warm_pool: sandbox
+      ready_timeout: 120s
+    ssh:
+      port: 22
+      user: "<remote-user>"
+      private_key: /etc/keypod/keys/id_key
+      host_key_policy: accept-new
+```
+
+## 4. Verify
+
+```sh
+keypod -config config.yaml -check-config       # schema and references
+kubectl -n <namespace> get <sandboxclaims> -w  # one object appears per identity while leased
+ssh -i <client-key> -p 2222 <user>@<gateway>   # auth, then hostname
+```
+
+Two connections in a row must print the **same** hostname (ADR-0002). If they differ, the lease is being
+keyed on the connection rather than the identity.
