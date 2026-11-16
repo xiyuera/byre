@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -68,6 +69,17 @@ func serveFakeTarget(c net.Conn, cfg *ssh.ServerConfig, name string) {
 			}
 			go func() {
 				for req := range chReqs {
+					if req.Type == "subsystem" {
+						var kind struct{ Name string }
+						_ = ssh.Unmarshal(req.Payload, &kind)
+						if req.WantReply {
+							_ = req.Reply(true, nil)
+						}
+						_, _ = fmt.Fprintf(ch, "subsystem:%s\n", kind.Name)
+						_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+						_ = ch.Close()
+						continue
+					}
 					if req.Type != "exec" && req.Type != "shell" {
 						if req.WantReply {
 							_ = req.Reply(false, nil)
@@ -147,22 +159,38 @@ type harness struct {
 // startGateway wires a real front end against one fake target through the real dialler.
 func startGateway(t *testing.T) *harness {
 	t.Helper()
-	targetAddr := startFakeTarget(t, "fake-1")
+	return startGatewayWith(t, "", nil)
+}
+
+// startGatewayWith builds the same harness over a custom endpoint or a custom driver.
+// driver == nil means "static backend over endpoint"; endpoint == "" means "a fresh fake target".
+func startGatewayWith(t *testing.T, endpoint string, driver backend.Backend) *harness {
+	t.Helper()
 
 	clientSigner, _ := newKeyPair(t)
 	_, poolPriv := newKeyPair(t)
 	poolKeyPath := writeKeyFile(t, poolPriv)
 
-	drv, err := backend.NewStatic(backend.StaticConfig{
-		Name:          "lab",
-		Endpoints:     []string{targetAddr},
-		User:          "sandbox",
-		PrivateKey:    poolKeyPath,
-		HostKeyPolicy: "insecure", // the fake target's host key is generated per test
-	})
-	if err != nil {
-		t.Fatalf("static backend: %v", err)
+	var drv backend.Backend
+	if driver != nil {
+		drv = driver
+	} else {
+		if endpoint == "" {
+			endpoint = startFakeTarget(t, "fake-1")
+		}
+		static, err := backend.NewStatic(backend.StaticConfig{
+			Name:          "lab",
+			Endpoints:     []string{endpoint},
+			User:          "sandbox",
+			PrivateKey:    poolKeyPath,
+			HostKeyPolicy: "insecure", // the fake target's host key is generated per test
+		})
+		if err != nil {
+			t.Fatalf("static backend: %v", err)
+		}
+		drv = static
 	}
+
 	mgr, err := lease.New(360*time.Second, 60*time.Second, map[string]backend.Backend{"lab": drv})
 	if err != nil {
 		t.Fatalf("lease manager: %v", err)
@@ -310,4 +338,98 @@ func runCommand(t *testing.T, c *ssh.Client, cmd string) string {
 		t.Fatalf("run %q: %v", cmd, err)
 	}
 	return string(out)
+}
+
+// TestSubsystemPassThrough covers must-have #5's "scp-sftp pass-through": sftp is a session subsystem,
+// so the gateway must forward the request, not just exec.
+func TestSubsystemPassThrough(t *testing.T) {
+	h := startGateway(t)
+	c, err := h.dial(t, h.signer)
+	if err != nil {
+		t.Fatalf("dial gateway: %v", err)
+	}
+	defer c.Close()
+
+	sess, err := c.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer sess.Close()
+
+	out, err := sess.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	if err := sess.RequestSubsystem("sftp"); err != nil {
+		t.Fatalf("request subsystem: %v", err)
+	}
+	buf, err := io.ReadAll(out)
+	if err != nil {
+		t.Fatalf("read subsystem output: %v", err)
+	}
+	if got := strings.TrimSpace(string(buf)); got != "subsystem:sftp" {
+		t.Fatalf("subsystem output = %q, want subsystem:sftp", got)
+	}
+}
+
+// failingBackend simulates a driver that cannot provide an instance.
+type failingBackend struct{ err error }
+
+func (f *failingBackend) Name() string { return "lab" }
+func (f *failingBackend) Acquire(context.Context, string) (backend.Instance, error) {
+	return backend.Instance{}, f.err
+}
+func (f *failingBackend) Release(context.Context, backend.Instance) error  { return nil }
+func (f *failingBackend) List(context.Context) ([]backend.Instance, error) { return nil, nil }
+func (f *failingBackend) Adopt(context.Context, []backend.Instance) error  { return nil }
+
+// TestBackendFailureRefusesSession: authentication succeeds (the key is known), but no instance can be
+// obtained, so the client must be disconnected and no lease may be left behind.
+func TestBackendFailureRefusesSession(t *testing.T) {
+	h := startGatewayWith(t, "", &failingBackend{err: errors.New("no capacity")})
+
+	c, err := h.dial(t, h.signer)
+	if err != nil {
+		t.Fatalf("authentication should succeed: %v", err)
+	}
+	defer c.Close()
+
+	sess, err := c.NewSession()
+	if err == nil {
+		_ = sess.Close()
+		t.Fatal("a session was opened although the backend could not provide an instance")
+	}
+	if e := h.manager.Lookup(h.identity); e != nil {
+		t.Fatalf("lease left behind after a failed acquire: %+v", e)
+	}
+}
+
+// TestDialFailureReleasesRef: the lease is obtained but the instance refuses connections (a dead pod,
+// a bounced listener). The client must be disconnected, and the lease must fall back to idle so the
+// reaper can reclaim it — a stuck ref would keep a dead instance alive forever.
+func TestDialFailureReleasesRef(t *testing.T) {
+	h := startGatewayWith(t, "127.0.0.1:1", nil) // port 1: connection refused on any sane host
+
+	c, err := h.dial(t, h.signer)
+	if err != nil {
+		t.Fatalf("authentication should succeed: %v", err)
+	}
+	defer c.Close()
+
+	if _, err := c.NewSession(); err == nil {
+		t.Fatal("session opened against an unreachable instance")
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if e := h.manager.Lookup(h.identity); e != nil && e.Refs() == 0 {
+			active, idle := h.manager.Stats()
+			if active != 0 || idle != 1 {
+				t.Fatalf("stats = (%d active, %d idle), want (0, 1)", active, idle)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("lease did not return to idle after a dial failure: %+v", h.manager.Lookup(h.identity))
 }

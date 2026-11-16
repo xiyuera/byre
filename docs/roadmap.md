@@ -17,10 +17,13 @@ Skeleton and ADRs, SSH front end (session/exec/`-L`/`-R`), lease manager with `t
 
 ## v0.2 — usable by someone else (M4–M5)
 
-- `static` backend (long-lived hosts, non-Kubernetes targets).
-- Integration example for one real client, end to end including file synchronization.
-- Failure injection tests: backend API down, instance killed mid-session, clock jumps.
-- Operations runbook completed from real incidents.
+Done: `static` backend, an end-to-end run with a real client identity, failure-path tests
+(`docs/acceptance/2026-11-17-m5-hardening.md`), and a runbook written from the two defects the cluster
+exposed.
+
+Still open: the container image and `kubectl apply -k` path are validated only by server-side dry-run
+(no container runtime in the build environment); instance-killed-mid-session and clock-jump injection
+remain untested.
 
 ## v0.3 — multi-replica
 
