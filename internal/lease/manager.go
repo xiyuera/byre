@@ -8,6 +8,7 @@ package lease
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -40,6 +41,15 @@ type Manager struct {
 
 	mu         sync.Mutex
 	byIdentity map[string]*Entry
+	pools      map[string]*pool
+	logger     *slog.Logger
+}
+
+// SetLogger attaches a logger (optional).
+func (m *Manager) SetLogger(l *slog.Logger) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logger = l
 }
 
 // New builds a manager over the given drivers. Keys are backend names.
@@ -86,9 +96,20 @@ func (m *Manager) Acquire(ctx context.Context, identity, backendName string) (En
 	if !ok {
 		return Entry{}, fmt.Errorf("unknown backend %q", backendName)
 	}
-	in, err := drv.Acquire(ctx, identity)
-	if err != nil {
-		return Entry{}, fmt.Errorf("acquire on backend %q: %w", backendName, err)
+
+	// Warm capacity first: an instance that already exists is the difference between a 300ms and a
+	// 30s first connection. The pool is refilled after the checkout, never during it.
+	var in backend.Instance
+	var fromPool bool
+	if p := m.pools[backendName]; p != nil {
+		in, fromPool = p.take()
+	}
+	if !fromPool {
+		var err error
+		in, err = drv.Acquire(ctx, identity)
+		if err != nil {
+			return Entry{}, fmt.Errorf("acquire on backend %q: %w", backendName, err)
+		}
 	}
 	if err := in.Validate(); err != nil {
 		return Entry{}, fmt.Errorf("backend %q returned an unusable instance: %w", backendName, err)
@@ -103,6 +124,10 @@ func (m *Manager) Acquire(ctx context.Context, identity, backendName string) (En
 		refs:     1,
 	}
 	m.byIdentity[identity] = e
+	if fromPool {
+		// Cannot refill while holding the table lock: the refill path takes it again.
+		go m.refill(backendName)
+	}
 	return *e, nil
 }
 
@@ -168,6 +193,7 @@ func (m *Manager) Reap(ctx context.Context) (int, error) {
 		if err := drv.Release(ctx, e.Instance); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("release %s on %q: %w", e.Instance.ID, e.Backend, err)
 		}
+		m.refill(e.Backend)
 	}
 	return len(expired), firstErr
 }

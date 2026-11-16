@@ -20,10 +20,16 @@ backends:
     namespace: "<namespace>"
     kubeconfig: ""                 # empty = in-cluster service account
     provider:
-      kind: sandbox-claim          # sandbox-claim | pod
+      kind: sandbox-claim           # sandbox-claim | pod
       template: "<sandbox-template>"
-      warm_pool: "<warm-pool>"     # optional
+      warm_pool: "<warm-pool>"      # optional
       ready_timeout: 120s
+      # No CRD is hardcoded: name the claim API explicitly. The endpoint field is the status path that
+      # carries the SSH address; it is normalised to host:port.
+      api_group: "<crd-group>"
+      api_version: "<crd-version>"
+      claim_resource: "<plural-resource>"
+      endpoint_field: ["status", "sandbox", "serviceFQDN"]
     ssh:
       port: 22
       user: "<remote-user>"

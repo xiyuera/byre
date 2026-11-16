@@ -47,7 +47,10 @@ func main() {
 		cfg.Listen = *listen
 	}
 
-	backends, err := buildBackends(cfg)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	backends, err := buildBackends(cfg, logger)
 	if err != nil {
 		logger.Error("configuration rejected", "error", err)
 		os.Exit(2)
@@ -76,10 +79,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	mgr.SetLogger(logger)
+	for name, drv := range backends {
+		if p, ok := drv.(lease.Pooler); ok {
+			mgr.SetPool(name, cfg.Lease.PoolSize, p)
+		}
+	}
 
 	go mgr.RunReaper(ctx, 30*time.Second)
+	if cfg.Lease.PoolSize > 0 {
+		go mgr.RunWarmer(ctx, 15*time.Second)
+		// Warming is best effort: a cold cluster must not stop the gateway from accepting sessions.
+		go func() {
+			if err := mgr.Warm(ctx); err != nil {
+				logger.Warn("initial pool warm failed", "error", err)
+			}
+		}()
+	}
 
 	front, err := sshfront.New(sshfront.Config{
 		Listen:     cfg.Listen,
@@ -113,6 +129,9 @@ func main() {
 		fmt.Fprintf(w, "# HELP keypod_up Whether the process is running.\n# TYPE keypod_up gauge\nkeypod_up 1\n")
 		fmt.Fprintf(w, "# HELP keypod_leases_active Leases with at least one open connection.\n# TYPE keypod_leases_active gauge\nkeypod_leases_active %d\n", active)
 		fmt.Fprintf(w, "# HELP keypod_leases_idle Leases without connections, waiting to be reaped.\n# TYPE keypod_leases_idle gauge\nkeypod_leases_idle %d\n", idle)
+		for name := range backends {
+			fmt.Fprintf(w, "keypod_pool_warm{backend=%q} %d\n", name, mgr.WarmSize(name))
+		}
 	})
 	health := &http.Server{Addr: ":8099", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
@@ -132,7 +151,7 @@ func main() {
 }
 
 // buildBackends instantiates one driver per configured backend.
-func buildBackends(cfg *config.Config) (map[string]backend.Backend, error) {
+func buildBackends(cfg *config.Config, logger *slog.Logger) (map[string]backend.Backend, error) {
 	out := make(map[string]backend.Backend, len(cfg.Backends))
 	for _, b := range cfg.Backends {
 		switch b.Type {
@@ -149,7 +168,31 @@ func buildBackends(cfg *config.Config) (map[string]backend.Backend, error) {
 			}
 			out[b.Name] = drv
 		case config.TypeKubernetes:
-			return nil, fmt.Errorf("backend %q: type %s is not implemented yet (M2)", b.Name, b.Type)
+			drv, err := backend.NewKubernetes(backend.KubernetesConfig{
+				Name:       b.Name,
+				Namespace:  b.Namespace,
+				Kubeconfig: b.Kubeconfig,
+				Provider: backend.ProviderSpec{
+					Kind:          b.Provider.Kind,
+					Template:      b.Provider.Template,
+					WarmPool:      b.Provider.WarmPool,
+					Image:         b.Provider.Image,
+					StartCommand:  b.Provider.StartCommand,
+					ReadyTimeout:  b.Provider.ReadyTimeout.Std(),
+					APIGroup:      b.Provider.APIGroup,
+					APIVersion:    b.Provider.APIVersion,
+					ClaimResource: b.Provider.ClaimResource,
+					EndpointField: b.Provider.EndpointField,
+				},
+				SSHUser:       b.SSH.User,
+				SSHPrivateKey: b.SSH.PrivateKey,
+				HostKeyPolicy: b.SSH.HostKeyPolicy,
+				Logger:        logger,
+			})
+			if err != nil {
+				return nil, err
+			}
+			out[b.Name] = drv
 		default:
 			return nil, fmt.Errorf("backend %q: unknown type %q", b.Name, b.Type)
 		}

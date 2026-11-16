@@ -18,8 +18,11 @@ func baseConfig() *Config {
 			Name:      "claims",
 			Type:      TypeKubernetes,
 			Namespace: "sandbox-system",
-			Provider:  Provider{Kind: KindSandboxClaim, Template: "sandbox"},
-			SSH:       SSH{Port: 22, User: "sandbox", PrivateKey: "/keys/pool", HostKeyPolicy: "accept-new"},
+			Provider: Provider{
+				Kind: KindSandboxClaim, Template: "sandbox",
+				APIGroup: "example.io", APIVersion: "v1", ClaimResource: "sandboxclaims",
+			},
+			SSH: SSH{Port: 22, User: "sandbox", PrivateKey: "/keys/pool", HostKeyPolicy: "accept-new"},
 		}},
 		Identities: []Identity{{Fingerprint: goodFP, Backend: "claims"}},
 	}
@@ -64,6 +67,8 @@ func TestValidateRejects(t *testing.T) {
 		{"unknown type", func(c *Config) { c.Backends[0].Type = "docker" }, "unknown type"},
 		{"missing namespace", func(c *Config) { c.Backends[0].Namespace = "" }, "namespace is required"},
 		{"missing template", func(c *Config) { c.Backends[0].Provider.Template = "" }, "provider.template is required"},
+		{"missing gvk", func(c *Config) { c.Backends[0].Provider.APIGroup = "" }, "api_group, api_version and claim_resource"},
+		{"missing endpoint field is fine", func(c *Config) { c.Backends[0].Provider.EndpointField = nil }, ""},
 		{"unknown kind", func(c *Config) { c.Backends[0].Provider.Kind = "vm" }, "unknown provider.kind"},
 		{"missing image", func(c *Config) { c.Backends[0].Provider = Provider{Kind: KindPod} }, "provider.image is required"},
 		{"missing ssh user", func(c *Config) { c.Backends[0].SSH.User = "" }, "ssh.user is required"},
@@ -88,6 +93,12 @@ func TestValidateRejects(t *testing.T) {
 			c := baseConfig()
 			c.ApplyDefaults()
 			tc.mutate(c)
+			if tc.wantSub == "" {
+				if err := c.Validate(); err != nil {
+					t.Fatalf("expected valid config, got %v", err)
+				}
+				return
+			}
 			err := c.Validate()
 			if err == nil {
 				t.Fatalf("expected error containing %q, got nil", tc.wantSub)
@@ -152,6 +163,9 @@ backends:
       kind: sandbox-claim
       template: sandbox
       warm_pool: sandbox
+      api_group: example.io
+      api_version: v1
+      claim_resource: sandboxclaims
     ssh:
       port: 22
       user: sandbox

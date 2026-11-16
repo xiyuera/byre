@@ -93,13 +93,20 @@ type Backend struct {
 }
 
 // Provider declares what the instance is and how it is started.
+//
+// api_group / api_version / claim_resource exist so that no CRD is hardcoded: the same binary drives
+// any declarative claim API, and the field names are configuration.
 type Provider struct {
-	Kind         string   `yaml:"kind"`
-	Template     string   `yaml:"template"`
-	WarmPool     string   `yaml:"warm_pool"`
-	Image        string   `yaml:"image"`
-	StartCommand []string `yaml:"start_command"`
-	ReadyTimeout Duration `yaml:"ready_timeout"`
+	Kind          string   `yaml:"kind"`
+	Template      string   `yaml:"template"`
+	WarmPool      string   `yaml:"warm_pool"`
+	Image         string   `yaml:"image"`
+	StartCommand  []string `yaml:"start_command"`
+	ReadyTimeout  Duration `yaml:"ready_timeout"`
+	APIGroup      string   `yaml:"api_group"`
+	APIVersion    string   `yaml:"api_version"`
+	ClaimResource string   `yaml:"claim_resource"`
+	EndpointField []string `yaml:"endpoint_field"`
 }
 
 // SSH is how the gateway reaches an instance.
@@ -262,6 +269,12 @@ func validateProvider(where string, b Backend, fail func(string, ...any)) {
 	case KindSandboxClaim:
 		if strings.TrimSpace(b.Provider.Template) == "" {
 			fail("%s (%s): provider.template is required for kind %s", where, b.Name, KindSandboxClaim)
+		}
+		if strings.TrimSpace(b.Provider.APIGroup) == "" ||
+			strings.TrimSpace(b.Provider.APIVersion) == "" ||
+			strings.TrimSpace(b.Provider.ClaimResource) == "" {
+			fail("%s (%s): provider.api_group, api_version and claim_resource are required for kind %s (no CRD is hardcoded)",
+				where, b.Name, KindSandboxClaim)
 		}
 	case KindPod:
 		if strings.TrimSpace(b.Provider.Image) == "" {

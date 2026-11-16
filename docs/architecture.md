@@ -64,7 +64,7 @@ were never annotated", which the backend's own labels can further restrict.
 
 | type | provider.kind | obtain | release |
 |---|---|---|---|
-| `kubernetes` | `sandbox-claim` | create a claim from `provider.template` (optionally against `provider.warm_pool`) and wait for its endpoint | delete the claim |
+| `kubernetes` | `sandbox-claim` | create a claim from `provider.template` (optionally against `provider.warm_pool`) using the configured GVK, wait for `endpoint_field` | delete the claim |
 | `kubernetes` | `pod` | create one pod from `provider.image` (+ `start_command`) and wait for readiness | delete the pod |
 | `static` | — | pick an endpoint from `endpoints` (round-robin, skip if leased) | mark free |
 
@@ -79,7 +79,13 @@ type Backend interface {
 }
 ```
 
-`Instance` is `{ID, Addr, Port, User, Annotations}` — nothing backend-specific leaks upward.
+`Instance` is `{ID, Addr, User, PrivateKey, HostKeyPolicy, Annotations}` — nothing backend-specific leaks
+upward.
+
+A driver that can create capacity ahead of demand also implements `lease.Pooler` (`Create(ctx)`); the
+lease manager keeps `pool_size` warm instances for it and refills after each checkout. A driver without
+`Create` (the `static` one) simply has no pool — acquire stays on demand, which is the honest model for
+machines that already exist.
 
 ## 6. Failure behaviour
 

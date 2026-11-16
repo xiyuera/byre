@@ -46,6 +46,10 @@ spec:
 
 Claims are then created against `warm_pool: sandbox`, which is faster than cold-creating a template.
 
+The claim's status must expose the SSH endpoint at `endpoint_field` (default
+`status.sandbox.serviceFQDN`). A bare host is accepted and gets `:22` appended. If your API puts the
+address elsewhere, change the path — no code change is needed.
+
 ## 3. Point keypod at it
 
 ```yaml
@@ -58,6 +62,10 @@ backends:
       template: sandbox
       warm_pool: sandbox
       ready_timeout: 120s
+      api_group: "<crd-group>"          # e.g. your.sandbox.api
+      api_version: "<crd-version>"
+      claim_resource: "<plural-resource>"
+      endpoint_field: ["status", "sandbox", "serviceFQDN"]
     ssh:
       port: 22
       user: "<remote-user>"

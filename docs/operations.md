@@ -39,6 +39,13 @@ Suggested probes: liveness `/healthz` with `periodSeconds: 10`, readiness `/heal
 | `lease.pool_size` | `2` | warm instances; each one costs one pod-worth of memory when idle |
 | `provider.ready_timeout` | `120s` | raise for slow images (cold layer pulls) |
 | `ssh.host_key_policy` | `accept-new` | `strict` requires known_hosts; `insecure` is for throwaway instances only |
+| `provider.api_group/api_version/claim_resource` | — | required for `sandbox-claim`: the claim API is configuration, never hardcoded |
+| `provider.endpoint_field` | `status.sandbox.serviceFQDN` | where the claim exposes its SSH address; a bare host gets `:22` |
+| `provider.image` | — | `pod` kind: any image that runs sshd and trusts the pool key |
+
+Warm capacity is reported as `keypod_pool_warm{backend=...}`. A pool that never reaches `pool_size`
+means `Create` is failing (image pull, quota, missing template) — check the gateway log for
+`pool refill failed`.
 
 ## Logs
 

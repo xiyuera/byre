@@ -13,6 +13,7 @@ import (
 type fakeBackend struct {
 	name      string
 	acquires  int
+	creates   int
 	released  []string
 	lastIdent string
 	failWith  error
@@ -33,6 +34,22 @@ func (f *fakeBackend) Acquire(_ context.Context, identity string) (backend.Insta
 		PrivateKey:    "/keys/pool",
 		HostKeyPolicy: "accept-new",
 		Annotations:   map[string]string{"identity": identity},
+	}, nil
+}
+
+// Create makes fakeBackend a Pooler, so pool tests can use the same double.
+func (f *fakeBackend) Create(_ context.Context) (backend.Instance, error) {
+	if f.failWith != nil {
+		return backend.Instance{}, f.failWith
+	}
+	f.creates++
+	return backend.Instance{
+		ID:            fmt.Sprintf("%s-warm-%d", f.name, f.creates),
+		Addr:          "127.0.0.1:22",
+		User:          "sandbox",
+		PrivateKey:    "/keys/pool",
+		HostKeyPolicy: "accept-new",
+		Annotations:   map[string]string{},
 	}, nil
 }
 
