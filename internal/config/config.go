@@ -40,7 +40,7 @@ const (
 	DefaultGrace       = 60 * time.Second
 	DefaultPoolSize    = 2
 	DefaultSSHPort     = 22
-	DefaultReadyTimout = 120 * time.Second
+	DefaultReadyTimeout = 120 * time.Second
 )
 
 // Duration is a time.Duration that is written as a string ("360s") in YAML.
@@ -94,20 +94,20 @@ type Backend struct {
 
 // Provider declares what the instance is and how it is started.
 type Provider struct {
-	Kind         string     `yaml:"kind"`
-	Template     string     `yaml:"template"`
-	WarmPool     string     `yaml:"warm_pool"`
-	Image        string     `yaml:"image"`
-	StartCommand []string   `yaml:"start_command"`
-	ReadyTimeout Duration   `yaml:"ready_timeout"`
+	Kind         string   `yaml:"kind"`
+	Template     string   `yaml:"template"`
+	WarmPool     string   `yaml:"warm_pool"`
+	Image        string   `yaml:"image"`
+	StartCommand []string `yaml:"start_command"`
+	ReadyTimeout Duration `yaml:"ready_timeout"`
 }
 
 // SSH is how the gateway reaches an instance.
 type SSH struct {
-	Port           int    `yaml:"port"`
-	User           string `yaml:"user"`
-	PrivateKey     string `yaml:"private_key"`
-	HostKeyPolicy  string `yaml:"host_key_policy"` // strict | accept-new | insecure
+	Port          int    `yaml:"port"`
+	User          string `yaml:"user"`
+	PrivateKey    string `yaml:"private_key"`
+	HostKeyPolicy string `yaml:"host_key_policy"` // strict | accept-new | insecure
 }
 
 // Identity maps a client key to a backend.
@@ -161,7 +161,7 @@ func (c *Config) ApplyDefaults() {
 			b.SSH.HostKeyPolicy = "accept-new"
 		}
 		if b.Provider.ReadyTimeout == 0 {
-			b.Provider.ReadyTimeout = Duration(DefaultReadyTimout)
+			b.Provider.ReadyTimeout = Duration(DefaultReadyTimeout)
 		}
 	}
 }

@@ -100,7 +100,10 @@ func TestValidateRejects(t *testing.T) {
 }
 
 func TestNormalizeFingerprint(t *testing.T) {
-	tests := []struct{ in, want string; wantErr bool }{
+	tests := []struct {
+		in, want string
+		wantErr  bool
+	}{
 		{"SHA256:AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ", "AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ", false},
 		{"AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ=", "AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ", false},
 		{" not-base64!! ", "", true},
