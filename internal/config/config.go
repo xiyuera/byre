@@ -35,11 +35,11 @@ const (
 
 // Defaults applied before validation.
 const (
-	DefaultListen      = ":2222"
-	DefaultTTL         = 360 * time.Second
-	DefaultGrace       = 60 * time.Second
-	DefaultPoolSize    = 2
-	DefaultSSHPort     = 22
+	DefaultListen       = ":2222"
+	DefaultTTL          = 360 * time.Second
+	DefaultGrace        = 60 * time.Second
+	DefaultPoolSize     = 2
+	DefaultSSHPort      = 22
 	DefaultReadyTimeout = 120 * time.Second
 )
 
