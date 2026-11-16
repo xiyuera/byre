@@ -55,16 +55,24 @@ Splicing is byte-level after channel setup: no protocol inspection of the payloa
 
 ## 4. Recovery
 
-On startup the manager lists instances carrying this gateway's annotations
-(`keypod/identity`, `keypod/expires`, `keypod/state`). Instances whose lease has not expired are
-adopted; expired ones are deleted. This bounds the orphan count to "instances created by a crash that
-were never annotated", which the backend's own labels can further restrict.
+On startup — **before** warming the pool — the manager lists every instance each driver owns
+(`app.kubernetes.io/managed-by=keypod`) and rebuilds the identity table from the `keypod.io/identity`
+annotation. Instances without that annotation are the previous process's warm capacity: they are
+destroyed and the pool is refilled, so a restart never accumulates orphans.
+
+Two properties make this work and one deliberate limitation applies:
+
+- a pooled instance is bound (`backend.Binder`) the moment it is handed to an identity, so the object
+  carries the identity before any client can use it;
+- a failed bind returns the instance to the driver instead of leaking it;
+- an adopted lease is re-entered idempotently, so the client's next connection gets the same instance —
+  and a client that has already died is reaped by the normal `ttl` clock.
 
 ## 5. Backends
 
 | type | provider.kind | obtain | release |
 |---|---|---|---|
-| `kubernetes` | `sandbox-claim` | create a claim from `provider.template` (optionally against `provider.warm_pool`) using the configured GVK, wait for `endpoint_field` | delete the claim |
+| `kubernetes` | `sandbox-claim` | create a claim from `provider.template` and/or `provider.warm_pool` using the configured GVK, then wait until one of the advertised addresses (`endpoint_field`, then `podIPs`) accepts a TCP connection | delete the claim |
 | `kubernetes` | `pod` | create one pod from `provider.image` (+ `start_command`) and wait for readiness | delete the pod |
 | `static` | — | pick an endpoint from `endpoints` (round-robin, skip if leased) | mark free |
 

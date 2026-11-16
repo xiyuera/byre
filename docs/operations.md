@@ -69,6 +69,25 @@ reconstruct a key.
 | `unable to authenticate` after a key change | new fingerprint not in `identities` | add it (append), reload |
 | startup exits with a long error list | configuration violations | fix every listed item; do not "fix one and retry" |
 
+## Restarting or upgrading safely
+
+1. The new process adopts live leases first and destroys unannotated (stale pool) objects second, then
+   refills the pool. Expect `keypod_leases_adopted` to be non-zero when clients were connected.
+2. A client that reconnects during this window keeps its instance. A client whose lease had already
+   expired gets a new one — that is the documented contract, not a regression.
+3. Watch `keypod_pool_warm{backend=...}` return to `pool_size`; a pool that stays at 0 means `Create`
+   is failing (see the tunables table).
+
+## Running the acceptance checks
+
+```sh
+KEYPOD_CFG=config.yaml KEYPOD_KEY=path/to/client_key test/e2e/run.sh
+# add --ttl-ok to include the 320s idle-reconnect check
+```
+
+The script asserts: same instance across reconnects, `-L` reaching the instance's sshd, adoption and
+pool counters. It is the same sequence recorded in `docs/acceptance/`.
+
 ## Upgrading
 
 1. `keypod -check-config` with the new binary against the current file.

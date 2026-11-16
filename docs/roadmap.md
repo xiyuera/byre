@@ -2,6 +2,12 @@
 
 Ordered by value, not by effort. Nothing here is promised for a version.
 
+## Done (M0–M4)
+
+Skeleton and ADRs, SSH front end (session/exec/`-L`/`-R`), lease manager with `ttl`/`grace`, warm pool,
+`static` and `kubernetes` (pod + declarative claim) drivers, adoption after restart, `/healthz` and
+`/metrics`, and a real-cluster acceptance run with a non-default client identity.
+
 ## v0.1 — the lease works (M1–M3)
 
 - SSH front end: publickey auth, session/exec, `-L`, `-R`, sftp passthrough.

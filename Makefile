@@ -41,10 +41,11 @@ tidy:
 	go mod tidy
 
 check-config: build
+	@test -n "$(CONFIG)" || { echo "usage: make check-config CONFIG=path/to/config.yaml"; exit 2; }
 	$(BIN) -config $(CONFIG) -check-config
 
 e2e:
-	./test/e2e/run.sh
+	@KEYPOD_CFG=$(CONFIG) KEYPOD_KEY=$(KEY) ./test/e2e/run.sh
 
 clean:
 	rm -rf bin dist coverage.txt
