@@ -2,8 +2,12 @@ package lease
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
+
+	"keypod/internal/backend"
 )
 
 func waitFor(t *testing.T, what string, cond func() bool) {
@@ -125,4 +129,62 @@ func TestReapReleasesAndRefills(t *testing.T) {
 		t.Fatalf("released = %v, want one instance", fb.released)
 	}
 	waitFor(t, "pool refill after reap", func() bool { return m.WarmSize("lab") == 1 })
+}
+
+func TestAdoptRebuildsIdentityTable(t *testing.T) {
+	m, fb, _ := newManager(t)
+	ctx := context.Background()
+
+	fb.list = []backend.Instance{
+		{
+			ID: "lab-1", Addr: "127.0.0.1:22", User: "sandbox", PrivateKey: "/keys/pool",
+			HostKeyPolicy: "accept-new",
+			Annotations:   map[string]string{backend.LabelIdentity: "id-a"},
+		},
+		{
+			// A warm instance with no identity must not become a lease.
+			ID: "lab-2", Addr: "127.0.0.1:22", User: "sandbox", PrivateKey: "/keys/pool",
+			HostKeyPolicy: "accept-new",
+			Annotations:   map[string]string{},
+		},
+	}
+
+	n, err := m.Adopt(ctx)
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("adopted %d leases, want 1", n)
+	}
+	e := m.Lookup("id-a")
+	if e == nil || e.Instance.ID != "lab-1" {
+		t.Fatalf("adopted entry = %+v", e)
+	}
+	if m.AdoptedTotal() != 1 {
+		t.Fatalf("AdoptedTotal = %d, want 1", m.AdoptedTotal())
+	}
+
+	// The identity keeps using the adopted instance, and the driver is not asked for a new one.
+	again, err := m.Acquire(ctx, "id-a", "lab")
+	if err != nil {
+		t.Fatalf("acquire after adopt: %v", err)
+	}
+	if again.Instance.ID != "lab-1" {
+		t.Fatalf("instance after restart = %q, want lab-1", again.Instance.ID)
+	}
+	if fb.acquires != 0 {
+		t.Fatalf("driver Acquire called %d times after adoption", fb.acquires)
+	}
+}
+
+func TestAdoptReportsListFailureButKeepsGoing(t *testing.T) {
+	m, fb, _ := newManager(t)
+	fb.listErr = errors.New("api down")
+	n, err := m.Adopt(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "api down") {
+		t.Fatalf("err = %v, want the list failure surfaced", err)
+	}
+	if n != 0 {
+		t.Fatalf("adopted %d with a failing driver", n)
+	}
 }

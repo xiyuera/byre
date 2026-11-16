@@ -43,6 +43,7 @@ type Manager struct {
 	byIdentity map[string]*Entry
 	pools      map[string]*pool
 	logger     *slog.Logger
+	adopted    int
 }
 
 // SetLogger attaches a logger (optional).
@@ -196,6 +197,66 @@ func (m *Manager) Reap(ctx context.Context) (int, error) {
 		m.refill(e.Backend)
 	}
 	return len(expired), firstErr
+}
+
+// Adopt rebuilds the identity table from instances that already exist, so a restarted process hands
+// the same instance back to the same client instead of orphaning it and cold-starting a new one.
+//
+// Adoption is deliberately forgiving: an instance without an identity annotation is left alone (it
+// belongs to the pool, or to someone else), and a driver that cannot list is reported but does not
+// abort the others.
+func (m *Manager) Adopt(ctx context.Context) (int, error) {
+	m.mu.Lock()
+	drivers := make(map[string]backend.Backend, len(m.backends))
+	for name, drv := range m.backends {
+		drivers[name] = drv
+	}
+	m.mu.Unlock()
+
+	adopted := 0
+	var firstErr error
+	for name, drv := range drivers {
+		ins, err := drv.List(ctx)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("list on %q: %w", name, err)
+			}
+			continue
+		}
+		if err := drv.Adopt(ctx, ins); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("adopt on %q: %w", name, err)
+		}
+
+		now := m.now()
+		m.mu.Lock()
+		for _, in := range ins {
+			id := in.Annotations[backend.LabelIdentity]
+			if id == "" {
+				continue
+			}
+			if _, exists := m.byIdentity[id]; exists {
+				continue
+			}
+			m.byIdentity[id] = &Entry{
+				Identity: id,
+				Backend:  name,
+				Instance: in,
+				Created:  now,
+				LastSeen: now,
+			}
+			m.adopted++
+			adopted++
+		}
+		m.mu.Unlock()
+	}
+	return adopted, firstErr
+}
+
+// AdoptedTotal reports how many leases were recovered from existing instances.
+func (m *Manager) AdoptedTotal() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.adopted
 }
 
 // RunReaper reaps expired leases every interval until ctx is done.

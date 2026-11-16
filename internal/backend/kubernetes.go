@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -160,17 +162,49 @@ func (k *Kubernetes) Create(ctx context.Context) (Instance, error) {
 	}
 }
 
-// Acquire provisions an instance for one identity.
+// Acquire provisions an instance for one identity and records that binding on the object itself.
+//
+// The annotation is what makes a restart survivable: after a crash the gateway lists its own objects,
+// reads the identity back, and hands the same instance to the same client instead of starting over.
 func (k *Kubernetes) Acquire(ctx context.Context, identity string) (Instance, error) {
 	in, err := k.Create(ctx)
 	if err != nil {
 		return Instance{}, err
 	}
-	if in.Annotations == nil {
-		in.Annotations = map[string]string{}
+	ann := map[string]string{LabelIdentity: identity, LabelInstance: in.ID}
+	if err := k.annotate(ctx, in.ID, ann); err != nil {
+		// An unannotated instance would become an orphan on restart; give it back instead.
+		_ = k.Release(ctx, in)
+		return Instance{}, fmt.Errorf("annotate %s: %w", in.ID, err)
 	}
-	in.Annotations[LabelIdentity] = identity
+	merged := map[string]string{}
+	for k, v := range in.Annotations {
+		merged[k] = v
+	}
+	for k, v := range ann {
+		merged[k] = v
+	}
+	in.Annotations = merged
 	return in, nil
+}
+
+// annotate merges annotations onto the object behind an instance.
+func (k *Kubernetes) annotate(ctx context.Context, id string, ann map[string]string) error {
+	patch, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{"annotations": ann},
+	})
+	if err != nil {
+		return err
+	}
+	switch k.cfg.Provider.Kind {
+	case KindPod:
+		_, err = k.client.CoreV1().Pods(k.cfg.Namespace).Patch(ctx, id, types.MergePatchType, patch, metav1.PatchOptions{})
+	case KindSandboxClaim:
+		_, err = k.dyn.Resource(k.gvr()).Namespace(k.cfg.Namespace).Patch(ctx, id, types.MergePatchType, patch, metav1.PatchOptions{})
+	default:
+		err = fmt.Errorf("unsupported provider kind %q", k.cfg.Provider.Kind)
+	}
+	return err
 }
 
 // Release deletes the object behind an instance. Idempotent: a missing object is not an error.

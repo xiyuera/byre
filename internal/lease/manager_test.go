@@ -17,6 +17,8 @@ type fakeBackend struct {
 	released  []string
 	lastIdent string
 	failWith  error
+	list      []backend.Instance
+	listErr   error
 }
 
 func (f *fakeBackend) Name() string { return f.name }
@@ -58,8 +60,10 @@ func (f *fakeBackend) Release(_ context.Context, in backend.Instance) error {
 	return nil
 }
 
-func (f *fakeBackend) List(context.Context) ([]backend.Instance, error) { return nil, nil }
-func (f *fakeBackend) Adopt(context.Context, []backend.Instance) error  { return nil }
+func (f *fakeBackend) List(context.Context) ([]backend.Instance, error) {
+	return f.list, f.listErr
+}
+func (f *fakeBackend) Adopt(context.Context, []backend.Instance) error { return nil }
 
 type clock struct{ t time.Time }
 

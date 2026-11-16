@@ -107,6 +107,12 @@ func main() {
 		logger.Error("ssh front end", "error", err)
 		os.Exit(1)
 	}
+	if n, err := mgr.Adopt(ctx); err != nil {
+		logger.Warn("adoption incomplete", "adopted", n, "error", err)
+	} else if n > 0 {
+		logger.Info("adopted existing leases", "count", n)
+	}
+
 	if err := front.Listen(); err != nil {
 		logger.Error("ssh front end", "error", err)
 		os.Exit(1)
@@ -129,6 +135,7 @@ func main() {
 		fmt.Fprintf(w, "# HELP keypod_up Whether the process is running.\n# TYPE keypod_up gauge\nkeypod_up 1\n")
 		fmt.Fprintf(w, "# HELP keypod_leases_active Leases with at least one open connection.\n# TYPE keypod_leases_active gauge\nkeypod_leases_active %d\n", active)
 		fmt.Fprintf(w, "# HELP keypod_leases_idle Leases without connections, waiting to be reaped.\n# TYPE keypod_leases_idle gauge\nkeypod_leases_idle %d\n", idle)
+		fmt.Fprintf(w, "# HELP keypod_leases_adopted Leases recovered from existing instances at startup.\n# TYPE keypod_leases_adopted counter\nkeypod_leases_adopted %d\n", mgr.AdoptedTotal())
 		for name := range backends {
 			fmt.Fprintf(w, "keypod_pool_warm{backend=%q} %d\n", name, mgr.WarmSize(name))
 		}

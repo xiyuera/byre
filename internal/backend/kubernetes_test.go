@@ -99,6 +99,14 @@ func TestPodCreateListRelease(t *testing.T) {
 	if in.Annotations[LabelIdentity] != "identity-a" {
 		t.Fatalf("identity annotation missing: %v", in.Annotations)
 	}
+	// The binding must be on the object, or a restart cannot adopt the instance.
+	stored, err := cs.CoreV1().Pods("instances").Get(ctx, in.ID, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if stored.Annotations[LabelIdentity] != "identity-a" {
+		t.Fatalf("object annotations = %v, want identity recorded on the pod", stored.Annotations)
+	}
 	if err := in.Validate(); err != nil {
 		t.Fatalf("instance invalid: %v", err)
 	}
