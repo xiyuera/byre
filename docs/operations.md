@@ -10,6 +10,24 @@ kubectl apply -k deploy/
 on 2222, health on 8099), Service (ClusterIP 2222). The configuration comes from a ConfigMap; the pool
 key comes from a Secret. Both are examples — copy, then edit.
 
+## Build and publish the image
+
+```sh
+make image                                   # keypod:<git describe>
+make image-push IMAGE_REGISTRY=<registry>/<team>
+kubectl apply -k deploy/                     # one shot: ns, SA, RBAC, ConfigMap, Deployment, Service
+kubectl -n keypod-system create secret generic keypod-pool-key --from-file=id_key=/path/to/key
+kubectl -n keypod-system rollout status deploy/keypod
+kubectl -n keypod-system port-forward svc/keypod 2222:2222   # or expose it the way your cluster does
+```
+
+The image is a static binary on Alpine; nothing else is installed. The container runs as uid 10001,
+drops all capabilities and keeps a read-only root filesystem, with `$HOME` on an emptyDir because
+`accept-new` host keys are appended to `$HOME/.ssh/known_hosts`.
+
+**If `pool_size > 0`,** the gateway will start creating instances immediately. Set `pool_size: 0` in the
+ConfigMap for a first smoke test if you do not want warm capacity yet.
+
 ## Validate a configuration before shipping it
 
 ```sh

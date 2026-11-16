@@ -1,0 +1,8 @@
+.git
+.gitea
+bin
+dist
+test
+docs
+*.md
+!README.md

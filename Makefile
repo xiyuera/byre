@@ -10,7 +10,7 @@ LDFLAGS := -s -w \
 	-X keypod/internal/version.Commit=$(COMMIT) \
 	-X keypod/internal/version.BuildDate=$(BUILD_DATE)
 
-.PHONY: all build test test-race lint fmt vet tidy clean e2e check-config help
+.PHONY: all build test test-race lint fmt vet tidy clean e2e check-config image image-push help
 
 all: build
 
@@ -46,6 +46,23 @@ check-config: build
 
 e2e:
 	@KEYPOD_CFG=$(CONFIG) KEYPOD_KEY=$(KEY) ./test/e2e/run.sh
+
+IMAGE          ?= keypod:$(VERSION)
+# Override with your own registry: make image-push IMAGE_REGISTRY=registry.example.com/team
+IMAGE_REGISTRY ?= localhost:5000
+
+image:
+	docker build \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-t $(IMAGE) .
+	@echo "built $(IMAGE)"
+
+image-push: image
+	docker tag $(IMAGE) $(IMAGE_REGISTRY)/$(IMAGE)
+	docker push $(IMAGE_REGISTRY)/$(IMAGE)
+	@echo "pushed $(IMAGE_REGISTRY)/$(IMAGE)"
 
 clean:
 	rm -rf bin dist coverage.txt

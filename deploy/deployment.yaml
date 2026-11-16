@@ -29,6 +29,11 @@ spec:
           image: keypod
           imagePullPolicy: IfNotPresent
           args: ["-config", "/etc/keypod/config.yaml"]
+          env:
+            # accept-new host keys are appended under $HOME; the root filesystem is read-only here, so
+            # HOME points at an emptyDir mounted below.
+            - name: HOME
+              value: /home/keypod
           ports:
             - name: ssh
               containerPort: 2222
@@ -57,6 +62,8 @@ spec:
             - name: pool-key
               mountPath: /etc/keypod/keys
               readOnly: true
+            - name: home
+              mountPath: /home/keypod
       volumes:
         - name: config
           configMap:
@@ -65,3 +72,5 @@ spec:
           secret:
             secretName: keypod-pool-key
             defaultMode: 0400
+        - name: home
+          emptyDir: {}
