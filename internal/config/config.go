@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -77,9 +78,22 @@ type Config struct {
 
 // Lease holds the timing and pool parameters of a lease.
 type Lease struct {
-	TTL      Duration `yaml:"ttl"`       // idle before an instance is reclaimed
-	Grace    Duration `yaml:"grace"`     // extra wait after a disconnect before reclaiming
-	PoolSize int      `yaml:"pool_size"` // warm instances kept ready
+	TTL   Duration `yaml:"ttl"`   // idle before an instance is reclaimed
+	Grace Duration `yaml:"grace"` // extra wait after a disconnect before reclaiming
+
+	// PoolSize is a pointer because 0 is a documented value ("no warm capacity: create on demand")
+	// and a plain int cannot tell it apart from "not set". With an int the documented rotation
+	// procedure — shrink the pool to 0, replace the key, grow it back — silently did nothing, because
+	// the zero was replaced by the default before anyone looked at it.
+	PoolSize *int `yaml:"pool_size"`
+}
+
+// PoolSizeValue returns the pool size after defaults: explicit 0 stays 0.
+func (l Lease) PoolSizeValue() int {
+	if l.PoolSize == nil {
+		return DefaultPoolSize
+	}
+	return *l.PoolSize
 }
 
 // Backend describes one way of obtaining instances.
@@ -137,6 +151,10 @@ type Provider struct {
 	StartCommand []string `yaml:"start_command"`
 
 	ReadyTimeout Duration `yaml:"ready_timeout"`
+
+	// RunAsRoot lets a pod instance start as uid 0. Default false: the driver then requires a non-root
+	// user with no capabilities and the default seccomp profile.
+	RunAsRoot bool `yaml:"run_as_root"`
 }
 
 // SSH is how the gateway reaches an instance.
@@ -186,8 +204,9 @@ func (c *Config) ApplyDefaults() {
 	if c.Lease.Grace == 0 {
 		c.Lease.Grace = Duration(DefaultGrace)
 	}
-	if c.Lease.PoolSize == 0 {
-		c.Lease.PoolSize = DefaultPoolSize
+	if c.Lease.PoolSize == nil {
+		def := DefaultPoolSize
+		c.Lease.PoolSize = &def
 	}
 	for i := range c.Backends {
 		b := &c.Backends[i]
@@ -217,11 +236,19 @@ func (c *Config) Validate() error {
 	if c.Lease.Grace.Std() < 0 {
 		fail("lease.grace must be >= 0")
 	}
-	if c.Lease.PoolSize < 0 {
+	if c.Lease.PoolSizeValue() < 0 {
 		fail("lease.pool_size must be >= 0")
 	}
 	if len(c.Backends) == 0 {
 		fail("at least one backend is required")
+	}
+	if p := strings.TrimSpace(c.HostKey); p != "" {
+		// Checked here rather than at startup: a path that cannot be written is a first install that
+		// dies halfway (the process cannot persist the key it just generated), and -check-config exists
+		// to catch exactly that before a rollout.
+		if err := checkHostKeyPath(p); err != nil {
+			fail("host_key: %v", err)
+		}
 	}
 
 	names := map[string]bool{}
@@ -279,6 +306,65 @@ func (c *Config) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// Warnings lists conditions that are legal but wrong for a deployment. They are not errors because
+// ADR-0006 keeps an ephemeral host key available for tests; -check-config prints them so an operator
+// does not discover the choice from a client that refuses to connect after a restart.
+func (c *Config) Warnings() []string {
+	var out []string
+	if strings.TrimSpace(c.HostKey) == "" {
+		out = append(out, "host_key is empty: the gateway will generate an ephemeral host key, so its "+
+			"fingerprint changes on every restart and clients cannot pin it (ADR-0006 allows this for tests only)")
+	}
+	return out
+}
+
+// checkHostKeyPath answers one question: can this path hold a persisted key?
+//
+// Three cases, mirroring what the front end does at startup — an existing file is used as is, a missing
+// file is generated on first start (so the nearest existing ancestor must be writable), and anything
+// else (a directory, an unreadable file) is a configuration error.
+func checkHostKeyPath(path string) error {
+	switch fi, err := os.Stat(path); {
+	case err == nil:
+		if fi.IsDir() {
+			return fmt.Errorf("%s is a directory, not a key file", path)
+		}
+		return nil
+	case !errors.Is(err, os.ErrNotExist):
+		return fmt.Errorf("cannot stat %s: %w", path, err)
+	}
+
+	// The file does not exist yet: it is created on first start, so the deepest existing ancestor has
+	// to be writable. Probing with a temp file is deliberate — permission bits lie under ACLs, read-only
+	// mounts and root squashing, and this is the failure ADR-0006 records from a real install.
+	dir := filepath.Dir(path)
+	for {
+		fi, err := os.Stat(dir)
+		if err == nil {
+			if !fi.IsDir() {
+				return fmt.Errorf("%s exists and is not a directory, so %s cannot be created", dir, path)
+			}
+			f, err := os.CreateTemp(dir, ".byre-hostkey-check-*")
+			if err != nil {
+				return fmt.Errorf("%s does not exist and %s is not writable (%v); a first start could "+
+					"not persist a generated key", path, dir, err)
+			}
+			name := f.Name()
+			_ = f.Close()
+			_ = os.Remove(name)
+			return nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("cannot stat %s: %w", dir, err)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return fmt.Errorf("no existing ancestor for %s", path)
+		}
+		dir = parent
+	}
 }
 
 func validateProvision(where string, b Backend, fail func(string, ...any)) {

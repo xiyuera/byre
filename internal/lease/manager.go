@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"byre/internal/backend"
+	"byre/internal/metrics"
 )
 
 // defaultLivenessTimeout bounds the "does this instance still exist" read taken on the reuse path. It is
@@ -34,6 +35,12 @@ type Entry struct {
 
 	// refs counts open connections. A lease with refs > 0 is never reaped.
 	refs int
+
+	// adopted marks a lease rebuilt from an existing object at startup. Such a lease has refs == 0 by
+	// definition (no connection has arrived yet), which is why it must be reported separately from the
+	// ordinary idle count: an operator watching "active back to its old value" would otherwise compare
+	// against a number that is structurally zero.
+	adopted bool
 }
 
 // Refs reports the number of open connections.
@@ -126,6 +133,7 @@ func (m *Manager) Acquire(ctx context.Context, identity, backendName string) (En
 			}
 			e.refs++
 			e.LastSeen = now
+			metrics.ObserveAcquire(backendName, "reuse")
 			return *e, nil
 		}
 	}
@@ -146,10 +154,12 @@ func (m *Manager) Acquire(ctx context.Context, identity, backendName string) (En
 		var err error
 		in, err = drv.Acquire(ctx, identity)
 		if err != nil {
+			metrics.ObserveAcquire(backendName, "error")
 			return Entry{}, fmt.Errorf("acquire on backend %q: %w", backendName, err)
 		}
 	}
 	if err := in.Validate(); err != nil {
+		metrics.ObserveAcquire(backendName, "error")
 		return Entry{}, fmt.Errorf("backend %q returned an unusable instance: %w", backendName, err)
 	}
 
@@ -159,9 +169,13 @@ func (m *Manager) Acquire(ctx context.Context, identity, backendName string) (En
 		if binder, ok := drv.(backend.Binder); ok {
 			if err := binder.Bind(ctx, in, identity); err != nil {
 				_ = drv.Release(ctx, in)
+				metrics.ObserveAcquire(backendName, "error")
 				return Entry{}, fmt.Errorf("bind pooled instance on %q: %w", backendName, err)
 			}
 		}
+		metrics.ObserveAcquire(backendName, "pool")
+	} else {
+		metrics.ObserveAcquire(backendName, "created")
 	}
 
 	e := &Entry{
@@ -303,6 +317,12 @@ func (m *Manager) Lookup(identity string) *Entry {
 
 // Reap releases leases idle for longer than ttl+grace and returns how many were reaped.
 // Instances with open connections are never reaped.
+//
+// A release that keeps failing is reported and then *not* followed by a refill. The old object still
+// exists and is no longer tracked, so creating a replacement would turn one leaked instance into a leak
+// that grows every reap interval. The lease itself is dropped either way — its client is gone — and the
+// failure surfaces as a log line plus byre_release_errors_total, which is the whole point: the previous
+// version returned the error to a caller that discarded it and refilled anyway.
 func (m *Manager) Reap(ctx context.Context) (int, error) {
 	m.mu.Lock()
 	var expired []*Entry
@@ -325,12 +345,44 @@ func (m *Manager) Reap(ctx context.Context) (int, error) {
 		if drv == nil {
 			continue
 		}
-		if err := drv.Release(ctx, e.Instance); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("release %s on %q: %w", e.Instance.ID, e.Backend, err)
+		if err := m.releaseWithRetry(ctx, drv, e); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			if log := m.Logger(); log != nil {
+				log.Warn("lease release failed; instance is no longer tracked",
+					"identity", shortIdentity(e.Identity), "backend", e.Backend,
+					"instance", e.Instance.ID, "error", err,
+					"action", "inspect the backend for an orphan; no replacement was created")
+			}
+			continue
 		}
 		m.refill(e.Backend)
 	}
 	return len(expired), firstErr
+}
+
+// releaseAttempts bounds the retries of one release. A release is a delete; the failures worth retrying
+// are a slow API server or a transient conflict, not a permanent rejection.
+const releaseAttempts = 3
+
+func (m *Manager) releaseWithRetry(ctx context.Context, drv backend.Backend, e *Entry) error {
+	var err error
+	for attempt := 1; attempt <= releaseAttempts; attempt++ {
+		if err = drv.Release(ctx, e.Instance); err == nil {
+			return nil
+		}
+		metrics.IncReleaseError()
+		if attempt == releaseAttempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("release %s on %q: %w", e.Instance.ID, e.Backend, err)
+		case <-time.After(time.Duration(attempt) * 250 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("release %s on %q failed %d times: %w", e.Instance.ID, e.Backend, releaseAttempts, err)
 }
 
 // Adopt rebuilds the identity table from instances that already exist, so a restarted process hands
@@ -396,6 +448,7 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 				Instance: in,
 				Created:  now,
 				LastSeen: now,
+				adopted:  true,
 			}
 			m.adopted++
 			adopted++
@@ -471,6 +524,45 @@ func (m *Manager) Stats() (active, idle int) {
 		}
 	}
 	return active, idle
+}
+
+// AdoptedPending reports adopted leases that no connection has picked up yet.
+//
+// An adopted entry starts with refs == 0, so it is "idle" by definition even though its client is still
+// entitled to it. Reporting it separately makes the documented post-restart check honest: the number to
+// compare with "before the restart" is active + adopted_pending, not active alone.
+func (m *Manager) AdoptedPending() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, e := range m.byIdentity {
+		if e.adopted && e.refs == 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// OldestIdleAge reports how long the oldest lease has been without a connection; zero when none is idle.
+// It is the leading indicator for "leases stop being reaped" — the reaper runs on a fixed interval, so a
+// value that keeps growing past ttl+grace means the reaper is not finishing its work.
+func (m *Manager) OldestIdleAge() time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.now()
+	var oldest time.Duration
+	for _, e := range m.byIdentity {
+		if e.refs > 0 {
+			continue
+		}
+		if age := now.Sub(e.LastSeen); age > oldest {
+			oldest = age
+		}
+	}
+	if oldest < 0 {
+		return 0
+	}
+	return oldest
 }
 
 // SetClock replaces the clock; tests only.

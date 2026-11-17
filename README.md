@@ -169,13 +169,16 @@ refused during authentication: `Permission denied (publickey)`.
 
 ```sh
 curl -s localhost:8099/healthz                  # ok dev (none, unknown)
-curl -s localhost:8099/metrics | grep '^byre_'  # byre_up 1, byre_leases_idle 1, byre_pool_warm{backend="lab"} 0
+curl -s localhost:8099/readyz                    # ready: pool target map[l:2] warm map[l:2]
+curl -s localhost:8099/metrics | grep '^byre_'  # byre_up 1, byre_leases_idle 1, byre_pool_target{backend="lab"} 0
 ```
 
-There is no `/readyz`. `/healthz` answers "the process is up", never "I can hand out an instance". The
-health port `:8099` is compiled in, not configurable: a second gateway on the same host starts its SSH
-listener, then logs `health endpoint failed: listen tcp :8099: bind: address already in use` and shuts
-down. And `pool_size` is a no-op for `endpoints`, which creates nothing to pre-warm.
+`/healthz` answers "the process is up". `/readyz` answers the other question — "can this process provision
+an instance" — and stays 503 while a configured pool is empty and the last fill failed (ADR-0011). Note that
+`pool_size` is a no-op for `endpoints`, which creates nothing to pre-warm.
+
+The health port `:8099` is compiled in, not configurable: a second gateway on the same host starts its SSH
+listener, then logs `health endpoint failed: listen tcp :8099: bind: address already in use` and shuts down.
 
 ## Configuration: where do the SSH backends come from
 
@@ -266,11 +269,13 @@ the least-tested shape (unit tests with a fake client); `claims` is what the rec
 ```
 
 `claims` is an API *shape* — create an object, wait for an address in its status, delete it at the end —
-not a built-in CRD, which is why the GVK is configuration. Readiness is a **TCP connect to port 22** on the
-first address that answers, in the order given by `endpoint_field` and then `status.sandbox.podIPs`: a
-status field merely appearing is not enough, because the Service's DNS record follows the controller by
-seconds (ADR-0005). The deployment this was written against uses `SandboxClaim` from
-`extensions.agents.x-k8s.io` with a warm pool — one claim API among many, and only configuration here.
+not a built-in CRD, which is why the GVK is configuration. Readiness is a **complete SSH banner** on port 22:
+the first address that answers with a line starting `SSH-2.` is ready, in the order given by
+`endpoint_field` and then `status.sandbox.podIPs`. An open socket is not enough — socket-activated sshd
+accepts the connection before it can speak — and a status field merely appearing is not enough either,
+because the Service's DNS record follows the controller by seconds (ADR-0005). The deployment this was
+written against uses `SandboxClaim` from `extensions.agents.x-k8s.io` with a warm pool — one claim API
+among many, and only configuration here.
 
 ### command — your program provisions
 
@@ -379,8 +384,8 @@ identifier SSH already verifies — the public key — and hangs the lease on it
 - **`endpoints` does not survive a restart.** That driver keeps ownership in memory, so a restarted
   gateway round-robins again and a client that reconnects lands on whichever endpoint is next — measured,
   not inferred. `claims` and `workloads` do survive: the identity is written onto the object.
-- **`pool_size: 0` does not stop instance creation.** `ApplyDefaults` treats an explicit zero as an absent
-  key, and replaces an explicit `grace: 0s` with 60s the same way. Scale the Deployment to zero instead.
+- **`grace: 0s` does not mean "no grace".** `ApplyDefaults` replaces an explicit zero with 60 s, and there is
+  still no way to disable it. `pool_size: 0`, by contrast, now means what it says: no warm capacity.
 - **Not in v1:** multi-replica consistency, dynamic backend balancing, in-instance state persistence,
   multi-tenancy, a UI. Anything specific to one product belongs in an integration example.
 

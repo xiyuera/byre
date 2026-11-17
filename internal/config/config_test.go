@@ -10,10 +10,12 @@ import (
 
 const goodFP = "SHA256:AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ"
 
+func intPtr(n int) *int { return &n }
+
 func baseConfig() *Config {
 	return &Config{
 		Listen: ":2222",
-		Lease:  Lease{TTL: Duration(360 * time.Second), Grace: Duration(60 * time.Second), PoolSize: 2},
+		Lease:  Lease{TTL: Duration(360 * time.Second), Grace: Duration(60 * time.Second), PoolSize: intPtr(2)},
 		Backends: []Backend{{
 			Name:      "claims",
 			Provision: ProvisionClaims,
@@ -219,5 +221,99 @@ identities: []
 `)
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "invalid duration") {
 		t.Fatalf("expected duration error, got %v", err)
+	}
+}
+
+// TestExplicitZeroPoolSizeSurvivesDefaults is the regression for a documented procedure that did not
+// exist: "scale the pool to 0, rotate the key, scale it back" was impossible while 0 was rewritten into
+// the default of 2 before validation saw it.
+func TestExplicitZeroPoolSizeSurvivesDefaults(t *testing.T) {
+	c := baseConfig()
+	c.Lease.PoolSize = intPtr(0)
+	c.ApplyDefaults()
+	if got := c.Lease.PoolSizeValue(); got != 0 {
+		t.Fatalf("explicit pool_size: 0 became %d", got)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+
+	// Absent means the default, and the default is materialised so logs and Validate agree.
+	c2 := baseConfig()
+	c2.Lease.PoolSize = nil
+	c2.ApplyDefaults()
+	if got := c2.Lease.PoolSizeValue(); got != DefaultPoolSize {
+		t.Fatalf("absent pool_size became %d, want %d", got, DefaultPoolSize)
+	}
+	if c2.Lease.PoolSize == nil {
+		t.Fatal("ApplyDefaults left pool_size unset")
+	}
+}
+
+func TestLoadKeepsExplicitZeroPoolSize(t *testing.T) {
+	path := writeTemp(t, `
+listen: ":2222"
+lease:
+  pool_size: 0
+backends:
+  - name: b
+    provision: endpoints
+    endpoints: ["192.0.2.1:22"]
+    ssh: {user: u, private_key: /k}
+identities:
+  - fingerprint: "SHA256:AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ"
+    backend: b
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Lease.PoolSizeValue(); got != 0 {
+		t.Fatalf("pool_size from file = %d, want 0", got)
+	}
+}
+
+// TestHostKeyPathIsChecked: -check-config has to catch the first-install failure ADR-0006 records — a
+// configured host_key whose directory cannot hold the generated key.
+func TestHostKeyPathIsChecked(t *testing.T) {
+	ok := baseConfig()
+	ok.HostKey = filepath.Join(t.TempDir(), "id_ed25519")
+	ok.ApplyDefaults()
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("a writable host_key path must validate: %v", err)
+	}
+
+	bad := baseConfig()
+	bad.HostKey = "/proc/byre/hostkey/id_ed25519"
+	bad.ApplyDefaults()
+	err := bad.Validate()
+	if err == nil || !strings.Contains(err.Error(), "host_key") {
+		t.Fatalf("err = %v, want a host_key violation", err)
+	}
+
+	asDir := baseConfig()
+	asDir.HostKey = t.TempDir()
+	asDir.ApplyDefaults()
+	if err := asDir.Validate(); err == nil || !strings.Contains(err.Error(), "directory") {
+		t.Fatalf("err = %v, want 'is a directory'", err)
+	}
+}
+
+// TestEmptyHostKeyIsAWarning: ADR-0006 keeps the ephemeral key available, so an empty host_key must not
+// fail validation — but it must not pass silently either.
+func TestEmptyHostKeyIsAWarning(t *testing.T) {
+	c := baseConfig()
+	c.ApplyDefaults()
+	if err := c.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	warnings := c.Warnings()
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "host_key") {
+		t.Fatalf("warnings = %v, want one about host_key", warnings)
+	}
+
+	c.HostKey = filepath.Join(t.TempDir(), "id_ed25519")
+	if got := c.Warnings(); len(got) != 0 {
+		t.Fatalf("warnings = %v, want none when host_key is set", got)
 	}
 }

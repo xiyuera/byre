@@ -72,7 +72,7 @@ Two properties make this work and one deliberate limitation applies:
 
 | `provision` | driver | obtain | release |
 |---|---|---|---|
-| `claims` | kubernetes | create an object from `provider.template` and/or `provider.warm_pool` using the configured GVK, then wait until one of the advertised addresses (`endpoint_field`, then `podIPs`) accepts a TCP connection | delete the object |
+| `claims` | kubernetes | create an object from `provider.template` and/or `provider.warm_pool` using the configured GVK, then wait until one of the advertised addresses (`endpoint_field`, then `podIPs`) answers with a complete SSH banner | delete the object |
 | `workloads` | kubernetes | create one pod from `provider.image` (+ `start_command`) and wait for readiness | delete the pod |
 | `endpoints` | static | pick an endpoint from `endpoints` (round-robin, skip if leased) | mark free |
 | `command` | command | run `command.acquire`; the program prints one JSON object describing the instance | run `command.release` |

@@ -1,10 +1,12 @@
 package backend
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
@@ -12,6 +14,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -21,6 +24,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"byre/internal/metrics"
 )
 
 // Provider kinds.
@@ -35,6 +40,9 @@ const (
 	LabelManaged  = "app.kubernetes.io/managed-by"
 	LabelInstance = "byre.io/instance"
 	LabelIdentity = "byre.io/identity"
+	// LabelUID records which object the binding belongs to. Without it a recycled name (delete, then
+	// create something else under the same name) silently inherits the previous identity.
+	LabelUID = "byre.io/uid"
 )
 
 // ProviderSpec is the declarative description of "what an instance is and how it is started".
@@ -47,6 +55,11 @@ type ProviderSpec struct {
 	Image        string   // workloads: any image that speaks SSH
 	StartCommand []string // workloads: optional override of the image entrypoint
 	ReadyTimeout time.Duration
+
+	// AllowRoot lets a pod instance start as uid 0. The default is to require a non-root user with no
+	// capabilities, because an SSH image that "needs root" usually means its entrypoint was never
+	// written for an unprivileged container. Set it for images that genuinely cannot run otherwise.
+	AllowRoot bool
 
 	// claims: the API coordinates. Required for that kind, because guessing a group or a resource
 	// name would tie the binary to one installation. There is no default: no API is built in.
@@ -181,7 +194,7 @@ func (k *Kubernetes) Acquire(ctx context.Context, identity string) (Instance, er
 	if err != nil {
 		return Instance{}, err
 	}
-	ann := map[string]string{LabelIdentity: identity, LabelInstance: in.ID}
+	ann := bindingAnnotations(in, identity)
 	if err := k.annotate(ctx, in.ID, ann); err != nil {
 		// An unannotated instance would become an orphan on restart; give it back instead.
 		_ = k.Release(ctx, in)
@@ -200,11 +213,22 @@ func (k *Kubernetes) Acquire(ctx context.Context, identity string) (Instance, er
 
 // Bind records the identity on a pooled instance (implements backend.Binder).
 func (k *Kubernetes) Bind(ctx context.Context, in Instance, identity string) error {
-	ann := map[string]string{LabelIdentity: identity, LabelInstance: in.ID}
+	ann := bindingAnnotations(in, identity)
 	if err := k.annotate(ctx, in.ID, ann); err != nil {
 		return fmt.Errorf("annotate %s: %w", in.ID, err)
 	}
 	return nil
+}
+
+// bindingAnnotations is what a restarted process reads back: who holds the instance, and which object
+// that lease was made against. The UID is written whenever the driver knows it; an object without one
+// (a driver that has no such concept) keeps the older two-key form.
+func bindingAnnotations(in Instance, identity string) map[string]string {
+	ann := map[string]string{LabelIdentity: identity, LabelInstance: in.ID}
+	if in.UID != "" {
+		ann[LabelUID] = in.UID
+	}
+	return ann
 }
 
 // annotate merges annotations onto the object behind an instance.
@@ -305,7 +329,7 @@ func (k *Kubernetes) List(ctx context.Context) ([]Instance, error) {
 		}
 		out := make([]Instance, 0, len(pods.Items))
 		for i := range pods.Items {
-			out = append(out, k.instanceFromPod(&pods.Items[i]))
+			out = append(out, k.boundInstance(k.instanceFromPod(&pods.Items[i])))
 		}
 		return out, nil
 	case KindClaims:
@@ -319,19 +343,66 @@ func (k *Kubernetes) List(ctx context.Context) ([]Instance, error) {
 		for i := range list.Items {
 			item := &list.Items[i]
 			if addr := k.endpointFromObject(item); addr != "" {
-				out = append(out, k.instance(addr, item.GetName(), item.GetAnnotations()))
+				out = append(out, k.boundInstance(k.instance(addr, item.GetName(), string(item.GetUID()), item.GetAnnotations())))
 			}
 		}
 		return out, nil
-	default:
-		return nil, nil
 	}
+	return nil, nil
+}
+
+// boundInstance decides whether a listed object still holds the identity its annotation claims.
+//
+// A name is not an instance. If the object behind a lease was deleted and recreated under the same
+// name, the new object carries none of the old one's state, and handing it to the client that held the
+// lease would be a silent data loss ("where did my files go"). The UID annotation is the only thing
+// that distinguishes the two, so an object whose annotation names a different UID is returned
+// *unbound*: adoption then treats it as stale capacity and destroys it, instead of inheriting a
+// stranger's instance.
+func (k *Kubernetes) boundInstance(in Instance) Instance {
+	if in.Annotations[LabelIdentity] == "" {
+		return in
+	}
+	annotated := in.Annotations[LabelUID]
+	if annotated == "" {
+		// Objects created before v0.1.3 carry no UID. Treating those as stale would destroy every
+		// live lease on upgrade; they are adopted as before and Adopt backfills the annotation.
+		k.log.Info("binding without uid annotation", "instance", in.ID, "object_uid", in.UID,
+			"action", "adopting and backfilling")
+		return in
+	}
+	if annotated == in.UID {
+		return in
+	}
+	k.log.Warn("stale-binding", "backend", k.cfg.Name, "instance", in.ID,
+		"annotated_uid", annotated, "object_uid", in.UID,
+		"reason", "object was replaced under the same name; the identity is not inherited")
+	ann := make(map[string]string, len(in.Annotations))
+	for name, v := range in.Annotations {
+		ann[name] = v
+	}
+	delete(ann, LabelIdentity)
+	in.Annotations = ann
+	return in
 }
 
 // Adopt re-registers instances found after a restart. The driver itself keeps no state, so adoption
-// only refreshes labels/annotations that the lease manager reads.
+// only refreshes the annotations that the lease manager reads — in practice, backfilling the UID on
+// objects that were bound by an older version.
 func (k *Kubernetes) Adopt(ctx context.Context, ins []Instance) error {
-	return nil
+	var firstErr error
+	for _, in := range ins {
+		if in.Annotations[LabelIdentity] == "" || in.UID == "" {
+			continue
+		}
+		if in.Annotations[LabelUID] == in.UID {
+			continue
+		}
+		if err := k.annotate(ctx, in.ID, map[string]string{LabelUID: in.UID}); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("backfill uid on %s: %w", in.ID, err)
+		}
+	}
+	return firstErr
 }
 
 // AnonymousInstancesAreStale implements StaleCapacity. Every object this driver creates carries
@@ -355,11 +426,27 @@ func (k *Kubernetes) createPod(ctx context.Context) (Instance, error) {
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
+			// Defaults are conservative on purpose: an instance runs an SSH daemon and nothing else,
+			// so it has no business holding capabilities, escalating privileges or escaping the
+			// default seccomp profile. An image that cannot start under these settings is the
+			// interesting case — it is usually a root-only entrypoint, not a real requirement.
+			SecurityContext: k.podSecurityContext(),
 			Containers: []corev1.Container{{
-				Name:    "instance",
-				Image:   k.cfg.Provider.Image,
-				Command: k.cfg.Provider.StartCommand,
-				Ports:   []corev1.ContainerPort{{ContainerPort: 22, Protocol: corev1.ProtocolTCP}},
+				Name:            "instance",
+				Image:           k.cfg.Provider.Image,
+				Command:         k.cfg.Provider.StartCommand,
+				Ports:           []corev1.ContainerPort{{ContainerPort: 22, Protocol: corev1.ProtocolTCP}},
+				SecurityContext: k.containerSecurityContext(),
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("10m"),
+						corev1.ResourceMemory: resource.MustParse("32Mi"),
+					},
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceMemory: resource.MustParse("512Mi"),
+					},
+				},
 			}},
 		},
 	}
@@ -373,8 +460,38 @@ func (k *Kubernetes) createPod(ctx context.Context) (Instance, error) {
 		_ = k.Release(ctx, Instance{ID: created.Name})
 		return Instance{}, err
 	}
-	return k.instance(addr, created.Name, created.Annotations), nil
+	return k.instance(addr, created.Name, string(created.UID), created.Annotations), nil
 }
+
+// podSecurityContext is the pod-level hardening applied to every instance.
+func (k *Kubernetes) podSecurityContext() *corev1.PodSecurityContext {
+	sc := &corev1.PodSecurityContext{
+		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+	if !k.cfg.Provider.AllowRoot {
+		sc.RunAsNonRoot = boolPtr(true)
+	}
+	return sc
+}
+
+// containerSecurityContext is the per-container hardening: no privilege escalation, no capabilities.
+// Dropping ALL also drops the ones sshd would use to change uid, which is the point — the instance
+// serves one user whose key the gateway already holds.
+func (k *Kubernetes) containerSecurityContext() *corev1.SecurityContext {
+	sc := &corev1.SecurityContext{
+		AllowPrivilegeEscalation: boolPtr(false),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+	if k.cfg.Provider.AllowRoot {
+		// runAsUser is left to the image when root is allowed, but escalation stays off.
+		sc.RunAsNonRoot = boolPtr(false)
+	} else {
+		sc.RunAsNonRoot = boolPtr(true)
+	}
+	return sc
+}
+
+func boolPtr(b bool) *bool { return &b }
 
 func (k *Kubernetes) waitForPod(ctx context.Context, name string) (string, error) {
 	var addr string
@@ -413,7 +530,7 @@ func (k *Kubernetes) instanceFromPod(pod *corev1.Pod) Instance {
 	if pod.Status.PodIP != "" {
 		addr = fmt.Sprintf("%s:%d", pod.Status.PodIP, 22)
 	}
-	return k.instance(addr, pod.Name, pod.Annotations)
+	return k.instance(addr, pod.Name, string(pod.UID), pod.Annotations)
 }
 
 // ---------------------------------------------------------------- sandbox claims
@@ -458,21 +575,56 @@ func (k *Kubernetes) createClaim(ctx context.Context) (Instance, error) {
 		_ = k.Release(ctx, Instance{ID: created.GetName()})
 		return Instance{}, err
 	}
-	return k.instance(addr, created.GetName(), nil), nil
+	return k.instance(addr, created.GetName(), string(created.GetUID()), created.GetAnnotations()), nil
 }
 
-// probeAddr is how readiness is judged: a TCP connect, not a DNS lookup.
+// probeAddr is how readiness is judged: the port answers *and* the peer speaks SSH.
 //
 // Name resolution is not trustworthy here — on a network with fake-IP DNS, any nonsense name answers
-// with a synthetic address — so the only honest question is "can I open the port". Tests replace this
-// variable to simulate lag without a cluster.
-var probeAddr = func(ctx context.Context, addr string) error {
+// with a synthetic address — so the question starts with "can I open the port". But a TCP connect is
+// not enough either: a half-started sshd, a Service pointing at the wrong port, or a proxy that accepts
+// every connection passes a bare dial and then breaks every session with "connection reset". Reading
+// the version banner is the cheapest observation that distinguishes "listening" from "serving SSH".
+// Tests replace this variable to simulate lag without a cluster.
+var probeAddr = sshBannerProbe
+
+// bannerTimeout bounds the read after the TCP connect. sshd sends its banner before the client says
+// anything, so a peer that has not spoken within this window is not going to.
+const bannerTimeout = 2 * time.Second
+
+// sshBannerProbe connects, reads the first protocol line, and requires it to announce SSH 2.0.
+func sshBannerProbe(ctx context.Context, addr string) error {
 	d := net.Dialer{Timeout: 2 * time.Second}
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
-	return conn.Close()
+	defer conn.Close()
+
+	deadline := time.Now().Add(bannerTimeout)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
+		deadline = dl
+	}
+	_ = conn.SetReadDeadline(deadline)
+
+	// RFC 4253 allows a handful of lines before the version string; nothing in this deployment emits
+	// them, and accepting arbitrary leading lines would let a chatty non-SSH peer pass the probe. The
+	// first line must therefore be the banner.
+	line, err := bufio.NewReader(io.LimitReader(conn, 255)).ReadString('\n')
+	if err != nil {
+		// EOF, a read deadline or the 255-byte cap before the CRLF means the peer stopped
+		// mid-banner. Accepting a truncated line would report ready for exactly the half-started
+		// process this probe exists to catch: a peer that manages "SSH-2.0-" and then hangs or dies
+		// looks like a healthy one until the first real session fails.
+		metrics.IncHandshakeFail()
+		return fmt.Errorf("%s: tcp connected but no complete ssh banner: %w", addr, err)
+	}
+	line = strings.TrimRight(line, "\r\n")
+	if !strings.HasPrefix(line, "SSH-2.") {
+		metrics.IncHandshakeFail()
+		return fmt.Errorf("%s: tcp connected but banner is not SSH-2: %q", addr, line)
+	}
+	return nil
 }
 
 func (k *Kubernetes) waitForClaim(ctx context.Context, name string) (string, error) {
@@ -542,9 +694,10 @@ func (k *Kubernetes) claimKind() string { return k.cfg.Provider.ObjectKind }
 
 // ---------------------------------------------------------------- helpers
 
-func (k *Kubernetes) instance(addr, id string, annotations map[string]string) Instance {
+func (k *Kubernetes) instance(addr, id, uid string, annotations map[string]string) Instance {
 	return Instance{
 		ID:            id,
+		UID:           uid,
 		Addr:          addr,
 		User:          k.cfg.SSHUser,
 		PrivateKey:    k.cfg.SSHPrivateKey,

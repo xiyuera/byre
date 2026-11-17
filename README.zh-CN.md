@@ -156,13 +156,15 @@ ssh -p 2222 -i ~/.ssh/id_ed25519 \
 
 ```sh
 curl -s localhost:8099/healthz                  # ok dev (none, unknown)
-curl -s localhost:8099/metrics | grep '^byre_'  # byre_up 1, byre_leases_idle 1, byre_pool_warm{backend="lab"} 0
+curl -s localhost:8099/readyz                    # ready: pool target map[l:2] warm map[l:2]
+curl -s localhost:8099/metrics | grep '^byre_'  # byre_up 1, byre_leases_idle 1, byre_pool_target{backend="lab"} 0
 ```
 
-没有 `/readyz`。`/healthz` 回答的是"进程活着"，从来不是"我能发实例"。健康端口 `:8099` 是编进二进制的、
-不可配：同一台机器上的第二个网关会先绑上 SSH 监听，然后打出
-`health endpoint failed: listen tcp :8099: bind: address already in use` 并退出。另外 `pool_size` 对
-`endpoints` 无效，因为没有东西可以预热。
+`/healthz` 回答的是"进程活着"。另一个问题——"这个进程现在能不能发实例"——由 `/readyz` 回答：配置了热池却
+没预热成功时它一直是 503（ADR-0011）。另外 `pool_size` 对 `endpoints` 无效，因为没有东西可以预热。
+
+健康端口 `:8099` 是编进二进制的、不可配：同一台机器上的第二个网关会先绑上 SSH 监听，然后打出
+`health endpoint failed: listen tcp :8099: bind: address already in use` 并退出。
 
 ## 配置：后端的 sshd 从哪来
 
@@ -246,10 +248,11 @@ curl -s localhost:8099/metrics | grep '^byre_'  # byre_up 1, byre_leases_idle 1,
 ```
 
 `claims` 是一种 API*形状*——创建对象、等 status 里出现地址、结束时删掉——不是内置的某个 CRD，所以 GVK
-是配置项。就绪判据是**对 22 端口的 TCP 连接**：按 `endpoint_field` 给的顺序，再退到
-`status.sandbox.podIPs`，第一个能连上的胜出；光有 status 字段不够，因为 Service 的 DNS 记录比控制器晚
-几秒（ADR-0005）。本项目当初对着的部署用的是 `extensions.agents.x-k8s.io` 的 `SandboxClaim` 加热池，
-那只是众多 claim API 中的一个，在这里也只是配置。
+是配置项。就绪判据是**完整读到一行 SSH banner**：按 `endpoint_field` 给的顺序，再退到
+`status.sandbox.podIPs`，第一个回出 `SSH-2.` 开头的行的胜出。端口能连上不算——socket 激活的 sshd 会先接
+下连接、后才会说话；光有 status 字段也不算，因为 Service 的 DNS 记录比控制器晚几秒（ADR-0005）。本项目
+当初对着的部署用的是 `extensions.agents.x-k8s.io` 的 `SandboxClaim` 加热池，那只是众多 claim API 中的
+一个，在这里也只是配置。
 
 ### command——你自己供给
 
@@ -346,8 +349,8 @@ namespace，kustomize 的 `namespace:` 又会一次性改写所有对象——�
   退出。基于 `kind` 的 CI 还是 roadmap 项。
 - **`endpoints` 活不过重启。** 这个 driver 把归属放在内存里，所以重启后的网关重新轮转，重连的客户端落到
   下一个端点上——这是实测，不是推断。`claims` 与 `workloads` 能活下来：身份被写在对象上。
-- **`pool_size: 0` 停不掉实例创建。** `ApplyDefaults` 把显式的 0 当作没写，同样地，显式的 `grace: 0s`
-  会被替换成 60s。今天要停就把 Deployment 缩到 0。
+- **`grace: 0s` 不等于「不要宽限」。** `ApplyDefaults` 会把显式的 0 换成 60s，这一条仍然没有开关。
+  而 `pool_size: 0` 现在就是字面意思：不保留热容量。
 - **v1 不做：** 多副本一致性、动态后端负载均衡、实例内状态持久化、多租户、UI。任何某个产品特有的东西都属于
   集成示例。
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"byre/internal/backend"
+	"byre/internal/metrics"
 )
 
 // Pooler is implemented by backends that can create an instance *before* an identity asks for it.
@@ -27,6 +28,12 @@ type pool struct {
 	warm []backend.Instance
 	// inflight counts creations in progress, so refills do not overshoot the target size.
 	inflight int
+
+	// The outcome of the most recent fill, kept so /readyz can answer "is this gateway able to
+	// provision at all" instead of "is the process alive".
+	lastAttempt time.Time
+	lastSuccess time.Time
+	lastErr     error
 }
 
 // SetPool enables warm capacity for a backend. size == 0 disables it.
@@ -53,7 +60,7 @@ func (m *Manager) Warm(ctx context.Context) error {
 
 	var firstErr error
 	for _, p := range pools {
-		if err := p.fill(ctx, m.logger); err != nil && firstErr == nil {
+		if err := p.fill(ctx, m.Logger()); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -61,6 +68,10 @@ func (m *Manager) Warm(ctx context.Context) error {
 }
 
 // RunWarmer keeps pools full until ctx is done.
+//
+// A failed fill is logged every tick, not once at startup: a pool that cannot provision is the failure
+// that used to be invisible (process healthy, /healthz 200, pool empty), and one line at boot followed
+// by 48 minutes of silence reads exactly like a working gateway.
 func (m *Manager) RunWarmer(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = 15 * time.Second
@@ -72,7 +83,13 @@ func (m *Manager) RunWarmer(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			_ = m.Warm(ctx)
+			if err := m.Warm(ctx); err != nil {
+				log := m.Logger()
+				if log != nil {
+					log.Warn("pool warm failed", "error", err,
+						"note", "warm capacity is short; every acquire pays the cold start")
+				}
+			}
 		}
 	}
 }
@@ -86,8 +103,10 @@ func (m *Manager) refill(backendName string) {
 		return
 	}
 	go func() {
-		if err := p.fill(context.Background(), m.logger); err != nil && m.logger != nil {
-			m.logger.Warn("pool refill failed", "backend", backendName, "error", err)
+		if err := p.fill(context.Background(), m.Logger()); err != nil {
+			if log := m.Logger(); log != nil {
+				log.Warn("pool refill failed", "backend", backendName, "error", err)
+			}
 		}
 	}()
 }
@@ -113,11 +132,14 @@ func (p *pool) fill(ctx context.Context, log *slog.Logger) error {
 		return nil
 	}
 
+	start := time.Now()
 	var created []backend.Instance
 	var firstErr error
+	var failures int64
 	for i := 0; i < need; i++ {
 		in, err := p.driver.Create(ctx)
 		if err != nil {
+			failures++
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -125,16 +147,27 @@ func (p *pool) fill(ctx context.Context, log *slog.Logger) error {
 		}
 		created = append(created, in)
 	}
+	elapsed := time.Since(start)
+	metrics.ObserveFill(elapsed)
+	if failures > 0 {
+		metrics.IncPoolFillErrors(failures)
+	}
 
 	p.mu.Lock()
 	p.inflight -= need
 	p.warm = append(p.warm, created...)
 	size := p.size
 	warm := len(p.warm)
+	p.lastAttempt = time.Now()
+	if len(created) > 0 {
+		p.lastSuccess = p.lastAttempt
+	}
+	p.lastErr = firstErr
 	p.mu.Unlock()
 
 	if log != nil {
-		log.Debug("pool filled", "created", len(created), "warm", warm, "size", size)
+		log.Debug("pool filled", "created", len(created), "failed", failures,
+			"warm", warm, "size", size, "elapsed_ms", elapsed.Milliseconds())
 	}
 	return firstErr
 }
@@ -150,4 +183,73 @@ func (m *Manager) WarmSize(backendName string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return len(p.warm)
+}
+
+// Logger returns the manager's logger; nil until SetLogger is called.
+func (m *Manager) Logger() *slog.Logger {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.logger
+}
+
+// FillState is the aggregate view of all pools: what they are trying to hold, what they hold, and
+// whether the last attempt could create anything.
+type FillState struct {
+	Targets     map[string]int
+	Warm        map[string]int
+	Inflight    map[string]int
+	LastAttempt time.Time
+	LastSuccess time.Time
+	LastErr     error
+}
+
+// CanProvision answers the readiness question: a gateway whose pool target is zero needs nothing, one
+// that holds warm capacity can serve, and one whose most recent fill produced at least one instance is
+// able to provision even if the target is temporarily short.
+//
+// It deliberately does not ask "is the pool full": a pool one instance short is a latency problem, while
+// a pool that cannot create anything is an outage, and readiness must not page for the first.
+func (fs FillState) CanProvision() bool {
+	total := 0
+	for _, t := range fs.Targets {
+		total += t
+	}
+	if total == 0 {
+		return true
+	}
+	for _, w := range fs.Warm {
+		if w > 0 {
+			return true
+		}
+	}
+	return !fs.LastSuccess.IsZero() && !fs.LastSuccess.Before(fs.LastAttempt)
+}
+
+// FillState snapshots every pool.
+func (m *Manager) FillState() FillState {
+	m.mu.Lock()
+	pools := make(map[string]*pool, len(m.pools))
+	for name, p := range m.pools {
+		pools[name] = p
+	}
+	m.mu.Unlock()
+
+	fs := FillState{
+		Targets:  make(map[string]int, len(pools)),
+		Warm:     make(map[string]int, len(pools)),
+		Inflight: make(map[string]int, len(pools)),
+	}
+	for name, p := range pools {
+		p.mu.Lock()
+		fs.Targets[name] = p.size
+		fs.Warm[name] = len(p.warm)
+		fs.Inflight[name] = p.inflight
+		if p.lastAttempt.After(fs.LastAttempt) {
+			fs.LastAttempt = p.lastAttempt
+			fs.LastSuccess = p.lastSuccess
+			fs.LastErr = p.lastErr
+		}
+		p.mu.Unlock()
+	}
+	return fs
 }

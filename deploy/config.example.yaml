@@ -54,6 +54,9 @@ backends:
   #     image: "<registry>/<image>:<tag>"
   #     start_command: ["/usr/sbin/sshd", "-D", "-e"]   # optional override of the entrypoint
   #     ready_timeout: 180s
+  #     # Instances run as non-root with all capabilities dropped and RuntimeDefault seccomp unless this
+  #     # is true. Set it only for an image whose entrypoint genuinely cannot run unprivileged.
+  #     run_as_root: false
   #   ssh:
   #     user: "<remote-user>"
   #     private_key: /etc/byre/keys/id_key

@@ -24,7 +24,7 @@ curl -s :8099/metrics | grep '^byre_'                  # the only counters that 
 | `REMOTE HOST IDENTIFICATION HAS CHANGED` | the gateway's host key changed | see [host key](#the-gateways-host-key-changed) |
 | connections hang for `ready_timeout` then close | the backend cannot produce a ready instance | grep `pool refill failed` and `no instance for identity` |
 | `/healthz` green but every session gets 403 | missing cross-namespace grant | `auth can-i patch … --as system:serviceaccount:…` |
-| probe on `/readyz` returns 404 | there is no `/readyz` | point the probe at `/healthz` |
+| `/readyz` stays 503 | the gateway cannot provision: pool empty and the last fill failed | grep `pool warm failed` and `byre_pool_fill_errors_total`; fix the create path before blaming the probe |
 
 ## The client cannot authenticate
 
@@ -108,9 +108,9 @@ curl -s :8099/metrics | grep -E '^byre_leases_(active|idle)'
 
 If `byre_leases_idle` stays above zero well past `ttl` + `grace` + 30 s:
 
-- an explicit `grace: 0s` does not mean "no grace": `ApplyDefaults` replaces a zero with 60 s, exactly as
-  it does for `pool_size: 0`. The logs print the effective values at startup — read the
-  `configuration accepted` line before assuming yours took effect;
+- an explicit `grace: 0s` does not mean "no grace": `ApplyDefaults` replaces a zero with 60 s, and nothing
+  turns that off. (`pool_size: 0` is different since v0.1.3: it is honoured as written.) The logs print the
+  effective values at startup — read the `configuration accepted` line before assuming yours took effect;
 - a channel can be held open by a client that is not sending anything; `byre_leases_active` says whether
   something is still attached;
 - for `endpoints`, a lease that was never released is invisible after a restart, because ownership lived

@@ -2,12 +2,14 @@ package lease
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"byre/internal/backend"
+	"byre/internal/metrics"
 )
 
 type fakeBackend struct {
@@ -276,5 +278,161 @@ func TestAdoptReleasesAnonymousInstancesWhenTheDriverSaysTheyAreStale(t *testing
 	}
 	if e := m.Lookup("fp-abc"); e == nil || e.Instance.ID != "vm-live" {
 		t.Fatalf("annotated instance was not adopted: %+v", e)
+	}
+}
+
+// flakyRelease fails the first failures release attempts, then hands over to the fake.
+type flakyRelease struct {
+	*fakeBackend
+	failures int
+	attempts int
+}
+
+func (f *flakyRelease) Release(ctx context.Context, in backend.Instance) error {
+	f.attempts++
+	if f.attempts <= f.failures {
+		return errors.New("api server unavailable")
+	}
+	return f.fakeBackend.Release(ctx, in)
+}
+
+func newFlakyManager(t *testing.T, failures int) (*Manager, *flakyRelease, *fakeBackend, *clock) {
+	t.Helper()
+	fb := &fakeBackend{name: "lab"}
+	flaky := &flakyRelease{fakeBackend: fb, failures: failures}
+	m, err := New(360*time.Second, 60*time.Second, map[string]backend.Backend{"lab": flaky})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	c := &clock{t: time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)}
+	m.SetClock(c.now)
+	return m, flaky, fb, c
+}
+
+// TestReapRetriesFailedRelease: a delete can fail transiently, and the previous version did not retry,
+// did not log and did not count — the instance simply stayed behind while a replacement was created.
+func TestReapRetriesFailedRelease(t *testing.T) {
+	m, flaky, fb, c := newFlakyManager(t, 2)
+	ctx := context.Background()
+
+	if _, err := m.Acquire(ctx, "id-a", "lab"); err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	m.ReleaseConn("id-a")
+	c.advance(420 * time.Second)
+
+	if _, err := m.Reap(ctx); err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+	if flaky.attempts != 3 {
+		t.Fatalf("release attempts = %d, want 3 (two failures then success)", flaky.attempts)
+	}
+	if len(fb.released) != 1 || fb.released[0] != "lab-1" {
+		t.Fatalf("released = %v, want [lab-1]", fb.released)
+	}
+}
+
+// TestReapReportsPermanentReleaseFailure: when every attempt fails the error must surface and be counted,
+// because that is the only trace an orphan instance leaves.
+func TestReapReportsPermanentReleaseFailure(t *testing.T) {
+	m, flaky, fb, c := newFlakyManager(t, 99)
+	ctx := context.Background()
+
+	if _, err := m.Acquire(ctx, "id-a", "lab"); err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	m.ReleaseConn("id-a")
+	c.advance(420 * time.Second)
+
+	before := metrics.ReleaseErrorsTotal()
+	n, err := m.Reap(ctx)
+	if n != 1 {
+		t.Fatalf("reaped = %d, want 1", n)
+	}
+	if err == nil {
+		t.Fatal("reap returned no error although every release attempt failed")
+	}
+	if flaky.attempts != releaseAttempts {
+		t.Fatalf("release attempts = %d, want %d", flaky.attempts, releaseAttempts)
+	}
+	if got := metrics.ReleaseErrorsTotal() - before; got != int64(releaseAttempts) {
+		t.Fatalf("release_errors_total delta = %d, want %d", got, releaseAttempts)
+	}
+	if len(fb.released) != 0 {
+		t.Fatalf("a failing release must not be followed by a refill path that reports success: %v", fb.released)
+	}
+}
+
+// TestAdoptedPendingIsReportedSeparately: an adopted lease has refs == 0, so leases_active alone can never
+// show it. The post-restart check in docs/operations.md compares active + adopted_pending.
+func TestAdoptedPendingIsReportedSeparately(t *testing.T) {
+	fb := &fakeBackend{name: "lab"}
+	fb.list = []backend.Instance{{
+		ID: "lab-existing", Addr: "127.0.0.1:22", User: "sandbox",
+		PrivateKey: "/keys/pool", HostKeyPolicy: "accept-new",
+		Annotations: map[string]string{backend.LabelIdentity: "id-adopted"},
+	}}
+	m, err := New(360*time.Second, 60*time.Second, map[string]backend.Backend{"lab": fb})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	c := &clock{t: time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)}
+	m.SetClock(c.now)
+
+	if n, err := m.Adopt(context.Background()); err != nil || n != 1 {
+		t.Fatalf("adopt: n=%d err=%v", n, err)
+	}
+	active, idle := m.Stats()
+	if active != 0 || idle != 1 {
+		t.Fatalf("stats = (%d active, %d idle), want (0, 1) for an adopted lease", active, idle)
+	}
+	if got := m.AdoptedPending(); got != 1 {
+		t.Fatalf("adopted_pending = %d, want 1", got)
+	}
+	// Once the client reconnects it is an ordinary active lease.
+	if _, err := m.Acquire(context.Background(), "id-adopted", "lab"); err != nil {
+		t.Fatalf("reacquire: %v", err)
+	}
+	if got := m.AdoptedPending(); got != 0 {
+		t.Fatalf("adopted_pending = %d after a connection, want 0", got)
+	}
+}
+
+// TestFillStateDecidesReadiness: /readyz must be red only when the gateway cannot provision at all.
+func TestFillStateDecidesReadiness(t *testing.T) {
+	fb := &fakeBackend{name: "lab"}
+	m, err := New(360*time.Second, 60*time.Second, map[string]backend.Backend{"lab": fb})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if !m.FillState().CanProvision() {
+		t.Fatal("a gateway with no pool configured must be ready: nothing to warm")
+	}
+
+	m.SetPool("lab", 2, fb)
+	if m.FillState().CanProvision() {
+		t.Fatal("a pool that has never been filled must not report ready")
+	}
+
+	// A backend that cannot create anything must stay red, and say so in the counter.
+	fb.failWith = errors.New("quota exceeded")
+	before := metrics.PoolFillErrorsTotal()
+	if err := m.Warm(context.Background()); err == nil {
+		t.Fatal("warm reported success while every create failed")
+	}
+	if got := metrics.PoolFillErrorsTotal() - before; got != 2 {
+		t.Fatalf("pool_fill_errors_total delta = %d, want 2", got)
+	}
+	if m.FillState().CanProvision() {
+		t.Fatal("an empty pool that cannot create must not report ready")
+	}
+
+	// Recovery: the very next successful fill makes the gateway ready again.
+	fb.failWith = nil
+	if err := m.Warm(context.Background()); err != nil {
+		t.Fatalf("warm after recovery: %v", err)
+	}
+	if !m.FillState().CanProvision() {
+		t.Fatal("a warm pool must report ready")
 	}
 }
