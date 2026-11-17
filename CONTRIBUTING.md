@@ -27,7 +27,8 @@ go test -race ./...
    fields — unknown values must keep failing.
 3. Add unit tests with a fake API client (no live cluster in unit tests).
 4. Add an `examples/<driver>/` directory with a minimal, placeholder-filled manifest.
-5. Document it in `docs/architecture.md` §5 and, if it needs new tunables, in `docs/operations.md`.
+5. Document it in `docs/handbook/architecture.md` §5 and, if it needs new tunables, in
+   `docs/handbook/backends.md` and `docs/handbook/operations.md`.
 
 ## Changing the lease semantics
 

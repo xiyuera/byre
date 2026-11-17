@@ -1,5 +1,9 @@
 # Operations
 
+This is the runbook: it assumes you have read the README's Quick start and now want to run byre for real.
+Field-level detail for each backend is in [backends.md](backends.md), and the failure-by-failure guide is
+[troubleshooting.md](troubleshooting.md).
+
 ## Deploy
 
 ```sh
@@ -101,13 +105,27 @@ the cluster would accept the objects is a separate question — that one is answ
 
 ## Health
 
+Two paths exist on `:8099`, and only two:
+
 | endpoint | meaning |
 |---|---|
-| `GET :8099/healthz` | process alive, returns version stamp |
-| `GET :8099/metrics` | Prometheus text (M3: lease/instance counters) |
+| `GET :8099/healthz` | process alive; prints `ok <version>` from the binary |
+| `GET :8099/metrics` | Prometheus text, five series (below) |
 
-Suggested probes: liveness `/healthz` with `periodSeconds: 10`, readiness `/healthz` with
-`failureThreshold: 3`.
+**There is no `/readyz`.** A readiness probe pointed at `/readyz` gets a 404 and marks the pod unhealthy
+forever; point it at `/healthz`. Use `/healthz` for liveness (`periodSeconds: 10`) and for readiness
+(`failureThreshold: 3`), while remembering what it does *not* say: a gateway that cannot create instances
+is still green — see [the grant that is not in the overlay](#the-grant-that-is-not-in-the-overlay).
+
+The complete metric list:
+
+| metric | type | meaning |
+|---|---|---|
+| `byre_up` | gauge | always 1 while the process serves |
+| `byre_leases_active` | gauge | leases with at least one open connection |
+| `byre_leases_idle` | gauge | leases without connections, waiting for the reaper |
+| `byre_leases_adopted` | counter | leases recovered from existing instances at startup |
+| `byre_pool_warm{backend="…"}` | gauge | warm instances per backend; 0 for drivers without a pool (`endpoints`, `command`) |
 
 ## Tunables
 
@@ -153,12 +171,31 @@ reconstruct a key.
 
 1. The new process adopts live leases first and destroys unannotated (stale pool) objects second, then
    refills the pool. Expect `byre_leases_adopted` to be non-zero when clients were connected.
-2. A client that reconnects during this window keeps its instance. A client whose lease had already
+2. **Only `claims` and `workloads` survive a restart.** Their instances carry the identity as an
+   annotation, so the new process can read it back. An `endpoints` backend keeps ownership in memory
+   only: after a restart every endpoint is up for grabs and the next connection is round-robined as if
+   nothing had happened. Nothing breaks — but a client that held a tree on one host is now on another.
+3. A client that reconnects during this window keeps its instance. A client whose lease had already
    expired gets a new one — that is the documented contract, not a regression.
-3. Watch `byre_pool_warm{backend=...}` return to `pool_size`; a pool that stays at 0 means `Create`
+4. Watch `byre_pool_warm{backend=...}` return to `pool_size`; a pool that stays at 0 means `Create`
    is failing (see the tunables table).
+5. **Every SSH connection is cut when the process exits.** There is no draining and no connection
+   hand-off: a rollout ends every live session, including a `ssh -L` tunnel. Clients that reconnect
+   inside `ttl` + `grace` land on the same instance; long-running commands on the client's side of the
+   connection do not survive it. Roll in a window where that is acceptable, or keep the process alive
+   and swap configuration only where the binary allows it.
 
-## Running the acceptance checks
+## Common symptoms
+
+| symptom | likely cause | action |
+|---|---|---|
+| client's files vanish between commands | `lease.ttl` shorter than the client's idle timeout, or the client opens connections the gateway treats as new identities | raise `ttl`; check that the client uses one key everywhere |
+| many instances, one client | client rotates keys, or authenticates with several keys | alias the fingerprints to the same backend; prefer one key per identity |
+| instance never reclaimed | `grace` very large, or a channel leaked (session kept open) | inspect `byre_leases_idle`; kill the lease manually via the backend |
+| `unable to authenticate` after a key change | new fingerprint not in `identities` | add it (append), reload |
+| startup exits with a long error list | configuration violations | fix every listed item; do not "fix one and retry" |
+
+More symptoms, with the log lines that identify each one: [troubleshooting.md](troubleshooting.md).
 
 ```sh
 BYRE_CFG=config.yaml BYRE_KEY=path/to/client_key test/e2e/run.sh
