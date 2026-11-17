@@ -245,6 +245,54 @@ func (k *Kubernetes) Release(ctx context.Context, in Instance) error {
 	return nil
 }
 
+// Alive implements backend.Liveness with one single-object read.
+//
+// This is the check the gateway was missing. A deleted pod takes its address with it, but nothing tells
+// the lease table: the entry stays, and every reconnect from that identity is dialled at an address
+// where no process listens — the client sees its connection closed for as long as ttl+grace (seven
+// minutes by default). Nothing on the object can answer the question either, because a deleted object
+// is not returned by List at all. Only a positive query answers "is it still there", and a GET on the
+// name is the cheapest one that does.
+//
+// Three outcomes, and the caller treats them differently:
+//   - the object exists: nil;
+//   - NotFound, or a deletion in progress: ErrInstanceGone, wrapped with the reason;
+//   - anything else (apiserver unreachable, forbidden): a plain error, meaning "unknown".
+//
+// A terminating object counts as gone. Its address is on its way out, and a client reconnected to an
+// instance in that state is re-syncing its work onto something that is about to stop.
+func (k *Kubernetes) Alive(ctx context.Context, in Instance) error {
+	switch k.cfg.Provider.Kind {
+	case KindWorkloads:
+		pod, err := k.client.CoreV1().Pods(k.cfg.Namespace).Get(ctx, in.ID, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%w: pod %s", ErrInstanceGone, in.ID)
+		}
+		if err != nil {
+			return fmt.Errorf("get pod %s: %w", in.ID, err)
+		}
+		if pod.DeletionTimestamp != nil {
+			return fmt.Errorf("%w: pod %s is terminating (deleted at %s)",
+				ErrInstanceGone, in.ID, pod.DeletionTimestamp.UTC().Format(time.RFC3339))
+		}
+		return nil
+	case KindClaims:
+		obj, err := k.dyn.Resource(k.gvr()).Namespace(k.cfg.Namespace).Get(ctx, in.ID, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%w: %s %s", ErrInstanceGone, k.claimKind(), in.ID)
+		}
+		if err != nil {
+			return fmt.Errorf("get %s %s: %w", k.cfg.Provider.Resource, in.ID, err)
+		}
+		if obj.GetDeletionTimestamp() != nil {
+			return fmt.Errorf("%w: %s %s is terminating", ErrInstanceGone, k.claimKind(), in.ID)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported provider kind %q", k.cfg.Provider.Kind)
+	}
+}
+
 // List returns instances this driver created (by label), so a restarted process can adopt them.
 func (k *Kubernetes) List(ctx context.Context) ([]Instance, error) {
 	switch k.cfg.Provider.Kind {

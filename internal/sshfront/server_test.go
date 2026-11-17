@@ -166,6 +166,16 @@ func startGateway(t *testing.T) *harness {
 // driver == nil means "static backend over endpoint"; endpoint == "" means "a fresh fake target".
 func startGatewayWith(t *testing.T, endpoint string, driver backend.Backend) *harness {
 	t.Helper()
+	return startGatewayDial(t, endpoint, driver, nil)
+}
+
+// startGatewayDial is startGatewayWith with the dialler under the test's control.
+//
+// The dial path is where a disappeared instance is detected, so a test about it cannot rely on "a port
+// nothing listens on": it has to decide, per instance, whether the dial succeeds and what the failure
+// looks like.
+func startGatewayDial(t *testing.T, endpoint string, driver backend.Backend, dial DialFunc) *harness {
+	t.Helper()
 
 	clientSigner, _ := newKeyPair(t)
 	_, poolPriv := newKeyPair(t)
@@ -206,8 +216,9 @@ func startGatewayWith(t *testing.T, endpoint string, driver backend.Backend) *ha
 		Identities: map[string]Identity{
 			fp: {Fingerprint: fp, Backend: "lab", Aliases: []string{"test"}},
 		},
-		Leases: mgr,
-		Logger: logger,
+		Leases:     mgr,
+		Logger:     logger,
+		DialTarget: dial,
 	})
 	if err != nil {
 		t.Fatalf("front end: %v", err)

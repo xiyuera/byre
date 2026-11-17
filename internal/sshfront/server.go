@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -60,6 +61,11 @@ type Server struct {
 	hostKey ssh.Signer
 	log     *slog.Logger
 	dial    DialFunc
+
+	// unreachable counts dial failures against instances that still exist. It is kept apart from the
+	// manager's dead-instance counter because the remedy differs: one is a stale binding, the other is an
+	// instance-level fault.
+	unreachable atomic.Int64
 
 	mu     sync.Mutex
 	ln     net.Listener
@@ -201,21 +207,16 @@ func (s *Server) handleConn(ctx context.Context, raw net.Conn) {
 	backendName := conn.Permissions.Extensions[ExtBackend]
 	short := ShortIdentity(fp)
 
-	entry, err := s.cfg.Leases.Acquire(ctx, fp, backendName)
+	// leaseAndDial releases its own connection reference on failure; on success this connection owns it.
+	entry, target, err := s.leaseAndDial(ctx, fp, backendName, short)
+	if target != nil {
+		defer target.Close()
+	}
 	if err != nil {
-		s.log.Warn("no instance for identity", "identity", short, "backend", backendName, "error", err)
 		_ = conn.Close()
 		return
 	}
 	defer s.cfg.Leases.ReleaseConn(fp)
-
-	target, err := s.dial(ctx, entry.Instance)
-	if err != nil {
-		s.log.Warn("cannot reach instance", "identity", short, "instance", entry.Instance.ID, "error", err)
-		_ = conn.Close()
-		return
-	}
-	defer target.Close()
 
 	s.log.Info("session open",
 		"identity", short,
@@ -235,6 +236,76 @@ func (s *Server) handleConn(ctx context.Context, raw net.Conn) {
 
 	s.log.Info("session closed", "identity", short, "instance", entry.Instance.ID)
 }
+
+// leaseAndDial resolves an identity to a connected target, and classifies a failed dial instead of only
+// logging it.
+//
+// A dial error is ambiguous: the object may be gone (a deleted pod, whose address nothing answers on any
+// more) or present but not answering (a wedged sshd, a refused port). Before this classification the front
+// end closed the client either way and left the lease in place, so a deleted instance kept receiving every
+// reconnect from that identity until the reaper ran — ttl+grace, seven minutes by default. From the
+// client's side that looked like a host that hung up, because that is exactly what it was talking to.
+//
+// The backend answers the question, not the error string: only a definitive "gone" replaces the instance.
+// When the object still exists the failure belongs to the instance, the lease is kept, and the attempt is
+// counted as unreachable.
+//
+// On every failure path this function drops the connection reference it took, so a client that hangs up
+// after a failed dial leaves an idle lease rather than a stuck ref that no reaper can reclaim.
+func (s *Server) leaseAndDial(ctx context.Context, fp, backendName, short string) (lease.Entry, *ssh.Client, error) {
+	entry, err := s.cfg.Leases.Acquire(ctx, fp, backendName)
+	if err != nil {
+		s.log.Warn("no instance for identity", "identity", short, "backend", backendName, "error", err)
+		return lease.Entry{}, nil, err
+	}
+
+	target, err := s.dial(ctx, entry.Instance)
+	if err == nil {
+		return entry, target, nil
+	}
+	s.log.Warn("cannot reach instance", "identity", short, "instance", entry.Instance.ID, "error", err)
+
+	dropped, probeErr := s.cfg.Leases.DiscardIfGone(ctx, fp, entry.Instance)
+	if probeErr != nil {
+		s.log.Warn("instance liveness unknown after a dial failure; keeping the lease",
+			"identity", short, "instance", entry.Instance.ID, "error", probeErr)
+	}
+	if !dropped {
+		// The instance exists and did not answer: an instance-level fault. Keeping the lease means the next
+		// attempt is still aimed at the client's own instance, not at a stranger's — but this connection is
+		// over, so its reference goes with it and the reaper may reclaim the lease.
+		s.unreachable.Add(1)
+		s.cfg.Leases.ReleaseConn(fp)
+		return lease.Entry{}, nil, err
+	}
+
+	// The instance is gone. Provision a replacement in the same connection attempt: the client has not
+	// seen an error yet, so if the replacement is reachable its session simply continues on a new instance,
+	// which is the whole difference between "the gateway moved me" and "the host hung up". One retry, not a
+	// loop — a second failure is a different problem, and an unbounded retry inside the gateway would turn
+	// one dead instance into a stream of pods.
+	fresh, acquireErr := s.cfg.Leases.Acquire(ctx, fp, backendName)
+	if acquireErr != nil {
+		s.log.Warn("no replacement instance after a dead lease",
+			"identity", short, "backend", backendName, "error", acquireErr)
+		return lease.Entry{}, nil, acquireErr
+	}
+	replacement, dialErr := s.dial(ctx, fresh.Instance)
+	if dialErr != nil {
+		s.log.Warn("cannot reach the replacement instance",
+			"identity", short, "instance", fresh.Instance.ID, "error", dialErr)
+		s.unreachable.Add(1)
+		s.cfg.Leases.ReleaseConn(fp)
+		return fresh, nil, dialErr
+	}
+	s.log.Info("lease replaced after the instance disappeared",
+		"identity", short, "backend", backendName,
+		"old_instance", entry.Instance.ID, "new_instance", fresh.Instance.ID)
+	return fresh, replacement, nil
+}
+
+// UnreachableTotal reports dial failures against instances that still exist.
+func (s *Server) UnreachableTotal() int64 { return s.unreachable.Load() }
 
 func (s *Server) handleGlobalRequests(conn *ssh.ServerConn, reqs <-chan *ssh.Request, target *ssh.Client, listeners *listenerSet) {
 	for req := range reqs {
