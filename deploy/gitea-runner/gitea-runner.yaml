@@ -1,8 +1,40 @@
-# act_runner in job-pods mode: one pod per job, no Docker daemon, no privileged container.
+# Gitea runner in job-pods mode: one pod per job, no Docker daemon, no privileged container.
 #
 # The runner lives beside the gateway (single-namespace discipline). Job pods are created in this same
 # namespace with the runner's ServiceAccount, which is why the Role below is narrow and local: pods,
-# pods/exec, pods/log, secrets. Nothing cluster-wide, no kubeconfig beyond the pod's own token.
+# pods/exec, pods/log, secrets. Nothing cluster-wide beyond the pod's own token.
+---
+# Where job pods may land and what they may consume. This file is only read because the Deployment sets
+# CONFIG_FILE: the image's entrypoint passes that value as `-c`, and without it every setting here is
+# silently ignored — pods still start, they just ignore the scheduler policy.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitea-runner-config
+  namespace: hermes
+data:
+  config.yaml: |
+    kubernetes:
+      pod_template:
+        spec:
+          # A preference, not a pin: the CI host is the machine with the cores, but when it is full the
+          # job should spill rather than queue forever. Set nodeSelector instead to make it a hard rule.
+          affinity:
+            nodeAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  preference:
+                    matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: In
+                        values: ["__NODE_NAME__"]
+          containers:
+            # The name "job" is the runner's convention: this container merges into the job container.
+            - name: job
+              resources:
+                requests: {cpu: "1", memory: 1Gi}
+                limits: {memory: 8Gi} # unbounded, a race-instrumented build can eat a whole node
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -94,11 +126,16 @@ spec:
               value: /etc/ssl/custom/ca.crt
             - name: GITEA_RUNNER_NAME
               value: k3s-jobpods
+            # Without this the entrypoint never passes `-c`, and the config.yaml above is dead weight.
+            - name: CONFIG_FILE
+              value: /data/config.yaml
+            - name: HOME
+              value: /data
+            # Label format is "<name>:<schema>://<image>"; the name is what a workflow's runs-on selects.
             # No docker:// label on purpose: this runner has no daemon. The job image comes from the
             # private registry because the nodes have no Docker Hub route.
-            # Label format is "<name>:<schema>://<image>" - the name is what a workflow's runs-on selects.
             - name: GITEA_RUNNER_LABELS
-              value: k8s-go:kubernetes://<registry>/library/golang:1.23-alpine
+              value: k8s-go:kubernetes://<registry>/library/ci-go:1.23
             - name: GITEA_RUNNER_REGISTRATION_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -109,6 +146,11 @@ spec:
               mountPath: /data
             - name: ca
               mountPath: /etc/ssl/custom
+              readOnly: true
+            # subPath, so the registration file the runner writes at /data/.runner is not shadowed.
+            - name: config
+              mountPath: /data/config.yaml
+              subPath: config.yaml
               readOnly: true
           securityContext:
             allowPrivilegeEscalation: false
@@ -124,3 +166,6 @@ spec:
         - name: ca
           configMap:
             name: gitea-instance-ca
+        - name: config
+          configMap:
+            name: gitea-runner-config
