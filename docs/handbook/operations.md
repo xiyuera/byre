@@ -14,6 +14,81 @@ kubectl apply -k deploy/
 on 2222, health on 8099), Service (ClusterIP 2222). The configuration comes from a ConfigMap; the pool
 key comes from a Secret. Both are examples — copy, then edit.
 
+## Image registries: two tiers
+
+Two registries serve this cluster and they are not interchangeable:
+
+| registry | role | auth | what belongs there |
+|---|---|---|---|
+| `<your-gitea-host>:<port>` (Gitea container registry) | release source of truth | token — `write:package` to push, `read:package` to pull | anything a workload runs: versioned tags, digests, traceable to a repository |
+| `<internal-registry-host>:<port>` (`registry:2`, self-signed CA) | scratch space | none — anonymous push is allowed | one-off experiments, manual builds, images nobody will need next month |
+
+The rule is one line: **anything that reaches production comes from the Gitea registry**. An image on
+5001 is temporary by default and may be deleted without notice. 5001 is kept rather than retired
+because a scratch registry that already speaks the v2 API is cheaper than teaching everyone
+`docker save` / `ctr import` for the occasional hand-built image.
+
+### Repository names differ
+
+Gitea requires `owner/image` — two path segments, where `owner` is a user or an organisation, and the
+image name is independent of any repository name. The migration therefore renamed single-segment
+repositories:
+
+| 5001 | Gitea |
+|---|---|
+| `byre` | `byre/byre` |
+| `gitea/runner:6.0.0` | `byre/runner:6.0.0` |
+| `hermes-sandbox-desktop:ssh-uid10000-v19` | `byre/sandbox-desktop:ssh-uid10000-v19` |
+| `library/ci-go:1.23` | `byre/ci-go:1.23` |
+| `library/golang:1.23-alpine` | `byre/golang:1.23-alpine` |
+
+Container packages are **not** linked to a repository (`repo_id = 0`): they appear under the
+organisation's packages page (`/byre/-/packages/container/<image>`), and the repository's Packages tab
+stays empty. Deleting a repository does not delete its images, and deleting an image is an
+organisation-level action.
+
+### Pulling from Gitea inside the cluster
+
+Nothing on the nodes has to change. The registry presents a Let's Encrypt certificate for
+`*.<your-domain>`, which every node already trusts (`openssl s_client -verify_return_error` returns 0 on
+all four), so `registries.yaml` needs no CA entry for it — and therefore **no `systemctl restart k3s`**.
+The existing 5001 entry stays because that registry is self-signed.
+
+This is deliberate: a credential inside `registries.yaml` is a credential on every node's disk. Pull
+credentials belong in a `kubernetes.io/dockerconfigjson` Secret instead, which is what
+`imagePullSecrets` is for:
+
+```sh
+kubectl -n <namespace> create secret docker-registry gitea-registry \
+  --docker-server=<your-gitea-host>:<port> \
+  --docker-username=<gitea user> \
+  --docker-password=<token with read:package only>
+```
+
+Then reference it from the workload (`spec.imagePullSecrets`) or, for every pod in a namespace, from
+the default ServiceAccount. Three namespaces need it: `byre-system`, `hermes` (CI runner, sandbox
+templates) and `agent-sandbox-system`.
+
+The pull token is a dedicated one: `read:package` and nothing else. A token that can push lets its
+holder replace what production runs, and there is no reason for a node to hold one.
+
+### Proving a pull actually went to Gitea
+
+A `Successfully pulled image` event is not proof: when the same digest is already present locally —
+5001 and Gitea hold byte-identical blobs — containerd downloads nothing, and the node may even report
+the old repository name in `imageID`. The honest check uses an image whose layers exist **only** in
+Gitea:
+
+```sh
+kubectl -n hermes run pullprobe --image=<your-gitea-host>:<port>/byre/pullprobe:v1 \
+  --overrides='{"spec":{"imagePullSecrets":[{"name":"gitea-registry"}],"nodeName":"<node>","restartPolicy":"Never"}}'
+kubectl -n hermes get pod pullprobe -o jsonpath='{.status.containerStatuses[0].imageID}'
+```
+
+`byre/pullprobe:v1` is a 162-byte layer kept for exactly this purpose. The container has no shell, so a
+pod that ends in `Failed` (exec `/bin/sh`) is expected; what matters is `imageID` naming
+`<your-gitea-host>:<port>` after a non-zero download. Delete the pod when done.
+
 ## Build and publish the image
 
 ```sh
