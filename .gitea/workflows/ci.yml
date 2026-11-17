@@ -58,7 +58,7 @@ jobs:
   dco:
     runs-on: k8s-go
     steps:
-      - name: Checkout (full history: DCO needs the commit range)
+      - name: Checkout, full history (DCO needs the commit range)
         run: |
           set -eu
           git init -q .
