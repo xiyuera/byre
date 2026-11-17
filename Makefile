@@ -21,7 +21,7 @@ DIST_ARCHES     ?= arm64 amd64
 CI_IMAGE        ?= unset
 CI_IMAGE_DIGEST ?= unset
 
-.PHONY: all build dist test test-race lint fmt vet tidy clean e2e check-config render image image-push help
+.PHONY: all build dist test test-race lint fmt vet tidy clean e2e check-config render image image-push image-verify help
 
 all: build
 
@@ -107,8 +107,14 @@ image:
 
 image-push: image
 	docker tag $(IMAGE) $(IMAGE_REGISTRY)/$(IMAGE)
-	docker push $(IMAGE_REGISTRY)/$(IMAGE)
-	@echo "pushed $(IMAGE_REGISTRY)/$(IMAGE)"
+	@# push, then record the digest the registry assigned — a tag in the output is not evidence
+	scripts/publish-image.sh $(IMAGE_REGISTRY)/$(IMAGE)
+	@echo "pushed $(IMAGE_REGISTRY)/$(IMAGE) — IMAGE_REF recorded in dist/images.txt"
+
+# Fails when the running pod's imageID is not the digest dist/images.txt records. The silent failure
+# this catches: a re-pushed tag with imagePullPolicy: IfNotPresent keeps the node's old layers.
+image-verify:
+	scripts/assert-image-digest.sh $(or $(IMAGES),dist/images.txt) $(or $(NAMESPACE),byre-system) $(or $(DEPLOY),byre)
 
 clean:
 	rm -rf bin dist coverage.txt

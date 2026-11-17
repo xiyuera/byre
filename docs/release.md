@@ -69,5 +69,7 @@ Gitea is the source of truth; GitHub is a public mirror.
 ## What the repository publishes
 
 Source, and for each release: two static binaries, `SHA256SUMS`, `build-info.txt`, and the changelog entry.
-Container images are published to a registry separately and referenced by digest — never by mutable tag.
+Container images are published to a registry separately and referenced by digest — never by mutable tag:
+`make image-push` records the digest the registry assigned in `dist/images.txt`, and `make image-verify`
+fails when the running pod is not that digest.
 No `go get`: the module path is deliberately bare (see README).

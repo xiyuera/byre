@@ -9,6 +9,14 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
 
 ## [Unreleased]
 
+### Added
+
+- **`make image-push` records the digest it pushed.** It goes through `scripts/publish-image.sh`, which
+  writes `dist/images.txt` (`IMAGE_REF` / `IMAGE_TAG` / `IMAGE_DIGEST` / `PUSHED_AT`) and appends
+  `IMAGE_DIGEST=` to `dist/build-info.txt`. `make image-verify` (`scripts/assert-image-digest.sh`) exits
+  non-zero when the running pod's `imageID` is not that digest — the case a tag cannot catch, because with
+  `imagePullPolicy: IfNotPresent` a re-pushed tag keeps the node's cached layers.
+
 ### Fixed
 
 - **A slow backend call no longer freezes the gateway.** `Acquire` held the lease table's mutex across

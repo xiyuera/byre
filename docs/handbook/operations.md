@@ -131,6 +131,13 @@ make image-push IMAGE_REGISTRY=<registry>/<team>  # pushes <registry>/<team>/byr
 #   deploy/kustomization.yaml images:  name: <registry>/byre@sha256:<digest>, newName: …, digest: …
 ```
 
+`make image-push` pushes through `scripts/publish-image.sh`, which then writes the digest the registry
+assigned into `dist/images.txt` — `IMAGE_REF` (the reference to pin), `IMAGE_TAG`, `IMAGE_DIGEST` and
+`PUSHED_AT` — and appends `IMAGE_DIGEST=` to `dist/build-info.txt` when that release asset already
+exists. A push that returns no digest exits non-zero instead of leaving a file that only looks complete.
+`make image-verify` compares the running pod's `imageID` with that digest and exits non-zero on a
+mismatch: that is the check that catches a re-pushed tag whose layers the node already had.
+
 Two steps above are not optional and both fail in ways that do not mention them. `make image` only feeds
 the local container runtime, and the manifest ships `<registry>/byre@sha256:<digest>` — a placeholder that
 kubelet cannot resolve, so an unfilled `deploy/` stops in `ImagePullBackOff`. A missing `byre-pool-key`
