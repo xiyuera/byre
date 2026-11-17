@@ -7,11 +7,12 @@ Field-level detail for each backend is in [backends.md](backends.md), and the fa
 ## Deploy
 
 ```sh
-make image-push IMAGE_REGISTRY=<registry>/<team>   # pushes the tag, prints no digest
-podman push --digestfile /tmp/digest <registry>/<team>/byre:<tag>   # or read it back with docker inspect
+make image-push IMAGE_REGISTRY=<registry>/<team>   # builds, pushes, and records dist/images.txt
 # fill the image reference in deploy/ (see below), then:
 kubectl -n byre-system create secret generic byre-pool-key --from-file=id_key=/path/to/key
 kubectl apply -k deploy/
+kubectl -n byre-system set image deploy/byre byre="$(sed -n 's/^IMAGE_REF=//p' dist/images.txt)"
+make image-verify                                  # digest and registry must match the running pod
 kubectl -n byre-system rollout status deploy/byre
 ```
 
@@ -27,6 +28,35 @@ content, and with `imagePullPolicy: IfNotPresent` the node keeps its cached laye
 reports the new tag while the process is still the old build. A digest is a content hash — if the content
 changes, the value changes, and a pull cannot silently answer with something else. `/healthz` prints the
 version compiled into the binary, which is how you tell which build is actually running.
+
+### The release page carries the digest to pin
+
+Every tagged release publishes `images.txt` beside the binaries: `IMAGE_REF` is the reference a
+Deployment should carry, `IMAGE_DIGEST` is what the registry answered for that tag when the release
+was built. `scripts/record-release-image.sh` writes it by asking the registry (`HEAD
+/v2/<image>/manifests/<tag>`), then fetching the manifest and hashing it, because a header is a claim
+about a body and the two disagreeing means neither is safe to pin.
+
+It is **not** covered by `SHA256SUMS`, deliberately: `SHA256SUMS` covers what a rebuild reproduces,
+and `images.txt` records a registry's answer at one moment — a value no rebuild can reproduce. A
+release whose tag was never pushed fails that step instead of publishing a guessed digest, so **push
+the image for the tag before pushing the tag**. `PUSHED_AT` says `unknown` for the same reason: a
+registry manifest carries no push timestamp, and an invented one would be the field everyone later
+trusts.
+
+Deploy from the release asset, not from whatever `dist/` holds on the machine doing the rollout:
+
+```sh
+curl -fsSLO <release-page-url>/images.txt        # the asset, not a local build's record
+kubectl -n byre-system set image deploy/byre byre="$(sed -n 's/^IMAGE_REF=//p' images.txt)"
+make image-verify IMAGES=images.txt              # digest AND registry prefix, against the running pod
+```
+
+`make image-verify` exits 2 when it cannot qualify the check — a bare digest with no registry to
+compare against — because "could not check" must not read as "checked and fine". Comparing only the
+digest is not enough: when the same blobs already exist under another registry name, containerd
+downloads nothing, `imageID` keeps reporting the old repository, and the pod is not running what the
+release page names.
 
 **The pool key Secret is deliberately not part of `kubectl apply -k deploy/`** — creating it from a file
 here would put a private key in git. Create it before the first rollout, in the same namespace:

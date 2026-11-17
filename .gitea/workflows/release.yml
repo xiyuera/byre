@@ -70,6 +70,31 @@ jobs:
             CI_IMAGE_DIGEST="${CI_IMAGE_DIGEST}"
           cat dist/build-info.txt
 
+      # The image is built and pushed by a different pipeline — a person on the build host, or
+      # `scripts/publish-image.sh` — so this job cannot read the digest off its own disk. The registry
+      # is the only thing that knows what `<tag>` currently resolves to, so ask it, and hash the
+      # manifest it answers with before recording anything.
+      #
+      # A tag that was never pushed fails here on purpose. The two alternatives are both worse:
+      # publishing no digest at all (v0.3.1 and v0.3.2 had to be repaired by hand, t_eda10d6e), or
+      # publishing a number nobody can verify. Which also fixes the order of operations: push the
+      # image for the tag, then push the tag.
+      - name: Record the image digest this tag points at
+        env:
+          # The container registry is the same endpoint as this Gitea instance and the image is named
+          # after the repository path, so both values come from the environment: no address is written
+          # into the repository. Set REGISTRY_IMAGE when an image is named differently.
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          host=${GITHUB_SERVER_URL#*://}
+          host=${host%/}
+          image=${REGISTRY_IMAGE:-${host}/${GITHUB_REPOSITORY}}
+          echo "recording the digest ${image}:${GITHUB_REF_NAME} resolves to"
+          scripts/record-release-image.sh "${image}" "${GITHUB_REF_NAME}" dist
+          cat dist/images.txt
+
       - name: Publish the Gitea release
         env:
           TOKEN: ${{ secrets.RELEASE_TOKEN }}
@@ -113,3 +138,48 @@ jobs:
             echo "release ${id} holds ${uploaded} assets, expected ${want} — the id was wrong" >&2
             exit 1
           }
+
+      # Every step above returns 0 whether or not it wrote what it claims, which is the failure shape
+      # this pipeline keeps hitting. So read the asset back byte for byte, then ask the registry once
+      # more: if the tag moved between recording and publishing, the release now names an image that
+      # is no longer behind that tag and the digest is stale even though every upload succeeded.
+      - name: The published images.txt is the registry's answer
+        env:
+          TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          [ -n "${TOKEN}" ] || { echo "the RELEASE_TOKEN secret is not set on this repository" >&2; exit 1; }
+          api="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
+          auth="Authorization: token ${TOKEN}"
+          rel=$(curl -fsS -H "${auth}" "${api}/releases/tags/${GITHUB_REF_NAME}")
+          # The download URL ends in the file name, so this needs no JSON parser and no field order.
+          url=$(printf '%s' "${rel}" \
+                  | grep -o '"browser_download_url":"[^"]*/images\.txt"' \
+                  | cut -d'"' -f4 || true)
+          [ -n "${url}" ] || {
+            echo "release ${GITHUB_REF_NAME} has no images.txt asset — the digest step did not take" >&2
+            exit 1
+          }
+          curl -fsS -H "${auth}" "${url}" -o /tmp/images.published.txt
+          published_sum=$(sha256sum /tmp/images.published.txt | cut -d' ' -f1)
+          local_sum=$(sha256sum dist/images.txt | cut -d' ' -f1)
+          [ "${published_sum}" = "${local_sum}" ] || {
+            echo "the asset on the release page (${published_sum}) is not the file this job wrote" >&2
+            echo "(${local_sum}); somebody else's release may share this tag" >&2
+            exit 1
+          }
+          host=${GITHUB_SERVER_URL#*://}
+          host=${host%/}
+          image=${REGISTRY_IMAGE:-${host}/${GITHUB_REPOSITORY}}
+          scripts/record-release-image.sh "${image}" "${GITHUB_REF_NAME}" /tmp/now >/dev/null
+          now=$(sed -n 's/^IMAGE_DIGEST=//p' /tmp/now/images.txt)
+          was=$(sed -n 's/^IMAGE_DIGEST=//p' dist/images.txt)
+          [ "${now}" = "${was}" ] || {
+            echo "${image}:${GITHUB_REF_NAME} resolved to ${was} when recorded and to ${now} now." >&2
+            echo "The tag was re-pushed mid-release; the published digest names an image that is no" >&2
+            echo "longer behind it. Re-tag rather than publish a digest that already drifted." >&2
+            exit 1
+          }
+          echo "asset == local file (${was} is what ${image}:${GITHUB_REF_NAME} still resolves to)"

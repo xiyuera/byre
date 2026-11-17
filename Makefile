@@ -111,10 +111,14 @@ image-push: image
 	scripts/publish-image.sh $(IMAGE_REGISTRY)/$(IMAGE)
 	@echo "pushed $(IMAGE_REGISTRY)/$(IMAGE) — IMAGE_REF recorded in dist/images.txt"
 
-# Fails when the running pod's imageID is not the digest dist/images.txt records. The silent failure
-# this catches: a re-pushed tag with imagePullPolicy: IfNotPresent keeps the node's old layers.
+# Fails when the running pod's imageID is not the digest dist/images.txt records — and when that
+# imageID names a different registry than IMAGE_REF. The second half is not pedantry: when the same
+# blobs already exist under another registry name, containerd pulls nothing and `imageID` keeps
+# reporting the old repository, so a digest-only check passes while the pod runs the other image.
+# IMAGES may point at the images.txt downloaded from a release page; EXPECT_REGISTRY is only needed
+# when the source names a bare digest (otherwise it exits 2 rather than claim a match it cannot judge).
 image-verify:
-	scripts/assert-image-digest.sh $(or $(IMAGES),dist/images.txt) $(or $(NAMESPACE),byre-system) $(or $(DEPLOY),byre)
+	EXPECT_REGISTRY="$(EXPECT_REGISTRY)" scripts/assert-image-digest.sh $(or $(IMAGES),dist/images.txt) $(or $(NAMESPACE),byre-system) $(or $(DEPLOY),byre)
 
 clean:
 	rm -rf bin dist coverage.txt

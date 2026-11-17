@@ -9,6 +9,24 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
 
 ## [Unreleased]
 
+### Added
+
+- **A release publishes the image digest its tag resolved to.** `images.txt` is written by the pipeline
+  now, not by hand: `scripts/record-release-image.sh` asks the registry what `<tag>` resolves to, hashes
+  the manifest it gets back, and the release uploads that file beside the binaries. A tag whose image was
+  never pushed fails the release instead of publishing no digest — v0.3.1 and v0.3.2 were repaired by hand
+  for exactly that — so the order is: push the image, then push the tag. The file is deliberately not
+  covered by `SHA256SUMS`, which describes what a rebuild reproduces; `PUSHED_AT` is `unknown` because a
+  registry manifest carries no push timestamp.
+
+### Changed
+
+- **`make image-verify` asserts the registry as well as the digest.** When the same blobs already exist
+  under another registry name, containerd pulls nothing and `imageID` keeps reporting the old repository,
+  so a digest-only comparison passes while the pod runs the other image. It exits 2 when it cannot
+  qualify the check (a bare digest with no registry to compare against), because "could not check" must
+  not read as "checked and fine". `make image-verify IMAGES=images.txt` takes the release's own asset.
+
 ## [0.3.2] - 2026-11-18
 
 ### Added

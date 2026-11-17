@@ -30,9 +30,16 @@ A release is not "a passing CI run". It needs, in the release notes:
 2. the same target writes `build-info.txt` (version, commit, tag, build date, the exact `ldflags`, the
    `GOOS`/`GOARCH` of every asset, the Go toolchain, the digest of the job image, and a `reproduce=`
    line) and `SHA256SUMS` over the binaries and `build-info.txt`;
-3. create the release on Gitea through the API and upload those four files;
-There is no step 4. `release.yml` contains no GitHub API call, and it should not be described as if it
-did: publishing to a second host is a manual mirroring act, not part of a release.
+3. `scripts/record-release-image.sh` asks the registry what `<tag>` resolves to and writes `images.txt`
+   — the digest, the reference to pin, and `PUSHED_AT=unknown` (a registry manifest carries no push
+   timestamp). It is not covered by `SHA256SUMS`: a checksum file describes what a rebuild reproduces,
+   and a registry's answer at one moment is not that. A tag whose image was never pushed fails here
+   instead of publishing a guessed digest, so **push the image for the tag, then push the tag**;
+4. create the release on Gitea through the API, upload those five files, then read `images.txt` back
+   and check it is still what the registry says — the upload loop cannot tell whether it wrote to the
+   right release, and a tag re-pushed mid-release would leave the published digest already stale.
+There is no step 5, and no GitHub API call anywhere in `release.yml`, which should not be described as
+if there were: publishing to a second host is a manual mirroring act, not part of a release.
 
 ## Rebuilding a release
 
@@ -72,8 +79,10 @@ Gitea is the source of truth; GitHub is a public mirror.
 
 ## What the repository publishes
 
-Source, and for each release: two static binaries, `SHA256SUMS`, `build-info.txt`, and the changelog entry.
+Source, and for each release: two static binaries, `SHA256SUMS`, `build-info.txt`, `images.txt`, and the
+changelog entry.
 Container images are published to a registry separately and referenced by digest — never by mutable tag:
-`make image-push` records the digest the registry assigned in `dist/images.txt`, and `make image-verify`
-fails when the running pod is not that digest.
+`make image-push` records the digest the registry assigned in `dist/images.txt`, the release publishes
+the digest the tag resolved to as `images.txt`, and `make image-verify` fails when the running pod is
+neither that digest nor that registry.
 No `go get`: the module path is deliberately bare (see README).
