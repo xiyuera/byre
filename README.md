@@ -396,6 +396,12 @@ identifier SSH already verifies — the public key — and hangs the lease on it
 | [roadmap.md](docs/roadmap.md) · [adr/](docs/adr/) | what is absent from v1 and in what order it would arrive; the decisions, with the conditions that would reverse them |
 | [acceptance/](docs/acceptance/) · [docs/README.md](docs/README.md) | what was verified on a real cluster; the index of everything else |
 
+Some of it is English only, and saying so beats a reader discovering it: the four handbook pages,
+`docs/release.md`, `docs/i18n.md`, `docs/integrations/README.md`, `deploy/gitea-runner/README.md`,
+`docs/adr/*` and `docs/acceptance/*`, and the three shape examples under `examples/`.
+`scripts/check-i18n.sh` prints the pages it tracks as `UNTRANSLATED` instead of skipping them; the
+remaining ones are English only by the rule in [`docs/i18n.md`](docs/i18n.md), not by omission.
+
 ## Dependencies
 
 `golang.org/x/crypto/ssh` for the protocol; `k8s.io/client-go` with `api` and `apimachinery` for the

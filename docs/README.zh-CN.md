@@ -35,3 +35,6 @@
 
 读代码从 `handbook/architecture.md` 开始；怎么跑从 `handbook/operations.md` 开始；已经在跑但不对，
 从 `handbook/troubleshooting.md` 开始。
+
+手册页面、`release.md`、`i18n.md`、`integrations/` 以及三种形态示例目前只有英文；
+[`i18n.md`](i18n.md) 是清单，`scripts/check-i18n.sh` 让这件事一直可见。

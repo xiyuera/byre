@@ -35,3 +35,6 @@ how the four provisioning shapes differ. This page is the map for everything pas
 
 Start with `handbook/architecture.md` if you are reading the code, `handbook/operations.md` if you are
 running it, and `handbook/troubleshooting.md` if it is running and does not work.
+
+The handbook pages, `release.md`, `i18n.md`, `integrations/` and the three shape examples are English
+only today; [`i18n.md`](i18n.md) is the list, and `scripts/check-i18n.sh` is how it stays visible.
