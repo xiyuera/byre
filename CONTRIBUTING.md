@@ -82,23 +82,14 @@ A red check is information, not an obstacle: read the job log before rerunning.
 
 ### Every commit needs `Signed-off-by`
 
-`git commit -s`. The `dco` job reads trailers over the range the push
-introduces and requires the trailer to match the author. Two consequences:
+`git commit -s`. The `dco` job compares each commit's trailer against *that commit's own* author and
+reads only the range the run added — a merge commit is created when the button is pressed and carries
+no trailer, so the run for `main` fails even when every commit on the branch was signed. **Use
+rebase**, which adds no commit of its own.
 
-* **Use rebase, not merge commits and not squash.** Gitea's merge button
-  produces a merge commit whose message carries no trailer. A squash produces a
-  single new commit authored by whoever pressed the button, so the trailers it
-  concatenates no longer match that commit's own author — and `dco` compares each
-  trailer against *that commit's* author (`Signed-off-by: .*<$author>`). Only a
-  rebase keeps the commits, their authors and their trailers intact.
-* Rewriting a commit can drop the trailer. If you amend, re-add it.
-
-**This gate fires after the merge, not before it.** On a pull request the job only
-sees the branch's commits — the merge commit does not exist yet, the forge
-creates it when the button is pressed. It then fails `dco` on the push run to
-`main`, by which time the code is already `main`'s. Branch protection only gates
-the four `(pull_request)` contexts, so "use rebase" keeps `main`'s history signed;
-it does not stop anyone pressing merge.
+The full rule — the script the job runs, what each of the three merge strategies does to `main`'s
+history, and why the pre-policy merge commits are not a counter-argument — is under [Developer
+Certificate of Origin](#developer-certificate-of-origin).
 
 ### Who reviews
 
