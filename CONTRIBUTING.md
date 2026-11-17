@@ -211,29 +211,63 @@ go test -race ./...
 The job's `GOPROXY` comes from the repository secret `GOPROXY` (the value is not
 in this file because a working proxy is usually an internal host). Unset, Go falls
 back to `proxy.golang.org`, which in this cluster intermittently returns `EOF`
-part-way through the larger `k8s.io/*` zips:
+part-way through the larger module zips:
 
 ```
-internal/backend/kubernetes.go:15:2: k8s.io/api@v0.31.4:
-  Get "https://proxy.golang.org/k8s.io/api/@v/v0.31.4.zip": EOF
+internal/backend/kubernetes.go:24:2: k8s.io/client-go@v0.31.4:
+  Get "https://proxy.golang.org/k8s.io/client-go/@v/v0.31.4.zip": EOF
+... the same for apimachinery, yaml.v3 and x/crypto (8 lines in total)
 ```
 
-That is a network failure, not your change — the same commit has passed and failed
-on consecutive runs. Check the secret is present before reading the code:
+That is a network failure, not your change: the same commit has passed and failed
+on consecutive runs. **Re-running may pass**, which is why this was easy to
+misdiagnose as flaky code.
+
+**The way to tell a fix from luck is the download window, not red-to-green.** In
+the job log, the block of `go: downloading …` lines is the whole dependency fetch;
+time it:
+
+| job | GOPROXY | download window | result |
+|---|---|---|---|
+| 623 | unset | 368.4 s | success |
+| 639 | unset | 86.2 s | success |
+| 643 | unset | 30.5 s | success |
+| 627 | unset | 5.1 s, then `EOF` | **failure** |
+| 655 | secret | **2.4 s** | success |
+
+A two-order-of-magnitude difference means the proxy took effect. Success alone
+does not — an unset `GOPROXY` also succeeds when the network happens to behave.
+
+#### Setting it
+
+`GET`/`PUT` on `/actions/secrets` need an **owner or admin** token;
+`write:repository` gets `403 user should be an owner or have admin permission`.
+So a contributor cannot check or set this, and should not try — use the download
+window above instead, and ask an owner if it needs changing.
 
 ```sh
-curl -sS -H "Authorization: token $TOKEN" \
-  "$HOST/api/v1/repos/byre/byre/actions/secrets" | grep -o '"name":"GOPROXY"'
-```
-
-Set it to a proxy reachable from the cluster, comma-separated in Go's fallback
-order, ending in `direct`:
-
-```sh
+# owner/admin only
 curl -sS -X PUT -H "Authorization: token $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"data":"<proxy-a>,<proxy-b>,direct"}' \
+  -d '{"data":"<proxy-a>|<proxy-b>|direct"}' \
   "$HOST/api/v1/repos/byre/byre/actions/secrets/GOPROXY"
 ```
+
+**Use `|`, not `,`.** Go's rule (`go help goproxy`, and
+`src/cmd/go/internal/modfetch/proxy.go`): a comma falls back to the next entry
+only after a **404 or 410**; a pipe falls back after **any** error, including the
+`EOF` and timeouts this section is about. With commas, this exact failure would
+try the first proxy, die, and never reach the second — the fix would look applied
+and change nothing. Measured both ways against a deliberately dead first proxy:
+commas exit 1, pipes reach the second source and succeed.
+
+Two things this cannot fix:
+
+* **A pull request from a fork gets no secrets**, so `GOPROXY` is empty and the
+  `proxy.golang.org` failure is back. Submit from a branch in this repository, or
+  expect the occasional red.
+* **The proxy URL appears in CI logs when it fails** (`Get "https://<host>/…"`),
+  and job logs are readable by repository members. A secret keeps the address out
+  of the tree, not out of a failure message.
 
 `make fmt` rewrites files in place (`gofmt -l -w .`) and exits 0 whether or not it
 changed anything — it formats, it does not check. `make lint` is a **local** gate,
