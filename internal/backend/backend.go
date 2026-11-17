@@ -99,5 +99,27 @@ type StaleCapacity interface {
 	AnonymousInstancesAreStale() bool
 }
 
+// Liveness is implemented by drivers whose instances can be asked, one at a time, whether the object
+// behind them still exists.
+//
+// It exists because a lease is remembered per identity and reused for every reconnect: when the object
+// behind a lease disappears, the reuse path keeps handing out an address nobody answers on until
+// ttl+grace expires. Answering "is this object still there" is a single-object read, which is why it is
+// a separate method and not a filter over List: the reconnect path must not pay for the inventory.
+//
+// Alive returns nil when the instance still exists, an error wrapping ErrInstanceGone when it is
+// definitively gone, and any other error when the answer is unknown. The distinction is load-bearing:
+// "gone" means the lease must be dropped and a replacement provisioned; "unknown" means the lease must
+// be kept, because a lease that is dropped is a client whose instance — and its files — are gone.
+type Liveness interface {
+	Alive(ctx context.Context, in Instance) error
+}
+
+// ErrInstanceGone is returned (wrapped) by a Liveness check when the object behind an instance is
+// definitively absent: deleted, or replaced by a different object under the same name. It is not
+// "cannot be reached" — a live instance whose sshd is wedged is a different failure, and the caller
+// must not treat the two the same way.
+var ErrInstanceGone = errors.New("instance no longer exists")
+
 // ErrNoCapacity is returned by Acquire when the driver is exhausted.
 var ErrNoCapacity = errors.New("no capacity")

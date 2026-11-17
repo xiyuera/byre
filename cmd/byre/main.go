@@ -7,10 +7,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
 	"time"
 
@@ -135,17 +137,7 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintf(w, "ok %s\n", version.String())
 	})
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		active, idle := mgr.Stats()
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		fmt.Fprintf(w, "# HELP byre_up Whether the process is running.\n# TYPE byre_up gauge\nbyre_up 1\n")
-		fmt.Fprintf(w, "# HELP byre_leases_active Leases with at least one open connection.\n# TYPE byre_leases_active gauge\nbyre_leases_active %d\n", active)
-		fmt.Fprintf(w, "# HELP byre_leases_idle Leases without connections, waiting to be reaped.\n# TYPE byre_leases_idle gauge\nbyre_leases_idle %d\n", idle)
-		fmt.Fprintf(w, "# HELP byre_leases_adopted Leases recovered from existing instances at startup.\n# TYPE byre_leases_adopted counter\nbyre_leases_adopted %d\n", mgr.AdoptedTotal())
-		for name := range backends {
-			fmt.Fprintf(w, "byre_pool_warm{backend=%q} %d\n", name, mgr.WarmSize(name))
-		}
-	})
+	mux.Handle("/metrics", metricsHandler(mgr, backends, front))
 	health := &http.Server{Addr: ":8099", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		logger.Info("health endpoint listening", "addr", health.Addr)
@@ -161,6 +153,51 @@ func main() {
 	defer cancel()
 	_ = health.Shutdown(shutdownCtx)
 	_ = front.Close()
+}
+
+// metricsHandler serves the exposition. It is a named handler so that a test can read /metrics through an
+// HTTP response, exactly as an operator does, instead of trusting that the text inside main() is right.
+func metricsHandler(mgr *lease.Manager, backends map[string]backend.Backend, front unreachableCounter) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		writeMetrics(w, mgr, backends, front)
+	})
+}
+
+// unreachableCounter is the front end's part of the exposition.
+//
+// An interface rather than *sshfront.Server so the rendering can be read in a test without an SSH listener,
+// a host key and a lease table — the exposition is hand-written, and a formatting mistake in it is invisible
+// until someone greps it.
+type unreachableCounter interface {
+	UnreachableTotal() int64
+}
+
+// writeMetrics renders the Prometheus text exposition.
+//
+// The last three series are the ones that make a disappeared instance visible. Before them, a lease that
+// pointed at a deleted pod produced no number anywhere: the gateway kept forwarding, the client saw a closed
+// connection, and the only trace was a log line nobody was tailing.
+func writeMetrics(w io.Writer, mgr *lease.Manager, backends map[string]backend.Backend, front unreachableCounter) {
+	active, idle := mgr.Stats()
+	names := make([]string, 0, len(backends))
+	for name := range backends {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	fmt.Fprintf(w, "# HELP byre_up Whether the process is running.\n# TYPE byre_up gauge\nbyre_up 1\n")
+	fmt.Fprintf(w, "# HELP byre_leases_active Leases with at least one open connection.\n# TYPE byre_leases_active gauge\nbyre_leases_active %d\n", active)
+	fmt.Fprintf(w, "# HELP byre_leases_idle Leases without connections, waiting to be reaped.\n# TYPE byre_leases_idle gauge\nbyre_leases_idle %d\n", idle)
+	fmt.Fprintf(w, "# HELP byre_leases_adopted Leases recovered from existing instances at startup.\n# TYPE byre_leases_adopted counter\nbyre_leases_adopted %d\n", mgr.AdoptedTotal())
+	fmt.Fprintf(w, "# HELP byre_lease_dead_instance_total Leases dropped because the instance behind them no longer exists.\n# TYPE byre_lease_dead_instance_total counter\nbyre_lease_dead_instance_total %d\n", mgr.DeadInstancesTotal())
+	fmt.Fprintf(w, "# HELP byre_lease_liveness_errors_total Existence checks that could not answer; those leases were kept.\n# TYPE byre_lease_liveness_errors_total counter\nbyre_lease_liveness_errors_total %d\n", mgr.LivenessErrorsTotal())
+	if front != nil {
+		fmt.Fprintf(w, "# HELP byre_lease_unreachable_total Dial failures against instances that still exist.\n# TYPE byre_lease_unreachable_total counter\nbyre_lease_unreachable_total %d\n", front.UnreachableTotal())
+	}
+	for _, name := range names {
+		fmt.Fprintf(w, "byre_pool_warm{backend=%q} %d\n", name, mgr.WarmSize(name))
+	}
 }
 
 // buildBackends instantiates one driver per configured backend. dryRun skips cluster clients so that

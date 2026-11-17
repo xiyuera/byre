@@ -7,13 +7,21 @@ package lease
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"byre/internal/backend"
 )
+
+// defaultLivenessTimeout bounds the "does this instance still exist" read taken on the reuse path. It is
+// short on purpose: an apiserver that cannot answer within this window produces an *inconclusive* probe,
+// and an inconclusive probe keeps the lease. Waiting longer would turn an API blip into a slow connect
+// for every client.
+const defaultLivenessTimeout = 2 * time.Second
 
 // Entry is one live lease.
 type Entry struct {
@@ -38,6 +46,14 @@ type Manager struct {
 	now   func() time.Time
 
 	backends map[string]backend.Backend
+
+	// livenessTimeout bounds the existence check on the reuse path; see defaultLivenessTimeout.
+	livenessTimeout time.Duration
+
+	// deadInstances counts leases dropped because their instance was gone. It is the number the incident
+	// had no way to show: leases kept pointing at deleted pods and nothing in the process said so.
+	deadInstances  atomic.Int64
+	livenessErrors atomic.Int64
 
 	mu         sync.Mutex
 	byIdentity map[string]*Entry
@@ -65,11 +81,12 @@ func New(ttl, grace time.Duration, backends map[string]backend.Backend) (*Manage
 		return nil, fmt.Errorf("lease: at least one backend is required")
 	}
 	return &Manager{
-		ttl:        ttl,
-		grace:      grace,
-		now:        time.Now,
-		backends:   backends,
-		byIdentity: make(map[string]*Entry),
+		ttl:             ttl,
+		grace:           grace,
+		now:             time.Now,
+		livenessTimeout: defaultLivenessTimeout,
+		backends:        backends,
+		byIdentity:      make(map[string]*Entry),
 	}, nil
 }
 
@@ -88,9 +105,29 @@ func (m *Manager) Acquire(ctx context.Context, identity, backendName string) (En
 			// The mapping changed under a live lease: refuse rather than silently move the client.
 			return Entry{}, fmt.Errorf("identity %s is already leased on backend %q, not %q", identity, e.Backend, backendName)
 		}
-		e.refs++
-		e.LastSeen = now
-		return *e, nil
+		// A lease is worth reusing only while the object behind it still exists. This is checked on
+		// every reuse, not on a timer: the window being closed is exactly one connection, and a timer
+		// would reproduce the defect with a shorter delay. When the object is gone the entry is dropped
+		// and this connection provisions a replacement, because handing the client an error it cannot act
+		// on is what made the incident look like a broken client.
+		if gone, probeErr := m.instanceGoneLocked(ctx, e); gone {
+			m.dropLocked(identity, e, "instance no longer exists", probeErr)
+		} else {
+			if probeErr != nil {
+				// The backend could not answer. Keeping the lease is the conservative choice: dropping it
+				// would destroy an instance that is probably alive, and its files with it.
+				m.livenessErrors.Add(1)
+				if m.logger != nil {
+					m.logger.Warn("instance liveness unknown; keeping the lease",
+						"identity", shortIdentity(identity), "backend", e.Backend,
+						"instance", e.Instance.ID, "error", probeErr,
+						"action", "lease kept; an inconclusive probe is not a deletion")
+				}
+			}
+			e.refs++
+			e.LastSeen = now
+			return *e, nil
+		}
 	}
 
 	drv, ok := m.backends[backendName]
@@ -142,6 +179,92 @@ func (m *Manager) Acquire(ctx context.Context, identity, backendName string) (En
 	}
 	return *e, nil
 }
+
+// instanceGoneLocked asks the backend whether the entry's instance still exists.
+//
+// The caller holds the table lock. That is not new: a cold Acquire already performs a driver call under
+// it. The cost added here is one bounded GET on reconnect, not a list, and the bound is
+// livenessTimeout — past it the answer is "unknown", not "gone".
+func (m *Manager) instanceGoneLocked(ctx context.Context, e *Entry) (bool, error) {
+	drv := m.backends[e.Backend]
+	if drv == nil {
+		return false, nil
+	}
+	lv, ok := drv.(backend.Liveness)
+	if !ok {
+		// A driver with no object to ask (a static host list, a provisioning script) has no notion of
+		// "gone" that the gateway can check, so the lease behaves as it did before.
+		return false, nil
+	}
+	pctx, cancel := context.WithTimeout(ctx, m.livenessTimeout)
+	defer cancel()
+	err := lv.Alive(pctx, e.Instance)
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, backend.ErrInstanceGone):
+		return true, err
+	default:
+		return false, err
+	}
+}
+
+// dropLocked forgets a lease whose instance no longer exists, and says so once.
+//
+// The instance is not released: there is nothing left to release, and issuing a delete for an object
+// that is already gone would turn one NotFound into a retry loop. The next Acquire provisions a
+// replacement, which is what the client actually needs.
+func (m *Manager) dropLocked(identity string, e *Entry, reason string, cause error) {
+	delete(m.byIdentity, identity)
+	m.deadInstances.Add(1)
+	if m.logger != nil {
+		m.logger.Warn("stale-binding",
+			"identity", shortIdentity(identity), "backend", e.Backend, "instance", e.Instance.ID,
+			"reason", reason, "cause", cause,
+			"action", "lease dropped; the next connection provisions a replacement")
+	}
+}
+
+// DiscardIfGone drops the lease when the backend confirms that its instance no longer exists, and
+// reports whether it did.
+//
+// It exists for the dial path. A dial error on its own does not say what happened: the object may be gone
+// (a deleted pod, whose address nothing answers on any more) or present but not answering (a wedged sshd,
+// a refused port). Only the first justifies replacing the instance; the second must keep the lease,
+// because replacing it would discard state the client is still entitled to.
+//
+// The instance is matched by ID before probing, so a connection that was holding an older object cannot
+// discard a lease that has already been replaced under it.
+func (m *Manager) DiscardIfGone(ctx context.Context, identity string, in backend.Instance) (bool, error) {
+	m.mu.Lock()
+	e, ok := m.byIdentity[identity]
+	if !ok || e.Instance.ID != in.ID {
+		m.mu.Unlock()
+		return false, nil
+	}
+	gone, probeErr := m.instanceGoneLocked(ctx, e)
+	if !gone {
+		m.mu.Unlock()
+		return false, probeErr
+	}
+	m.dropLocked(identity, e, "instance no longer exists (dial failed)", probeErr)
+	m.mu.Unlock()
+	return true, probeErr
+}
+
+// shortIdentity truncates a fingerprint for logs: enough to correlate, not enough to reconstruct.
+func shortIdentity(id string) string {
+	if len(id) <= 16 {
+		return id
+	}
+	return id[:16]
+}
+
+// DeadInstancesTotal reports leases dropped because the instance behind them disappeared.
+func (m *Manager) DeadInstancesTotal() int64 { return m.deadInstances.Load() }
+
+// LivenessErrorsTotal reports existence checks that could not answer; those leases were kept.
+func (m *Manager) LivenessErrorsTotal() int64 { return m.livenessErrors.Load() }
 
 // ReleaseConn records that one connection ended. The lease survives; only the idle clock moves.
 func (m *Manager) ReleaseConn(identity string) {
