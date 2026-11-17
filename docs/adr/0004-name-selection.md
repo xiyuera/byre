@@ -2,6 +2,9 @@
 
 - Status: **superseded** — the name became `byre`; see `docs/rename-to-byre.md`
   (the correction below is kept for its reasoning, not because the name survived it)
+- Superseded in part: the Go module is now `byre` (`go.mod: module byre`), so every
+  "the module is `keypod`" statement below is history; the passwd entry, `$HOME` and the image's
+  user are `byre` as well (`packaging/passwd`, `Dockerfile`, `Dockerfile.prebuilt`)
 - Date: 2026-11-17
 - Deciders: maintainers
 

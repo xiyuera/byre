@@ -16,10 +16,18 @@ import (
 //
 // The contract is one JSON object on stdout, nothing on stdout but that:
 //
-//	{"id":"vm-17","addr":"192.0.2.17:22","user":"ci","private_key":"/etc/keys/ci"}
+//	{"id":"vm-17","addr":"192.0.2.17:22","user":"ci","private_key":"/etc/keys/ci",
+//	 "annotations":{"byre.io/identity":"<fingerprint>"}}
 //
 // `user` and `private_key` may be omitted and fall back to the backend's ssh block, which is the common
-// case when every instance of a backend shares one credential.
+// case when every instance of a backend shares one credential. `annotations` is optional too, and one
+// key in it decides what a restart does: an instance listed with `byre.io/identity` is adopted and handed
+// back to that identity, while one listed without it is kept in place and reported (ADR-0009) — the
+// program that provisions instances is the only party that can say which identity an instance belongs to.
+//
+// `list` prints a JSON array of the same objects. Both programs are told apart by exit status: zero means
+// the JSON on stdout is the answer, non-zero means the instance was not created (or not destroyed) and
+// stderr says why.
 type CommandConfig struct {
 	Name    string
 	Acquire []string
@@ -95,15 +103,27 @@ type commandInstance struct {
 	Addr       string `json:"addr"`
 	User       string `json:"user"`
 	PrivateKey string `json:"private_key"`
+	// Annotations carries the identity binding (and anything else the provisioner wants to record).
+	// Dropping it here was the whole defect: a lister that reported `byre.io/identity` was answered with
+	// an instance that had none, so adoption could never recognise it (ADR-0009).
+	Annotations map[string]string `json:"annotations"`
 }
 
 func (c *Command) toInstance(ci commandInstance) (Instance, error) {
+	var ann map[string]string
+	if len(ci.Annotations) > 0 {
+		ann = make(map[string]string, len(ci.Annotations))
+		for k, v := range ci.Annotations {
+			ann[k] = v
+		}
+	}
 	in := Instance{
 		ID:            ci.ID,
 		Addr:          ci.Addr,
 		User:          firstNonEmpty(ci.User, c.cfg.User),
 		PrivateKey:    firstNonEmpty(ci.PrivateKey, c.cfg.PrivateKey),
 		HostKeyPolicy: c.cfg.HostKeyPolicy,
+		Annotations:   ann,
 	}
 	if err := in.Validate(); err != nil {
 		return Instance{}, fmt.Errorf("command backend %q returned an unusable instance: %w", c.cfg.Name, err)
@@ -137,6 +157,10 @@ func (c *Command) Release(ctx context.Context, in Instance) error {
 }
 
 // List runs the configured lister, so a restarted gateway can adopt what it left running.
+//
+// An instance listed without `byre.io/identity` is not destroyed at startup: this driver cannot promise
+// that its lister knows about annotations, so "no annotation" means "unknown ownership", not "stale
+// capacity" (ADR-0009). To make adoption work, have acquire and list emit annotations.byre.io/identity.
 func (c *Command) List(ctx context.Context) ([]Instance, error) {
 	if len(c.cfg.List) == 0 {
 		return nil, nil

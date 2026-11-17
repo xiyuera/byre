@@ -89,7 +89,11 @@ backends:
   #     acquire: ["/usr/local/bin/provision-ci-vm"]
   #     # BYRE_INSTANCE_ID and BYRE_INSTANCE_ADDR are in the environment.
   #     release: ["/usr/local/bin/destroy-ci-vm"]
-  #     list:    ["/usr/local/bin/list-ci-vms"]      # optional: [{id,addr,user?,private_key?}, ...]
+  #     # A restart can only adopt what it can attribute: print
+  #     #   "annotations":{"byre.io/identity":"<fingerprint>"}
+  #     # in both the acquire answer and every list entry (ADR-0009). A lister that prints no
+  #     # annotation is no longer destructive — its instances are kept and reported, not destroyed.
+  #     list:    ["./list-ci-vms"]      # optional: [{id,addr,user?,private_key?,annotations?}, ...]
   #     timeout: 120s
   #     env: ["CLOUD_PROFILE=ci"]
   #   ssh:
