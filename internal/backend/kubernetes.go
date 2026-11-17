@@ -76,6 +76,11 @@ type KubernetesConfig struct {
 	Client  kubernetes.Interface
 	Dynamic dynamic.Interface
 	Logger  *slog.Logger
+
+	// DryRun validates the configuration and returns a driver without cluster clients. -check-config
+	// uses it so that a configuration file can be checked on a workstation that has no cluster
+	// credentials; it says nothing about whether the cluster would accept the objects.
+	DryRun bool
 }
 
 // Kubernetes creates instances from Kubernetes objects: a bare pod, or a declarative claim.
@@ -111,13 +116,13 @@ func NewKubernetes(cfg KubernetesConfig) (*Kubernetes, error) {
 			return nil, fmt.Errorf("kubernetes backend %q: provider.template or provider.warm_pool is required for kind %s", cfg.Name, KindClaims)
 		}
 		if cfg.Provider.APIGroup == "" || cfg.Provider.APIVersion == "" || cfg.Provider.Resource == "" || cfg.Provider.ObjectKind == "" {
-			return nil, fmt.Errorf("kubernetes backend %q: provider.api_group, api_version, claim_resource and claim_kind are required for kind %s", cfg.Name, KindClaims)
+			return nil, fmt.Errorf("kubernetes backend %q: provider.api_group, api_version, resource and object_kind are required for kind %s", cfg.Name, KindClaims)
 		}
 		if len(cfg.Provider.EndpointField) == 0 {
 			cfg.Provider.EndpointField = []string{"status", "sandbox", "serviceFQDN"}
 		}
 	default:
-		return nil, fmt.Errorf("kubernetes backend %q: unknown provider.kind %q (want %s|%s)", cfg.Name, cfg.Provider.Kind, KindWorkloads, KindClaims)
+		return nil, fmt.Errorf("kubernetes backend %q: unknown provision %q (want %s|%s)", cfg.Name, cfg.Provider.Kind, KindWorkloads, KindClaims)
 	}
 
 	log := cfg.Logger
@@ -126,6 +131,9 @@ func NewKubernetes(cfg KubernetesConfig) (*Kubernetes, error) {
 	}
 
 	k := &Kubernetes{cfg: cfg, client: cfg.Client, dyn: cfg.Dynamic, log: log}
+	if cfg.DryRun {
+		return k, nil
+	}
 	if k.client == nil || k.dyn == nil {
 		restCfg, err := buildRestConfig(cfg.Kubeconfig)
 		if err != nil {

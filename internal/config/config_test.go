@@ -70,13 +70,13 @@ func TestValidateRejects(t *testing.T) {
 			c.Backends[0].Provider.Template = ""
 			c.Backends[0].Provider.WarmPool = ""
 		}, "provider.template or provider.warm_pool is required"},
-			{"missing gvk", func(c *Config) { c.Backends[0].Provider.APIGroup = "" }, "api_group, api_version, resource and object_kind"},
+		{"missing gvk", func(c *Config) { c.Backends[0].Provider.APIGroup = "" }, "api_group, api_version, resource and object_kind"},
 		{"missing endpoint field is fine", func(c *Config) { c.Backends[0].Provider.EndpointField = nil }, ""},
-			{"missing image", func(c *Config) {
-				c.Backends[0] = Backend{Name: "w", Provision: ProvisionWorkloads, Namespace: "ns",
-					SSH: SSH{Port: 22, User: "u", PrivateKey: "/k", HostKeyPolicy: "strict"}}
-				c.Identities[0].Backend = "w"
-			}, "provider.image is required"},
+		{"missing image", func(c *Config) {
+			c.Backends[0] = Backend{Name: "w", Provision: ProvisionWorkloads, Namespace: "ns",
+				SSH: SSH{Port: 22, User: "u", PrivateKey: "/k", HostKeyPolicy: "strict"}}
+			c.Identities[0].Backend = "w"
+		}, "provider.image is required"},
 		{"missing ssh user", func(c *Config) { c.Backends[0].SSH.User = "" }, "ssh.user is required"},
 		{"missing key", func(c *Config) { c.Backends[0].SSH.PrivateKey = "" }, "ssh.private_key is required"},
 		{"bad policy", func(c *Config) { c.Backends[0].SSH.HostKeyPolicy = "yolo" }, "unknown ssh.host_key_policy"},

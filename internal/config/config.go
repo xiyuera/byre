@@ -32,13 +32,13 @@ const (
 
 // Defaults applied before validation.
 const (
-	DefaultListen       = ":2222"
-	DefaultTTL          = 360 * time.Second
-	DefaultGrace        = 60 * time.Second
-	DefaultPoolSize     = 2
-	DefaultSSHPort      = 22
+	DefaultListen         = ":2222"
+	DefaultTTL            = 360 * time.Second
+	DefaultGrace          = 60 * time.Second
+	DefaultPoolSize       = 2
+	DefaultSSHPort        = 22
 	DefaultCommandTimeout = 120 * time.Second
-	DefaultReadyTimeout = 120 * time.Second
+	DefaultReadyTimeout   = 120 * time.Second
 )
 
 // Duration is a time.Duration that is written as a string ("360s") in YAML.
@@ -110,11 +110,11 @@ type Backend struct {
 // command the gateway cannot adopt instances after a restart, so orphans from this backend are the
 // operator's problem - stated here rather than discovered later.
 type Command struct {
-	Acquire   []string `yaml:"acquire"`
-	Release   []string `yaml:"release"`
-	List      []string `yaml:"list"`
-	Timeout   Duration `yaml:"timeout"`
-	Env       []string `yaml:"env"` // KEY=VALUE added to every invocation
+	Acquire []string `yaml:"acquire"`
+	Release []string `yaml:"release"`
+	List    []string `yaml:"list"`
+	Timeout Duration `yaml:"timeout"`
+	Env     []string `yaml:"env"` // KEY=VALUE added to every invocation
 }
 
 // Provider declares what the instance is and how it is started.
