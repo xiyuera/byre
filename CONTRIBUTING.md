@@ -394,8 +394,9 @@ author the forge is about to write as the commit's author; the default
 
 ### Before the policy
 
-Sign-off became policy in `94d5b52`, where the licence and NOTICE files went in. The commits before
-it were authored under a shared placeholder identity and stay unsigned. A sign-off is a statement
+Sign-off became policy in the commit that added the licence and NOTICE files (find it with
+`git log -S 'Developer Certificate of Origin' -- CONTRIBUTING.md`). The commits before it were
+authored under a shared placeholder identity and stay unsigned. A sign-off is a statement
 the author makes, so it cannot be made on their behalf now, and re-signing them would rewrite every
 hash below that point — the published tags, the release assets and the anchors in earlier
 verification records all refer to the old ones. A build from before the policy is recognisable from
