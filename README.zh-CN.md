@@ -385,6 +385,9 @@ gateway、proxy、cache 或 sidecar——一个静态二进制，两个监听。
 request 进入，需要四道检查全绿加一个批准。规则本身、以及两项不受此约束的
 例外操作，写在 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+参与本项目的行为由 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) 覆盖——改编自 Contributor
+Covenant 2.1，正文含中文摘要。
+
 ## 许可证
 
 Apache-2.0——见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。

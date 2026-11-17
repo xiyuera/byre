@@ -113,10 +113,10 @@ community.
 
 ## Reporting
 
-The address to report to is the one in this repository's contact field, the same
-one `SECURITY.md` names for vulnerability reports. If you would rather not write
-privately, say so in an issue without describing the incident — the maintainer
-will move the conversation to a private channel.
+Write to **xiyuera@gmail.com** — the same address `SECURITY.md` gives for
+vulnerability reports. If you would rather not write privately, open an issue that
+says only that you need to report something; the maintainer will move the
+conversation to a private channel.
 
 ## Attribution
 
@@ -127,9 +127,15 @@ version 2.1, available at
 Community Impact Guidelines were inspired by
 [Mozilla's code of conduct enforcement ladder][Mozilla CoC].
 
+For answers to common questions about this code of conduct, see the FAQ at
+[https://www.contributor-covenant.org/faq][FAQ]. Translations are available at
+[https://www.contributor-covenant.org/translations][translations].
+
 [homepage]: https://www.contributor-covenant.org
 [v2.1]: https://www.contributor-covenant.org/version/2/1/code_of_conduct.html
 [Mozilla CoC]: https://github.com/mozilla/diversity
+[FAQ]: https://www.contributor-covenant.org/faq
+[translations]: https://www.contributor-covenant.org/translations
 
 ---
 
@@ -137,12 +143,13 @@ Community Impact Guidelines were inspired by
 
 本节是上面英文文本的摘要，**不是**替代条款；发生歧义时以英文原文为准。
 
-- **承诺**：无论年龄、体型、可见或不可见的残障、族裔、性征、性别认同与表达、经验水平、教育、
+- **承诺**：无论年龄、体型、可见或不可见的残障、族裔、性特征、性别认同与表达、经验水平、教育、
   社会经济地位、国籍、外貌、种族、种姓、肤色、宗教或性取向，参与本项目都应免受骚扰。
 - **期望的行为**：体谅他人、尊重不同观点、给出并接受建设性反馈、为错误负责并从中学习、
   以整个社区的利益为重。
-- **不可接受的行为**：性化的语言或图像、嘲讽与人身攻击、公开或私下骚扰、未经许可公布他人
-  隐私信息、以及其他在职业场合下合理认为不当的行为。
-- **执行**：由维护者负责澄清与执行。举报请走仓库联系字段（与 `SECURITY.md` 同一地址），
+- **不可接受的行为**：性化的语言或图像、**以及任何形式的性关注或性挑逗**；嘲讽、侮辱或
+  贬损性评论、**人身或政治攻击**；公开或私下骚扰；未经许可公布他人隐私信息（如住址或邮箱）；
+  以及其他在职业场合下合理认为不当的行为。
+- **执行**：由维护者负责澄清与执行。举报写到 **xiyuera@gmail.com**（与 `SECURITY.md` 同一地址），
   举报内容私下处理，不在公开 issue 中展开。
 - **处置**：按社区影响分四级——修正（私下书面提醒）、警告、临时封禁、永久封禁。

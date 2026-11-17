@@ -2,8 +2,7 @@
 
 ## Reporting
 
-Report vulnerabilities privately to the maintainers (address in the repository's contact field) rather
-than in a public issue. Include a description, the affected version, and a reproduction if you have one.
+Report vulnerabilities privately to **xiyuera@gmail.com** rather than in a public issue. Include a description, the affected version, and a reproduction if you have one.
 
 ## Threat model
 
