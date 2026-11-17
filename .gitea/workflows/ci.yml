@@ -8,6 +8,15 @@ on:
     branches: ["**"]
   pull_request:
 
+# One run per ref: a new push cancels the queued or running run it replaces. Without this a branch that
+# is pushed three times in ten minutes queues three full runs, and the newest commit waits behind the
+# two it already obsoleted — the queue depth grew with push count, not with the number of refs. Cancelling
+# is not a looser gate: the newest run still has to pass every job, and a branch's result is still its
+# latest run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: k8s-go

@@ -3,6 +3,12 @@ on:
   push:
     tags: ["v*"]
 
+# Same rule as ci.yml: a tag is normally pushed once, so this changes nothing in the common case, but a
+# release that is withdrawn and re-tagged should not leave the withdrawn build queued behind it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # What this workflow is for: turn one tag into four assets that a stranger can rebuild byte for byte.
 # The build itself lives in `make dist`, so the same command works on a laptop; this file only supplies
 # the inputs (tag, commit, commit date, toolchain) and publishes the result.
