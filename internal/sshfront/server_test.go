@@ -12,7 +12,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,7 +60,64 @@ func serveFakeTarget(c net.Conn, cfg *ssh.ServerConfig, name string) {
 		return
 	}
 	defer conn.Close()
-	go ssh.DiscardRequests(reqs)
+
+	// Remote forwards (`ssh -R`): the target is the side that listens. Answering them is what lets the
+	// gateway's port-0 handling be tested end to end.
+	listeners := map[string]net.Listener{}
+	var listenersMu sync.Mutex
+	go func() {
+		for req := range reqs {
+			switch req.Type {
+			case "tcpip-forward":
+				var p struct {
+					BindAddr string
+					BindPort uint32
+				}
+				if err := ssh.Unmarshal(req.Payload, &p); err != nil {
+					_ = req.Reply(false, nil)
+					continue
+				}
+				ln, err := net.Listen("tcp", net.JoinHostPort(p.BindAddr, strconv.Itoa(int(p.BindPort))))
+				if err != nil {
+					_ = req.Reply(false, nil)
+					continue
+				}
+				bound := ln.Addr().(*net.TCPAddr)
+				listenersMu.Lock()
+				listeners[net.JoinHostPort(p.BindAddr, strconv.Itoa(int(bound.Port)))] = ln
+				listenersMu.Unlock()
+				go func() {
+					for {
+						conn, err := ln.Accept()
+						if err != nil {
+							return
+						}
+						_ = conn.Close()
+					}
+				}()
+				_ = req.Reply(true, ssh.Marshal(struct{ Port uint32 }{uint32(bound.Port)}))
+			case "cancel-tcpip-forward":
+				var p struct {
+					BindAddr string
+					BindPort uint32
+				}
+				_ = ssh.Unmarshal(req.Payload, &p)
+				key := net.JoinHostPort(p.BindAddr, strconv.Itoa(int(p.BindPort)))
+				listenersMu.Lock()
+				ln, ok := listeners[key]
+				delete(listeners, key)
+				listenersMu.Unlock()
+				if ok {
+					_ = ln.Close()
+				}
+				_ = req.Reply(ok, nil)
+			default:
+				if req.WantReply {
+					_ = req.Reply(false, nil)
+				}
+			}
+		}
+	}()
 
 	for newCh := range chans {
 		switch newCh.ChannelType() {
@@ -151,7 +210,9 @@ func writeKeyFile(t *testing.T, priv ed25519.PrivateKey) string {
 
 type harness struct {
 	addr     string
+	endpoint string // the instance the static backend leases (its ID is the address)
 	manager  *lease.Manager
+	srv      *Server
 	identity string // fingerprint of the allowed client key
 	signer   ssh.Signer
 }
@@ -237,7 +298,7 @@ func startGatewayDial(t *testing.T, endpoint string, driver backend.Backend, dia
 	if srv.Addr() == "" {
 		t.Fatal("front end did not bind")
 	}
-	return &harness{addr: srv.Addr(), manager: mgr, identity: fp, signer: clientSigner}
+	return &harness{addr: srv.Addr(), endpoint: endpoint, manager: mgr, srv: srv, identity: fp, signer: clientSigner}
 }
 
 func (h *harness) dial(t *testing.T, signer ssh.Signer) (*ssh.Client, error) {
@@ -282,12 +343,21 @@ func TestSecondConnectionReusesInstance(t *testing.T) {
 	}
 
 	// Same identity must still map to the same instance, and the backend must not have been asked twice.
-	e := h.manager.Lookup(h.identity)
+	var e *lease.Entry
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if e = h.manager.Lookup(h.identity); e != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if e == nil {
 		t.Fatal("lease disappeared between connections")
 	}
-	if e.Instance.ID != "fake-1" && !strings.HasPrefix(e.Instance.ID, "127.0.0.1:") {
-		t.Fatalf("unexpected instance id %q", e.Instance.ID)
+	// The static driver names an instance after its endpoint, so this is an exact assertion rather than
+	// the tautology it used to be ("either fake-1 or an address is fine" accepted anything).
+	if e.Instance.ID != h.endpoint {
+		t.Fatalf("instance id = %q, want %q", e.Instance.ID, h.endpoint)
 	}
 }
 
@@ -322,7 +392,10 @@ func TestUnknownKeyIsRejected(t *testing.T) {
 	}
 }
 
-func TestForeignBackendRefusedAfterLease(t *testing.T) {
+// TestLeaseRecordedForConfiguredBackend: after a connection is authenticated, the lease records the
+// backend the identity is configured on. (The refusal of a *different* backend is tested in the lease
+// package; the old name of this test claimed a refusal the front end never performs.)
+func TestLeaseRecordedForConfiguredBackend(t *testing.T) {
 	h := startGateway(t)
 	if e := h.manager.Lookup(h.identity); e != nil {
 		t.Fatalf("unexpected pre-existing lease: %+v", e)
@@ -432,10 +505,11 @@ func TestBackendFailureRefusesSession(t *testing.T) {
 	}
 }
 
-// TestDialFailureReleasesRef: the lease is obtained but the instance refuses connections (a dead pod,
-// a bounced listener). The client must be disconnected, and the lease must fall back to idle so the
-// reaper can reclaim it — a stuck ref would keep a dead instance alive forever.
-func TestDialFailureReleasesRef(t *testing.T) {
+// TestDialFailureInvalidatesLease: the lease is obtained but the instance refuses connections (a dead
+// pod, a bounced listener). The client must be disconnected **and the lease dropped** — the old
+// behaviour kept it, which handed the same unreachable instance to every reconnect for ttl+grace while
+// healthy capacity sat idle (F5, probe E4).
+func TestDialFailureInvalidatesLease(t *testing.T) {
 	h := startGatewayWith(t, "127.0.0.1:1", nil) // port 1: connection refused on any sane host
 
 	c, err := h.dial(t, h.signer)
@@ -450,14 +524,114 @@ func TestDialFailureReleasesRef(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if e := h.manager.Lookup(h.identity); e != nil && e.Refs() == 0 {
-			active, idle := h.manager.Stats()
-			if active != 0 || idle != 1 {
-				t.Fatalf("stats = (%d active, %d idle), want (0, 1)", active, idle)
-			}
+		if h.manager.Lookup(h.identity) == nil {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("lease did not return to idle after a dial failure: %+v", h.manager.Lookup(h.identity))
+	t.Fatalf("the lease survived a failed dial: %+v", h.manager.Lookup(h.identity))
+}
+
+// TestDeadInstanceIsReplacedOnReconnect is the end-to-end half of F5: the first connection lands on a
+// dead endpoint, and the second one must get the healthy instance instead of the same address.
+func TestDeadInstanceIsReplacedOnReconnect(t *testing.T) {
+	alive := startFakeTarget(t, "fake-1")
+	_, poolPriv := newKeyPair(t)
+	keyPath := writeKeyFile(t, poolPriv)
+	drv, err := backend.NewStatic(backend.StaticConfig{
+		Name:          "lab",
+		Endpoints:     []string{"127.0.0.1:1", alive},
+		User:          "sandbox",
+		PrivateKey:    keyPath,
+		HostKeyPolicy: "insecure",
+	})
+	if err != nil {
+		t.Fatalf("static backend: %v", err)
+	}
+	h := startGatewayWith(t, "", drv)
+
+	first, err := h.dial(t, h.signer)
+	if err != nil {
+		t.Fatalf("first dial: %v", err)
+	}
+	if sess, err := first.NewSession(); err == nil {
+		_ = sess.Close()
+		t.Fatal("the first connection reached the dead endpoint")
+	}
+	_ = first.Close()
+
+	// Give the handler time to record the failed dial and drop the lease.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && h.manager.Lookup(h.identity) != nil {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	second, err := h.dial(t, h.signer)
+	if err != nil {
+		t.Fatalf("second dial: %v", err)
+	}
+	defer second.Close()
+	if got := strings.TrimSpace(runCommand(t, second, "hostname")); got != "fake-1" {
+		t.Fatalf("second connection reached %q, want the healthy instance", got)
+	}
+}
+
+// TestCloseDropsLiveSessions is the F6 regression (probe E6): Close() returned only when the client
+// hung up, so a rolling update waited out the grace period and was killed by SIGKILL.
+func TestCloseDropsLiveSessions(t *testing.T) {
+	h := startGateway(t)
+	c, err := h.dial(t, h.signer)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+	if got := strings.TrimSpace(runCommand(t, c, "hostname")); got != "fake-1" {
+		t.Fatalf("session did not reach the instance: %q", got)
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		_ = h.srv.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close() did not return while one client session was open")
+	}
+
+	// The session must be gone, not merely unwatched.
+	if sess, err := c.NewSession(); err == nil {
+		_ = sess.Close()
+		t.Fatal("a session started after Close()")
+	}
+}
+
+// TestTwoRemoteForwardsOnPortZero is the F13 regression: `-R 0:host:port` asks the server to pick the
+// port, so two such requests are identical on the wire — keying the listener set by the requested port
+// made the second one look like a duplicate and refuse it.
+func TestTwoRemoteForwardsOnPortZero(t *testing.T) {
+	h := startGateway(t)
+	c, err := h.dial(t, h.signer)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+
+	first, err := c.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("first -R 0 forward refused: %v", err)
+	}
+	defer first.Close()
+	second, err := c.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("second -R 0 forward refused (the two requests share a key): %v", err)
+	}
+	defer second.Close()
+
+	p1 := first.Addr().(*net.TCPAddr).Port
+	p2 := second.Addr().(*net.TCPAddr).Port
+	if p1 == 0 || p2 == 0 || p1 == p2 {
+		t.Fatalf("allocated ports = %d and %d, want two distinct non-zero ports", p1, p2)
+	}
 }

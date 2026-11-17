@@ -69,6 +69,8 @@ type Server struct {
 
 	mu     sync.Mutex
 	ln     net.Listener
+	conns  map[net.Conn]struct{} // live client connections, closed by Close
+	closed bool
 	connWG sync.WaitGroup
 }
 
@@ -153,21 +155,61 @@ func (s *Server) Serve(ctx context.Context) error {
 			}
 			return fmt.Errorf("accept: %w", err)
 		}
+		if !s.track(raw) {
+			// Close() ran between Accept and here: the listener is gone, stop accepting.
+			_ = raw.Close()
+			return nil
+		}
 		s.connWG.Add(1)
 		go func() {
 			defer s.connWG.Done()
+			defer s.untrack(raw)
 			s.handleConn(ctx, raw)
 		}()
 	}
 }
 
-// Close stops the listener and waits for handlers to finish.
+// track registers a live connection. It reports false when the server is already closing, so a
+// connection accepted in that window is not served.
+func (s *Server) track(raw net.Conn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	if s.conns == nil {
+		s.conns = make(map[net.Conn]struct{})
+	}
+	s.conns[raw] = struct{}{}
+	return true
+}
+
+func (s *Server) untrack(raw net.Conn) {
+	s.mu.Lock()
+	delete(s.conns, raw)
+	s.mu.Unlock()
+}
+
+// Close stops the listener, drops every live client connection and waits for the handlers to finish.
+//
+// Dropping the connections is the part that makes shutdown quick: an SSH session is a blocking read
+// loop that only notices the process is going away when its socket dies. Waiting on connWG alone is
+// what turned a rolling update into 30 seconds of SIGTERM followed by SIGKILL.
 func (s *Server) Close() error {
 	s.mu.Lock()
+	s.closed = true
 	ln := s.ln
+	live := make([]net.Conn, 0, len(s.conns))
+	for c := range s.conns {
+		live = append(live, c)
+	}
 	s.mu.Unlock()
+
 	if ln != nil {
 		_ = ln.Close()
+	}
+	for _, c := range live {
+		_ = c.Close()
 	}
 	s.connWG.Wait()
 	return nil
