@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,9 @@ import (
 )
 
 type fakeBackend struct {
+	// mu guards the counters: concurrency tests drive several goroutines through one driver, and an
+	// unsynchronised ++ is a test bug that -race reports as a product bug.
+	mu        sync.Mutex
 	name      string
 	acquires  int
 	creates   int
@@ -26,6 +30,8 @@ type fakeBackend struct {
 func (f *fakeBackend) Name() string { return f.name }
 
 func (f *fakeBackend) Acquire(_ context.Context, identity string) (backend.Instance, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.failWith != nil {
 		return backend.Instance{}, f.failWith
 	}
@@ -43,6 +49,8 @@ func (f *fakeBackend) Acquire(_ context.Context, identity string) (backend.Insta
 
 // Create makes fakeBackend a Pooler, so pool tests can use the same double.
 func (f *fakeBackend) Create(_ context.Context) (backend.Instance, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.failWith != nil {
 		return backend.Instance{}, f.failWith
 	}
@@ -58,11 +66,29 @@ func (f *fakeBackend) Create(_ context.Context) (backend.Instance, error) {
 }
 
 func (f *fakeBackend) Release(_ context.Context, in backend.Instance) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.released = append(f.released, in.ID)
 	return nil
 }
 
+// Acquires reports how many instances the driver has created for an identity.
+func (f *fakeBackend) Acquires() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.acquires
+}
+
+// Released reports the instances the driver was told to destroy, in order.
+func (f *fakeBackend) Released() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.released...)
+}
+
 func (f *fakeBackend) List(context.Context) ([]backend.Instance, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.list, f.listErr
 }
 func (f *fakeBackend) Adopt(context.Context, []backend.Instance) error { return nil }

@@ -39,19 +39,25 @@ Splicing is byte-level after channel setup: no protocol inspection of the payloa
 ## 3. Lease states
 
 ```
-        ┌──────┐  acquire   ┌────────┐  idle > ttl+grace  ┌──────────┐  release   ┌──────┐
-        │ idle │───────────>│ leased │───────────────────>│ draining │───────────>│ dead │
-        └──────┘            └────────┘                    └──────────┘            └──────┘
-           ▲                     │                             │
-           │ refill pool         └──── activity: last_seen ─────┘ (back to leased)
-           └─────────────────────────────────────────────────────────
+        ┌─────────┐  acquire    ┌────────┐  idle > ttl+grace  ┌──────────┐  release   ┌──────┐
+        │ pending │────────────>│ leased │───────────────────>│ draining │───────────>│ dead │
+        └─────────┘             └────────┘                    └──────────┘            └──────┘
+             │                       │                              │
+             │ creation failed       └──── activity: last_seen ─────┘
+             └── dead                    (refreshed while in use)
 ```
 
-- `idle` instances are pool members: created ahead of time, never leased to two identities.
-- `draining` waits `grace` for a reconnect before the backend destroys the instance; a reconnect during
-  `grace` returns it to `leased` (this is what makes `ControlPersist` expiry invisible to the client).
-- The table is guarded by a single mutex per identity key; instance accounting is a separate lock so a
-  slow backend call never blocks unrelated leases.
+- `pending` is the row that exists while an instance is being created. A second connection for the same
+  identity waits for it and joins the result, rather than starting a second creation.
+- `idle` is a state of `leased`: a lease with `refs == 0` that has not yet expired. Pool members are not
+  leases; they are warm capacity that becomes one.
+- `draining` starts when `ttl` + `grace` have already elapsed, or when a dial failed. The row is kept —
+  marked, not deleted — until the backend has destroyed the instance: deleting it first let a reconnect
+  through to an instance that was about to disappear. A connection that arrives during the teardown waits
+  for it and then gets a new instance.
+- The table has one mutex, held only for map and field updates. No backend call (`Acquire`, `Bind`,
+  `Release`) is made while it is held, so a slow backend costs the identity that is waiting and nobody
+  else. See ADR-0008 for the measured defect, the alternatives and the consequences.
 
 ## 4. Recovery
 

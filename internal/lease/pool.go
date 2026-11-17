@@ -126,11 +126,13 @@ func (p *pool) take() (backend.Instance, bool) {
 func (p *pool) fill(ctx context.Context, log *slog.Logger) error {
 	p.mu.Lock()
 	need := p.size - len(p.warm) - p.inflight
-	p.inflight += need
-	p.mu.Unlock()
 	if need <= 0 {
+		// Nothing to do — and never subtract: a negative need would permanently shrink the counter.
+		p.mu.Unlock()
 		return nil
 	}
+	p.inflight += need
+	p.mu.Unlock()
 
 	start := time.Now()
 	var created []backend.Instance
