@@ -19,7 +19,6 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
   direct push from every account including the owner's. `docs/tag-map.md` records what each tag
   points at after the history rewrite and the two published `commit=` hashes that no longer
   resolve.
-
 - **`make image-push` records the digest it pushed.** It goes through `scripts/publish-image.sh`, which
   writes `dist/images.txt` (`IMAGE_REF` / `IMAGE_TAG` / `IMAGE_DIGEST` / `PUSHED_AT`) and appends
   `IMAGE_DIGEST=` to `dist/build-info.txt`. `make image-verify` (`scripts/assert-image-digest.sh`) exits
@@ -35,6 +34,17 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
   pointed at no release at all). Every upload returned 200, so the job reported success. The pattern
   now anchors on `"id":N,"tag_name"`, which occurs exactly once in a release response, and the
   workflow compares the asset count after uploading instead of trusting per-request status codes.
+
+## [0.3.1] - 2026-11-17
+
+### Added
+
+- Lease and front-end tests that actually run concurrently (`-race` previously had no concurrent code
+  path to look at), plus regressions for each item above.
+- `byre_instances_discarded` metric; `reason` on the `lease released` log line.
+- `docs/adr/0012`: lease-table locking and the `pending`/`leased`/`draining` phases.
+
+### Fixed
 
 - **A slow backend call no longer freezes the gateway.** `Acquire` held the lease table's mutex across
   `drv.Acquire`/`Bind`; a 500ms creation for one identity blocked `Lookup`, `KeepAlive`, `ReleaseConn`,
@@ -77,30 +87,38 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
   port, so the second request looked like a duplicate and `cancel-tcpip-forward` could never match.
 - `known_hosts` appends are verified by reading the line back and serialised with a file lock.
 
-### Added
+## [0.3.0] - 2026-11-17
 
-- Lease and front-end tests that actually run concurrently (`-race` previously had no concurrent code
-  path to look at), plus regressions for each item above.
-- `byre_instances_discarded` metric; `reason` on the `lease released` log line.
-- `docs/adr/0012`: lease-table locking and the `pending`/`leased`/`draining` phases.
-- `docs/handbook/backends.md`: field tables for the four provisions, the shared `ssh` block, the
-  readiness rule per shape, failure behaviour, and the `command` contract with a worked script.
-- `docs/handbook/troubleshooting.md`: each symptom with the log line that identifies it, the measured
-  reclaim clock, and what `-check-config` exit 2 does and does not mean.
-- Two facts that were previously discovered the hard way, now documented and measured: `endpoints` does
-  not survive a gateway restart (its ownership is in memory, so the round-robin starts over), and `~` in
-  `ssh.private_key` is not expanded — `-check-config` passes and the first dial fails.
+The configuration schema now says what a backend *does* rather than naming the product it happens to
+be (ADR-0007). **Breaking for existing installations:** no 0.2.x configuration file loads unchanged.
 
-### Changed
+### Changed (breaking)
 
-- The README now opens with what byre is, a five-minute Quick start that runs on one machine, and a table
-  of where the SSH backends come from — the design argument that used to fill the file moved into
-  `docs/handbook/architecture.md` §7. No code changed.
-- `docs/architecture.md` and `docs/operations.md` moved to `docs/handbook/`, and the documentation index
-  now separates the handbook from decisions and records. The runbook's log examples were rewritten to the
-  lines the binary actually emits.
-- The maintenance rules in `CONTRIBUTING.md` point at the handbook, and so does the comment in
-  `deploy/instances-rbac.example.yaml`.
+- `backend.type` is gone, replaced by `backend.provision` with four values: `claims`, `workloads`,
+  `endpoints`, `command`. A file that still says `type` fails with a sentence, not a schema error.
+- `provider.kind` is gone; `provider.claim_resource` → `provider.resource`,
+  `provider.claim_kind` → `provider.object_kind`.
+- The `ssh` block means the same thing under every provision; readiness lives in
+  `provider.ready_timeout`.
+
+See [CHANGELOG.md](CHANGELOG.md) for the
+whole-set migration snippet.
+
+### Also in this tag
+
+The tag was re-cut onto the current `main` before publication, so the assets here are built from
+tag `v0.3.0`, which contains the work merged after the first cut:
+
+- **The `command` backend adopts what it left running.** A gateway restart no longer destroys instances
+  an agent is still using: the driver lists what it owns, and only what it can prove stale is removed.
+- **A lease is invalid the moment its instance is gone** — no more forwarding to an address that no
+  longer exists.
+- **`/readyz` exists** and a truncated SSH banner is treated as a failure rather than a banner.
+- README rewritten: what byre is, a five-minute Quick start, where the SSH backends come from, and the
+  design argument moved to `docs/handbook/architecture.md`. Chinese translation follows section by
+  section; `docs/handbook/` gains `backends.md` and `troubleshooting.md`.
+- Documentation no longer carries this cluster's addresses; the registry section describes the two
+  tiers without naming hosts.
 
 ## [0.2.0] - 2026-11-17
 
