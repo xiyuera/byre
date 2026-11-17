@@ -380,9 +380,11 @@ writes is authored by whoever clicked it and carries no `Signed-off-by`, so the 
 even when every commit on the branch was signed. On 2026-11-17, seventeen of the eighteen merge
 commits in `main` failed for exactly this reason.
 
-`main` is protected and a push to it is refused, so this page cannot ask anyone to merge locally and
-push the result: the merge strategy chosen on the pull request is what decides whether the run for
-`main` passes.
+`main` is protected and a contributor's push to it is refused (`user_can_push: false`), so a change
+does not land by merging locally and pushing the result: what decides the run for `main` is the
+merge strategy chosen on the pull request. An operations account that lifts the protection for an
+exceptional change writes that commit itself, and it has to carry its own sign-off, because the run
+for `main` checks it like any other commit.
 
 - **Rebase then fast-forward** adds no commit of its own: the branch commits arrive with their
   authors and their trailers, and the range the run checks is signed commits only. Use this one.
