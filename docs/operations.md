@@ -25,6 +25,14 @@ The image is a static binary on Alpine; nothing else is installed. The container
 drops all capabilities and keeps a read-only root filesystem, with `$HOME` on an emptyDir because
 `accept-new` host keys are appended to `$HOME/.ssh/known_hosts`.
 
+If the build host cannot reach a base-image registry, build the binary first and use the prebuilt
+variant, which pulls nothing (`FROM scratch`):
+
+```sh
+CGO_ENABLED=0 GOOS=linux go build -trimpath -o bin/keypod ./cmd/keypod
+podman build -f Dockerfile.prebuilt -t <registry>/keypod:<tag> .   # docker works the same way
+```
+
 **If `pool_size > 0`,** the gateway will start creating instances immediately. Set `pool_size: 0` in the
 ConfigMap for a first smoke test if you do not want warm capacity yet.
 

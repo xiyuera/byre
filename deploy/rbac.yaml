@@ -10,7 +10,8 @@ rules:
   # declarative sandbox claims (provider.kind: sandbox-claim)
   - apiGroups: ["extensions.agents.x-k8s.io"]
     resources: ["sandboxclaims"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    # patch is required: a pooled instance is bound to its identity by patching annotations.
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
   - apiGroups: ["extensions.agents.x-k8s.io"]
     resources: ["sandboxes"]
     verbs: ["get", "list", "watch", "patch"]
