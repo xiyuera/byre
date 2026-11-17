@@ -1,6 +1,6 @@
 # ADR-0004 — Choosing the name
 
-- Status: **superseded** — the name became `cranage`; see `docs/rename-to-cranage.md`
+- Status: **superseded** — the name became `byre`; see `docs/rename-to-byre.md`
   (the correction below is kept for its reasoning, not because the name survived it)
 - Date: 2026-11-17
 - Deciders: maintainers
