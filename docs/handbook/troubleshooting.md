@@ -99,7 +99,8 @@ The reclaim clock is `ttl` + `grace`, checked by a reaper that runs every 30 s. 
 early, and nothing is released on disconnect — that is what the grace window is for.
 
 Measured on a lab gateway with `ttl: 10s` and `grace: 5s`: the client disconnected, the lease was still
-counted idle, and `byre_leases_idle` returned to 0 after ~24 s (15 s of clock plus the next reaper tick).
+counted idle, and `byre_leases_idle` returned to 0 after ~25 s (15 s of clock plus the next reaper tick;
+two runs measured 24 s and 25 s).
 
 ```sh
 curl -s :8099/metrics | grep -E '^byre_leases_(active|idle)'
