@@ -157,8 +157,8 @@ key 就是身份，所以共享 key 等于共享实例。两个 agent 拿着同�
 |---|---|---|
 | `claims` | 有控制器在你开口时交出一个；API 坐标属于配置 | kubernetes |
 | `workloads` | 我们自己从一个跑着 sshd 的镜像创建工作负载 | kubernetes |
-| `endpoints` | 完全不 provisioning：一批已经存在的主机 | static |
-| `command` | 由外部程序 provisioning 并描述实例 | command |
+| `endpoints` | 完全不 provision：一批已经存在的主机 | static |
+| `command` | 由外部程序做 provision 并描述实例 | command |
 
 "怎么够到实例"这件事是共享的，放在 provision 块外面：`ssh.port`、`ssh.user`、`ssh.private_key`、
 `ssh.host_key_policy`，以及就绪超时。只要是说 SSH 的后端就是后端，不管它是谁造出来的。
@@ -198,11 +198,11 @@ identities:
 的 CRD。`api_group`、`resource`、`object_kind` 这三个字段存在的意义，就是同一个二进制能驱动任何
 claim 形状的 API，包括这里没人见过的。写这个项目时部署的那套集群用的是
 `extensions.agents.x-k8s.io` 的 `SandboxClaim` 加一个热池；那只是一个例子，而且在这份文件里它是
-配置，不是代码里的名字。配置写旧了也不是 schema 报错：`backend.type` 被读到只有一个用途，就是告诉
+配置，不是代码里的名字。配置写旧了也不是 schema 报错：`backend.type` 只在一个地方被读到——为了告诉
 你它已被 `backend.provision` 取代。
 
 另外三种形态在 `deploy/config.example.yaml` 和 `examples/` 里：一个跑 sshd 的镜像、一批已经存在的
-主机、一个替你 provisioning 别的东西的程序。`command` 是我能写出的契约最小的逃生口：打印一个 JSON
+主机、一个替你做 provision 的程序。`command` 是我能写出的契约最小的逃生口：打印一个 JSON
 对象（`{"id","addr","user?","private_key?"}`），可选地实现 `list`，好让重启后的网关能接管它之前
 留下的实例。
 
