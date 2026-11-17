@@ -32,9 +32,10 @@ One axis, four behaviours, named after what they do:
 | `endpoints` | no provisioning: a fixed set of hosts that already exist | static |
 | `command` | an external program provisions and describes the instance | command |
 
-Everything about *reaching* an instance is shared and lives outside the provision block: `ssh.port`,
-`ssh.user`, `ssh.private_key`, `ssh.host_key_policy`, and readiness timeouts. A backend that speaks SSH is
-a backend, whatever created it.
+Everything about *reaching* an instance is shared and lives outside the provision block: `ssh.user`,
+`ssh.private_key`, `ssh.host_key_policy`, and readiness timeouts. A backend that speaks SSH is
+a backend, whatever created it. (`ssh.port` sits in that block too, but no driver reads it: the port is
+part of the instance's `addr`, or of each `endpoints` entry.)
 
 `claims` keeps its explicit API coordinates (`api_group`, `api_version`, `resource`, `object_kind`,
 `endpoint_field`) — there is still no built-in API — but the *name of the provision* no longer implies

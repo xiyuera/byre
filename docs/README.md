@@ -8,9 +8,18 @@ how the four provisioning shapes differ. This page is the map for everything pas
 | document | what it answers |
 |---|---|
 | [handbook/architecture.md](handbook/architecture.md) | how the pieces fit — identity, lease, pool, backends, readiness — and why the four obvious repairs fail |
-| [handbook/backends.md](handbook/backends.md) | the four provisions in detail: every field, the readiness rule, failure behaviour, and how to write a `command` backend |
-| [handbook/operations.md](handbook/operations.md) | running it: first install, the grant that is not in the overlay, host-key rotation, metrics, upgrading, uninstall |
+| [handbook/backends.md](handbook/backends.md) | the four provisions in detail: which one to pick, every field, the readiness rule, failure behaviour, and the `command` contract |
+| [handbook/operations.md](handbook/operations.md) | running it: first install, the grant that is not in the overlay, host-key rotation, metrics, flags, upgrading, uninstall |
 | [handbook/troubleshooting.md](handbook/troubleshooting.md) | what each failure looks like from the client and from the gateway log, and what to check first |
+
+## Runnable examples
+
+| example | shape | what it is |
+|---|---|---|
+| [examples/local-quickstart/](../examples/local-quickstart/README.md) | `endpoints` | the README's Quick start as a file: one machine, no cluster |
+| [examples/static-endpoints/](../examples/static-endpoints/README.md) | `endpoints` | a fixed set of lab hosts |
+| [examples/pod-image/](../examples/pod-image/README.md) | `workloads` | a minimal sshd image and the backend that creates pods from it |
+| [examples/kubernetes-sandbox/](../examples/kubernetes-sandbox/README.md) | `claims` | a template, a warm pool, and the backend that claims from them |
 
 ## Decisions and records
 

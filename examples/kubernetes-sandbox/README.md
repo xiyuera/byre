@@ -24,6 +24,9 @@ spec:
   # four policies: create/delete/expiry/idle, per your CRD's schema
 ```
 
+Those angle-bracket placeholders are not valid YAML until you replace them — this is a cluster manifest
+to apply with `kubectl`, not a byre configuration file, so `-check-config` has nothing to say about it.
+
 The template must produce a workload that:
 
 - listens on 22 and accepts the gateway's pool key (mounted or injected by your template);
@@ -52,6 +55,9 @@ address elsewhere, change the path — no code change is needed.
 
 ## 3. Point byre at it
 
+The block below is a **fragment**: it goes under `backends:` in a complete configuration, which also needs
+`listen`, `host_key` and an `identities:` list (see [`../local-quickstart/config.yaml`](../local-quickstart/config.yaml)).
+
 ```yaml
 backends:
   - name: claims
@@ -67,7 +73,6 @@ backends:
       object_kind: "<Kind>"
       endpoint_field: ["status", "sandbox", "serviceFQDN"]
     ssh:
-      port: 22
       user: "<remote-user>"
       private_key: /etc/byre/keys/id_key
       host_key_policy: accept-new

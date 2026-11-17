@@ -7,10 +7,11 @@ Field-level detail for each backend is in [backends.md](backends.md), and the fa
 ## Deploy
 
 ```sh
-make image-push IMAGE_REGISTRY=<registry>/<team>   # prints the digest it pushed
+make image-push IMAGE_REGISTRY=<registry>/<team>   # pushes the tag, prints no digest
+podman push --digestfile /tmp/digest <registry>/<team>/byre:<tag>   # or read it back with docker inspect
 # fill the image reference in deploy/ (see below), then:
-kubectl apply -k deploy/
 kubectl -n byre-system create secret generic byre-pool-key --from-file=id_key=/path/to/key
+kubectl apply -k deploy/
 kubectl -n byre-system rollout status deploy/byre
 ```
 
@@ -121,17 +122,25 @@ pod that ends in `Failed` (exec `/bin/sh`) is expected; what matters is `imageID
 ## Build and publish the image
 
 ```sh
-make image                                   # byre:<git describe>
-make image-push IMAGE_REGISTRY=<registry>/<team>
-kubectl apply -k deploy/                     # one shot: ns, SA, RBAC, ConfigMap, Deployment, Service
-kubectl -n byre-system create secret generic byre-pool-key --from-file=id_key=/path/to/key
-kubectl -n byre-system rollout status deploy/byre
-kubectl -n byre-system port-forward svc/byre 2222:2222   # or expose it the way your cluster does
+make image                                        # byre:<git describe>; lands in the local daemon only
+make image-push IMAGE_REGISTRY=<registry>/<team>  # pushes <registry>/<team>/byre:<tag>; see the digest below
+# then fill the placeholder in both places — they are matched as a string, see deploy/kustomization.yaml:
+#   deploy/deployment.yaml:39          image: <registry>/byre@sha256:<digest>
+#   deploy/kustomization.yaml images:  name: <registry>/byre@sha256:<digest>, newName: …, digest: …
 ```
 
-The image is a static binary on Alpine; nothing else is installed. The container runs as uid 10001,
-drops all capabilities and keeps a read-only root filesystem, with `$HOME` on an emptyDir because
-`accept-new` host keys are appended to `$HOME/.ssh/known_hosts`.
+Two steps above are not optional and both fail in ways that do not mention them. `make image` only feeds
+the local container runtime, and the manifest ships `<registry>/byre@sha256:<digest>` — a placeholder that
+kubelet cannot resolve, so an unfilled `deploy/` stops in `ImagePullBackOff`. A missing `byre-pool-key`
+Secret is worse: the volume is not `optional` (`deploy/deployment.yaml:77-80`), so the pod never starts
+and sits in `CreateContainerConfigError`.
+
+The image is a static binary on Alpine; nothing else is installed. The image's own user is `10001:10001`,
+while the shipped Deployment runs the container as uid `65532` with `fsGroup: 10001`
+(`deploy/deployment.yaml:23,27`). The `fsGroup` is what makes the `0400` Secret mount readable — the
+ownership, not the uid, decides — and that pairing was verified on a real cluster in
+`docs/acceptance/2026-11-17-deploy.md`. The two numbers should be the same; until the manifest is unified
+on `10001`, describe the container by what the image says and by the `fsGroup` that makes it work.
 
 The gateway's **own** SSH host key lives on the `byre-hostkey` PVC (`host_key:
 /var/lib/byre/hostkey/id_ed25519`). On first start the file does not exist and the gateway creates it,
@@ -186,11 +195,11 @@ kubectl -n <instances-ns> auth can-i patch <plural-resource> --as system:service
 that block names — the gateway hardcodes neither. The deployment this project was written on uses
 `sandboxclaims` from `extensions.agents.x-k8s.io`; that is one claim API among many, not a requirement.
 
-**If `pool_size > 0`,** the gateway will start creating instances immediately. **There is currently no way to
-scale the pool to zero through config** — `ApplyDefaults` treats an explicit `0` the same as an absent key and
-substitutes the default (a known gap, tracked for v0.1.3). To stop instance creation today, scale the
-Deployment to zero replicas instead; that also stops the front door. To keep a smaller pool, set it below the
-ConfigMap for a first smoke test if you do not want warm capacity yet.
+**If `pool_size > 0`,** the gateway will start creating instances immediately. **There is no way to
+configure a zero-sized pool**: `ApplyDefaults` treats an explicit `0` as an absent key and substitutes the
+default (2), so the effective minimum is 1; the same holds for an explicit `grace: 0s`. It only applies to
+drivers that implement `Create` — `endpoints` and `command` never warm anything. To stop instance creation
+today, scale the Deployment to zero replicas instead; that also stops the front door.
 
 ## Validate a configuration before shipping it
 
@@ -207,6 +216,10 @@ validated and built without API clients, so this runs on a workstation with no c
 the cluster would accept the objects is a separate question — that one is answered by the
 `auth can-i` check above and by the first acquire.
 
+It also cannot see intent. `deploy/config.example.yaml` passes with `rc=0` while every value is still a
+`<placeholder>` and the fingerprint is 32 zero bytes: the validator checks shapes (base64, `host:port`, a
+known `provision`), not whether you meant to edit the file.
+
 ## Health
 
 Two paths exist on `:8099`, and only two:
@@ -220,6 +233,11 @@ Two paths exist on `:8099`, and only two:
 forever; point it at `/healthz`. Use `/healthz` for liveness (`periodSeconds: 10`) and for readiness
 (`failureThreshold: 3`), while remembering what it does *not* say: a gateway that cannot create instances
 is still green — see [the grant that is not in the overlay](#the-grant-that-is-not-in-the-overlay).
+
+The port is compiled in: `&http.Server{Addr: ":8099"}` in `cmd/byre/main.go:147`, with no config key and
+no flag. Two consequences: a second gateway on the same host cannot start — it binds its SSH listener,
+logs `health endpoint failed: listen tcp :8099: bind: address already in use` and shuts down — and the
+Deployment must never schedule two replicas per node (it is single-replica by design anyway).
 
 The complete metric list:
 
@@ -248,6 +266,19 @@ The complete metric list:
 Warm capacity is reported as `byre_pool_warm{backend=...}`. A pool that never reaches `pool_size`
 means `Create` is failing (image pull, quota, missing template) — check the gateway log for
 `pool refill failed`.
+
+## Flags
+
+| flag | default | meaning |
+|---|---|---|
+| `-config` | `config.yaml` | the configuration file |
+| `-listen` | whatever the file says | overrides `listen` for one run: `-listen 127.0.0.1:2223` |
+| `-check-config` | off | validate, print every violation, exit 2 on any |
+| `-version` | off | print the version stamped into the binary |
+
+```sh
+byre -config /etc/byre/config.yaml -listen 127.0.0.1:2223   # second port, same config, no edit
+```
 
 ## Logs
 
@@ -289,25 +320,26 @@ reconstruct a key.
    connection do not survive it. Roll in a window where that is acceptable, or keep the process alive
    and swap configuration only where the binary allows it.
 
-## Common symptoms
-
-| symptom | likely cause | action |
-|---|---|---|
-| client's files vanish between commands | `lease.ttl` shorter than the client's idle timeout, or the client opens connections the gateway treats as new identities | raise `ttl`; check that the client uses one key everywhere |
-| many instances, one client | client rotates keys, or authenticates with several keys | alias the fingerprints to the same backend; prefer one key per identity |
-| instance never reclaimed | `grace` very large, or a channel leaked (session kept open) | inspect `byre_leases_idle`; kill the lease manually via the backend |
-| `unable to authenticate` after a key change | new fingerprint not in `identities` | add it (append), reload |
-| startup exits with a long error list | configuration violations | fix every listed item; do not "fix one and retry" |
-
 More symptoms, with the log lines that identify each one: [troubleshooting.md](troubleshooting.md).
+
+## Smoke test against a running gateway
+
+`make` and the script are the same thing; the script is what CI would call if it had a gateway.
 
 ```sh
 BYRE_CFG=config.yaml BYRE_KEY=path/to/client_key test/e2e/run.sh
-# add --ttl-ok to include the 320s idle-reconnect check
+make e2e CONFIG=config.yaml KEY=path/to/client_key          # identical
+# add --ttl-ok (script) to include the 320s idle-reconnect check
 ```
 
-The script asserts: same instance across reconnects, `-L` reaching the instance's sshd, adoption and
-pool counters. It is the same sequence recorded in `docs/acceptance/`.
+Without `BYRE_CFG` and `BYRE_KEY` (or `CONFIG`/`KEY`) the script prints `No target given` and exits 2 —
+that is the whole content of `make e2e` on its own. A `kind`-based mode is planned in `docs/roadmap.md`;
+it needs a container runtime to build and load the image, so nothing calls it yet.
+
+It asserts against a gateway that is already running: same instance across reconnects, `-L` reaching the
+instance's own sshd on its port 22, and it prints the adoption and pool counters. Because of that `:22`,
+a lab whose endpoints listen on other ports fails the tunnel check — that is the harness, not byre.
+It is the same sequence recorded in `docs/acceptance/`.
 
 ## Upgrading
 

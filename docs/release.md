@@ -31,10 +31,8 @@ A release is not "a passing CI run". It needs, in the release notes:
    `GOOS`/`GOARCH` of every asset, the Go toolchain, the digest of the job image, and a `reproduce=`
    line) and `SHA256SUMS` over the binaries and `build-info.txt`;
 3. create the release on Gitea through the API and upload those four files;
-4. if a `GH_TOKEN` secret exists, mirror the same release to GitHub.
-
-Steps 1–3 are what "a release" means here. Step 4 is optional on purpose: publishing to a second host is a
-mirror, not a second source of truth.
+There is no step 4. `release.yml` contains no GitHub API call, and it should not be described as if it
+did: publishing to a second host is a manual mirroring act, not part of a release.
 
 ## Rebuilding a release
 
@@ -62,7 +60,9 @@ Gitea is the source of truth; GitHub is a public mirror.
 - **Code and tags** travel by Gitea's *push mirror* (Settings → Repository → Mirror Settings). It syncs
   branches, tags and commits only — issues, PRs and releases are **not** mirrored, and a *pull* mirror
   deletes releases created on the mirror side.
-- **Release assets** travel from the pipeline (step 5 above), because the mirror cannot carry them.
+- **Release assets are not mirrored.** The pipeline uploads to Gitea only; copying a release to GitHub
+  is a manual step, and undocumented automation is worse than none: `gh release create <tag> \
+  --notes-file <changelog section> dist/*` after the tag exists on both sides.
 - **Nothing flows back.** Pull requests are accepted on Gitea only; the GitHub repository stays read-only so
   there is one place where a review happened.
 

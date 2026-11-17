@@ -22,6 +22,9 @@ byre-specific: any image that runs `sshd` and trusts the pool key works.
 
 ## Backend
 
+This is a **fragment**: it goes under `backends:` in a complete configuration, which also needs `listen`,
+`host_key` and an `identities:` list (see [`../local-quickstart/config.yaml`](../local-quickstart/config.yaml)).
+
 ```yaml
 backends:
   - name: adhoc
@@ -32,7 +35,6 @@ backends:
       start_command: ["/usr/sbin/sshd", "-D", "-e"]   # optional; image CMD is used when omitted
       ready_timeout: 180s                            # cold image pulls are slow
     ssh:
-      port: 22
       user: root
       private_key: /etc/byre/keys/id_key
       host_key_policy: accept-new

@@ -11,8 +11,9 @@ control master open or remembering an identifier: the key it already authenticat
 
 > Status: **0.3.0, pre-1.0.** Identity, lease, warm pool and adoption across restarts are verified on a
 > real cluster (`docs/acceptance/`); of the four provisioning shapes only `claims` has a cluster run. Single
-> replica, no automated end-to-end gate, and the image/manifest path is verified by server-side dry-run
-> only. See [Limits](#limits-and-things-known-to-be-wrong).
+> replica, and no automated end-to-end gate — the cluster runs were executed by hand. The image and
+> `kubectl apply -k` path were executed end to end once (prebuilt variant) and are recorded in
+> `docs/acceptance/2026-11-17-deploy.md`. See [Limits](#limits-and-things-known-to-be-wrong).
 
 > Renamed from `keypod` (see `docs/rename-to-byre.md`). Not affiliated with, endorsed by, or derived from
 > any same-named project; the name is a cowshed, and the licence grants no trademark rights.
@@ -34,8 +35,9 @@ window is what makes a client's own idle timeout — 300s for `ssh` with `Contro
 reconnect lands inside it and finds the same instance.
 
 byre creates no containers itself. It asks a **backend** for an instance and gets back an `{id, addr,
-user, key}` record, so everything about *reaching* an instance over SSH is shared across all backends,
-and which backend you use is the subject of
+user, key}` record, so everything about *reaching* an instance over SSH is shared across all backends.
+There are four ways a backend can come by an instance — `endpoints`, `workloads`, `claims` and
+`command` — and which one to use is the subject of
 [Configuration](#configuration-where-do-the-ssh-backends-come-from). Two listeners, no database, no
 sidecar: SSH on `:2222`, `/healthz` and `/metrics` on `:8099`. The lease table is in memory, and the
 Kubernetes backends write the identity onto each instance as an annotation, which is what makes a restart
@@ -95,7 +97,6 @@ backends:
     provision: endpoints
     endpoints: ["instance-1.example.com:22", "instance-2.example.com:22"]
     ssh:
-      port: 22
       user: "<remote-user>"
       private_key: /etc/byre/keys/id_key
       host_key_policy: strict
@@ -126,6 +127,10 @@ touching a cluster, and exits 2 on any violation — listing all of them at once
 rc=0
 ```
 
+`rc=0` means the file is self-consistent, and nothing more: a `<placeholder>` where a value belongs and
+the all-zero fingerprint shipped in `deploy/config.example.yaml` both pass, because only the shape is
+checked. It says nothing about the cluster, the instances, or whether the keys exist.
+
 **4. Start it.**
 
 ```sh
@@ -140,7 +145,8 @@ rc=0
 ```
 
 The `WARN` appears once, on the first start, and never again: the key is written to `host_key` and
-reused. These listings drop the `time` field, which every line carries.
+reused. These listings drop the `time` field, which every line carries. `-listen 127.0.0.1:2223`
+overrides the address from the file for one run.
 
 **5. Connect.** The username is ignored — the key decides everything — so `anything` is as good as
 anything else. Connect twice and watch the gateway's log: both lines name the same `instance`.
@@ -166,8 +172,10 @@ curl -s localhost:8099/healthz                  # ok dev (none, unknown)
 curl -s localhost:8099/metrics | grep '^byre_'  # byre_up 1, byre_leases_idle 1, byre_pool_warm{backend="lab"} 0
 ```
 
-There is no `/readyz`. `/healthz` answers "the process is up", never "I can hand out an instance". And
-`pool_size` is a no-op for `endpoints`, which creates nothing to pre-warm.
+There is no `/readyz`. `/healthz` answers "the process is up", never "I can hand out an instance". The
+health port `:8099` is compiled in, not configurable: a second gateway on the same host starts its SSH
+listener, then logs `health endpoint failed: listen tcp :8099: bind: address already in use` and shuts
+down. And `pool_size` is a no-op for `endpoints`, which creates nothing to pre-warm.
 
 ## Configuration: where do the SSH backends come from
 
@@ -181,14 +189,24 @@ The first is `provision`, and there are four values. None of them names a produc
 | `claims` | an object byre creates through a claim API | read and write that CRD | you already run a claim-shaped controller |
 | `command` | a program you write, which byre runs | nothing — process execution | cloud VMs, Incus/LXD, a CMDB |
 
-Shared by all four, and deliberately outside the provision block: `ssh.port`, `ssh.user`,
-`ssh.private_key` (the gateway's own key, installed on the instance), `ssh.host_key_policy` (`strict` for
-long-lived hosts, `accept-new` for disposable ones) and the readiness timeout. In every shape, "the
-instance trusts the gateway's public key" is the requirement you satisfy yourself — byre cannot install it
-on an `endpoints` host, and for `workloads` it is baked into the image.
+In one line each, for the decision a new reader is actually making: hosts you already have → `endpoints`;
+a cluster with a claim CRD or a warm pool → `claims`; a cluster and only an image that runs `sshd` →
+`workloads`; anything reachable only through a CLI or a CMDB → `command`. The same table with the failure
+modes of each shape is at the top of [`docs/handbook/backends.md`](docs/handbook/backends.md).
+
+Shared by all four, and deliberately outside the provision block: `ssh.user`, `ssh.private_key` (the
+gateway's own key, installed on the instance), `ssh.host_key_policy` (`strict` for long-lived hosts,
+`accept-new` for disposable ones) and the readiness timeout. In every shape, "the instance trusts the
+gateway's public key" is the requirement you satisfy yourself — byre cannot install it on an `endpoints`
+host, and for `workloads` it is baked into the image.
+
+`ssh.port` parses and is range-checked, but **no driver reads it**: the port comes from the `addr` a
+driver returns or from the `host:port` entries in `endpoints`. Setting it to anything other than 22 does
+not move the dial.
 
 The four entries below are backend fragments: they go under `backends:`, next to the `listen`, `lease` and
-`identities` from Quick start, or in `deploy/config.example.yaml`.
+`identities` from Quick start, or in `deploy/config.example.yaml`. Run on their own they exit 2 with
+`at least one identity is required` — that is the fragment being a fragment, not a mistake in it.
 
 ### endpoints — hosts that already exist
 
@@ -196,12 +214,16 @@ The four entries below are backend fragments: they go under `backends:`, next to
   - name: lab
     provision: endpoints
     endpoints: ["instance-1.example.com:22", "instance-2.example.com:22"]
-    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: strict}
+    ssh: {user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: strict}
 ```
 
 Nothing is provisioned and nothing is destroyed: one endpoint is leased to one identity at a time,
 round-robin over the free ones, and marked free on release. There is no pool, because there is nothing to
 create ahead of demand — `pool_size` only applies to drivers that can.
+
+The instance name you see in the log and in `/metrics` is the endpoint's own `host:port`; only
+`claims` and `workloads` produce names of their own shape (`byre-…`). Nothing is renamed on the way
+through.
 
 Two consequences. The number of endpoints is the number of concurrent identities; past that, `Acquire`
 fails with `no capacity`. And a released endpoint still holds whatever the last identity left in it, so
@@ -218,7 +240,7 @@ cleanup is the host's problem and one identity per endpoint is the only safe def
       image: "<registry>/<image>:<tag>"
       start_command: ["/usr/sbin/sshd", "-D", "-e"]
       ready_timeout: 180s
-    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
+    ssh: {user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
 ```
 
 The instance is a Pod created from an image that runs `sshd` and trusts the pool key. Readiness is
@@ -240,7 +262,7 @@ the least-tested shape (unit tests with a fake client); `claims` is what the rec
       object_kind: "<Kind>"
       endpoint_field: ["status", "sandbox", "serviceFQDN"]
       ready_timeout: 120s
-    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
+    ssh: {user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
 ```
 
 `claims` is an API *shape* — create an object, wait for an address in its status, delete it at the end —
@@ -261,17 +283,21 @@ seconds (ADR-0005). The deployment this was written against uses `SandboxClaim` 
       list: ["/usr/local/bin/list-ci-vms"]
       timeout: 120s
       env: ["CLOUD_PROFILE=ci"]
-    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
+    ssh: {user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
 ```
 
 `acquire` prints exactly one JSON object on stdout —
 `{"id":"vm-17","addr":"192.0.2.17:22","user":"ci","private_key":"/path/key"}` — with `BYRE_IDENTITY` in its
 environment; `user` and `private_key` may be omitted, and then the `ssh` block is the fallback. `release`
-gets `BYRE_INSTANCE_ID` and `BYRE_INSTANCE_ADDR`. `list` is optional and prints a JSON array of the same
-objects: without it a restarted gateway cannot re-adopt this backend's instances, and whatever is left
-running stays running. Readiness is `addr` as printed — implementing the wait is your program's business.
-The full contract, with a worked example script, is in
-[`docs/handbook/backends.md`](docs/handbook/backends.md).
+gets `BYRE_INSTANCE_ID` and `BYRE_INSTANCE_ADDR`. Readiness is `addr` as printed — implementing the wait is
+your program's business.
+
+`list` is what lets a restarted gateway adopt. An instance is adopted when its record carries
+`"annotations":{"byre.io/identity":"<fingerprint>"}`, printed by **both** `acquire` and `list`; an
+instance reported without one is kept and logged (`instance kept at startup`), never destroyed — a
+gateway that cannot attribute an instance may not delete it (ADR-0009). Without `list`, a restart adopts
+nothing and whatever your program left running stays running, outside the gateway's accounting. The full
+contract, with a worked example script, is in [`docs/handbook/backends.md`](docs/handbook/backends.md).
 
 An identity is one client key. `fingerprint` comes from `ssh-keygen -lf key.pub -E sha256`, and
 `SHA256:` plus base64 padding are normalised away, so two spellings of one key cannot become two
@@ -283,11 +309,31 @@ authentication: there is no anonymous access and no per-connection default.
 A container image and a kustomize overlay live in the repo; neither is needed to try the gateway.
 
 ```sh
-make image                                            # byre:<git describe>, non-root, read-only rootfs
-kubectl apply -k deploy/                              # ns, SA, RBAC, ConfigMap, Deployment, Service
-kubectl apply -f deploy/instances-rbac.example.yaml   # separately: that grant is in another namespace
+# 1. build and publish the image — the cluster can only pull from a registry, never from your disk
+make image-push IMAGE_REGISTRY=<registry>/<team>   # pushes <registry>/<team>/byre:<tag>
+docker inspect --format '{{index .RepoDigests 0}}' <registry>/<team>/byre:<tag>   # the digest to pin
+# 2. put that reference into deploy/: what is checked in is a placeholder, not a working default
+#      deploy/deployment.yaml:39              image: <registry>/byre@sha256:<digest>
+#      deploy/kustomization.yaml  (images:)   name:    <registry>/byre@sha256:<digest>
+#                                             newName: <registry>/<team>/byre
+#                                             digest:  sha256:<digest>
+#    kustomize matches the reference as written — `<digest>` is not a digest it can parse — so both
+#    lines have to spell the placeholder the same way.
+# 3. the pool key: the Deployment mounts it as a Secret, and a missing one is not a warning
 kubectl -n byre-system create secret generic byre-pool-key --from-file=id_key=/path/to/key
+# 4. the gateway itself
+kubectl apply -k deploy/                              # ns, SA, RBAC, ConfigMap, Deployment, Service
+# 5. the grant that lives in the instances' namespace — fill in both namespaces first
+INSTANCES_NS=<instances-ns> GATEWAY_NS=byre-system \
+  sed -e "s/__INSTANCES_NS__/$INSTANCES_NS/g" -e "s/__GATEWAY_NS__/$GATEWAY_NS/g" \
+  deploy/instances-rbac.example.yaml | kubectl apply -f -
+kubectl -n byre-system rollout status deploy/byre
 ```
+
+Two ways for that to fail before anything is leased, and neither looks like a configuration problem:
+without step 2 the pod stops in `ImagePullBackOff` (`<registry>/byre@sha256:<digest>` is a placeholder;
+kubelet cannot resolve it), and without step 3 it stops in `CreateContainerConfigError` — the pool-key
+volume is not `optional`.
 
 The split apply is not laziness. `kubectl apply -k deploy/` installs the gateway in its own namespace,
 while the instances it leases live in another, and kustomize's `namespace:` rewrites every object at once —
@@ -321,11 +367,15 @@ identifier SSH already verifies — the public key — and hangs the lease on it
 - **`/healthz` does not mean "I can hand out an instance".** It answers "the process is up" and prints the
   version stamped into the binary. A gateway missing its cross-namespace grant is green, never warms its
   pool, and refuses every checkout with a 403.
-- **`provision: command` without `list` cannot adopt.** Instances it created outlive the process and nobody
-  reaps them. The validator does not reject it, because it is a legal configuration.
+- **`provision: command` adopts only what it can attribute.** A restart adopts the instances `list`
+  reports with `annotations.byre.io/identity` and keeps the rest with a warning — a deliberate leak in
+  place of a destructive cleanup, so an un-annotated lister leaves warm capacity behind rather than
+  destroying live leases. Printing the annotation in `acquire` but not in `list` (or the reverse) gives an
+  instance that is listed but never matched to the identity that reconnects.
 - **No automated end-to-end gate.** The cluster runs in `docs/acceptance/` were executed and recorded by
-  hand; the `kind`-based CI run is a roadmap item, and the image and manifest path is validated by
-  server-side dry-run only.
+  hand. The harness is `BYRE_CFG=config.yaml BYRE_KEY=<client key> test/e2e/run.sh [--ttl-ok]` (or the same
+  through `make e2e CONFIG=… KEY=…`); it asserts against a gateway that is already running, and without
+  those two variables it prints `No target given` and exits 2. The `kind`-based CI run is a roadmap item.
 - **`endpoints` does not survive a restart.** That driver keeps ownership in memory, so a restarted
   gateway round-robins again and a client that reconnects lands on whichever endpoint is next — measured,
   not inferred. `claims` and `workloads` do survive: the identity is written onto the object.
@@ -342,6 +392,7 @@ identifier SSH already verifies — the public key — and hangs the lease on it
 | [handbook/backends.md](docs/handbook/backends.md) | the four provisions in detail: field tables, readiness, failure behaviour, the `command` contract |
 | [handbook/operations.md](docs/handbook/operations.md) | install, RBAC, host-key rotation, metrics, upgrading, symptoms |
 | [handbook/troubleshooting.md](docs/handbook/troubleshooting.md) | what each failure looks like from the client and from the gateway log |
+| [examples/](examples/) | one runnable configuration per shape, plus `examples/local-quickstart/` — the Quick start above as a file you can copy |
 | [roadmap.md](docs/roadmap.md) · [adr/](docs/adr/) | what is absent from v1 and in what order it would arrive; the decisions, with the conditions that would reverse them |
 | [acceptance/](docs/acceptance/) · [docs/README.md](docs/README.md) | what was verified on a real cluster; the index of everything else |
 

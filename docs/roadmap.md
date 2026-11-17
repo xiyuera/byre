@@ -22,7 +22,8 @@ Done: the `endpoints` backend (called `static` until 0.3.0), an end-to-end run w
 (`docs/acceptance/2026-11-17-m5-hardening.md`), and a runbook written from the two defects the cluster
 exposed.
 
-Still open: the container image and `kubectl apply -k` path are validated only by server-side dry-run
+Closed on 2026-11-17: the container image and `kubectl apply -k` path were executed end to end and
+recorded in `acceptance/2026-11-17-deploy.md`. Still open everywhere else they used to be dry-run only
 (no container runtime in the build environment); instance-killed-mid-session and clock-jump injection
 remain untested.
 

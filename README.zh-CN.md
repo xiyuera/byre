@@ -10,8 +10,9 @@ agent 在租约有效期内独占一个实例。
 地址。
 
 > 状态：**0.3.0，1.0 之前**。身份、租约、热池、重启后的接管在真实集群上验证过（`docs/acceptance/`）；四种
-> provision 里只有 `claims` 有集群实测。单副本、没有自动化端到端门禁，镜像与清单部分只做了服务端 dry-run
-> 校验。见 [限制](#限制与已知问题)。
+> provision 里只有 `claims` 有集群实测。单副本，并且没有自动化端到端门禁——集群实测是人工执行记录的。镜像与
+> `kubectl apply -k` 这条路径真跑通过一次（prebuilt 变体），记录在
+> `docs/acceptance/2026-11-17-deploy.md`。见 [限制](#限制与已知问题)。
 
 > 由 `keypod` 改名而来（见 `docs/rename-to-byre.md`）。与任何同名项目无关，未获其背书，也不派生自它们；
 > 这个名字指牛棚，许可证不授予任何商标权。
@@ -31,7 +32,8 @@ agent ──ssh(pubkey)──▶ byre :2222 ──ssh(pool key)──▶ instanc
 空闲超时（`ssh` 配 `ControlPersist` 时是 300s）——重连落在窗口内，拿到同一个实例。
 
 byre 自己不创建容器。它向**后端**要一个实例，拿回一条 `{id, addr, user, key}` 记录，所以"怎么通过 SSH
-够到实例"这部分由四种后端共享；用哪种后端，是
+够到实例"这部分对四种后端都一样；实例从哪来有四种形态——`endpoints`、`workloads`、`claims`、`command`——
+用哪种，是
 [配置](#配置后端的-sshd-从哪来)一节的内容。两个监听、没有数据库、没有 sidecar：`2222` 给 SSH 客户端，
 `8099` 给 `/healthz` 与 `/metrics`。租约表在内存里，Kubernetes 后端的实例身上带一个注明身份的注解，这
 正是重启能活下来的原因——新进程先接管活着的租约，再去预热。
@@ -84,7 +86,6 @@ backends:
     provision: endpoints
     endpoints: ["instance-1.example.com:22", "instance-2.example.com:22"]
     ssh:
-      port: 22
       user: "<remote-user>"
       private_key: /etc/byre/keys/id_key
       host_key_policy: strict
@@ -114,6 +115,10 @@ ssh-keygen -lf ~/.ssh/id_ed25519.pub -E sha256
 rc=0
 ```
 
+`rc=0` 只说明文件自洽，不说明别的：本该填值的地方留着 `<placeholder>`、以及
+`deploy/config.example.yaml` 里那串全零指纹，都会通过——它校验的是形状。它对集群、对实例、对钥匙是否存在
+一无所知。
+
 **4. 启动。**
 
 ```sh
@@ -128,7 +133,7 @@ rc=0
 ```
 
 那条 `WARN` 只在首次启动出现一次，之后不会再有：密钥被写进 `host_key` 并复用。上面这些日志去掉了每行都带的
-`time` 字段。
+`time` 字段。`-listen 127.0.0.1:2223` 可以在这一次运行里覆盖文件里的地址。
 
 **5. 连上去。** 用户名被忽略——决定一切的是密钥——所以 `anything` 和别的写法一样。连两次，然后看网关日志：
 两行的 `instance` 相同。
@@ -154,8 +159,10 @@ curl -s localhost:8099/healthz                  # ok dev (none, unknown)
 curl -s localhost:8099/metrics | grep '^byre_'  # byre_up 1, byre_leases_idle 1, byre_pool_warm{backend="lab"} 0
 ```
 
-没有 `/readyz`。`/healthz` 回答的是"进程活着"，从来不是"我能发实例"。另外 `pool_size` 对 `endpoints`
-无效，因为没有东西可以预热。
+没有 `/readyz`。`/healthz` 回答的是"进程活着"，从来不是"我能发实例"。健康端口 `:8099` 是编进二进制的、
+不可配：同一台机器上的第二个网关会先绑上 SSH 监听，然后打出
+`health endpoint failed: listen tcp :8099: bind: address already in use` 并退出。另外 `pool_size` 对
+`endpoints` 无效，因为没有东西可以预热。
 
 ## 配置：后端的 sshd 从哪来
 
@@ -168,13 +175,21 @@ curl -s localhost:8099/metrics | grep '^byre_'  # byre_up 1, byre_leases_idle 1,
 | `claims` | 通过 claim API 创建对象 | 读写那个 CRD | 你已经在跑 claim 形状的控制器 |
 | `command` | 你写一个程序，byre 调它 | 什么都不需要，进程执行 | 云主机、Incus/LXD、CMDB |
 
-四种共有、并且刻意放在 provision 块之外的字段：`ssh.port`、`ssh.user`、`ssh.private_key`（网关自己的、装
-在实例上的钥匙）、`ssh.host_key_policy`（长命主机用 `strict`，一次性实例用 `accept-new`），以及就绪超时。
+按你手上已有的东西选，一句话一条：已经有一批能 SSH 的机器 → `endpoints`；有集群且有 claim 形状的 CRD 或热池
+→ `claims`；有集群、只有能跑 `sshd` 的镜像 → `workloads`；只能通过 CLI 或 CMDB 拿到 → `command`。同样一张表
+连同各自的失败形态，见 [`docs/handbook/backends.md`](docs/handbook/backends.md) 开头。
+
+四种共有、并且刻意放在 provision 块之外的字段：`ssh.user`、`ssh.private_key`（网关自己的、装在实例上的
+钥匙）、`ssh.host_key_policy`（长命主机用 `strict`，一次性实例用 `accept-new`），以及就绪超时。
 无论哪种形态，"实例信任网关的公钥"这条都得你自己满足——byre 没法替你往 `endpoints` 主机上装，`workloads`
 则要求它烘进镜像里。
 
+`ssh.port` 会被解析、也会做范围校验，但**没有任何 driver 读它**：端口来自 driver 返回的 `addr`，或者
+`endpoints` 里每条 `host:port`。把它写成 22 以外的值不会改变拨号目标。
+
 下面四段是 backend 片段：放在 `backends:` 下，与快速开始里的 `listen`、`lease`、`identities` 并列，或者放进
-`deploy/config.example.yaml`。
+`deploy/config.example.yaml`。单独拿去跑会以 rc=2 报 `at least one identity is required`——那是片段本来就是
+片段，不是它写错了。
 
 ### endpoints——已存在的机器
 
@@ -182,11 +197,14 @@ curl -s localhost:8099/metrics | grep '^byre_'  # byre_up 1, byre_leases_idle 1,
   - name: lab
     provision: endpoints
     endpoints: ["instance-1.example.com:22", "instance-2.example.com:22"]
-    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: strict}
+    ssh: {user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: strict}
 ```
 
 不创建也不销毁：一个端点同一时间租给一个身份，在空闲端点里轮转，释放时标记为空闲。没有池，因为没有东西可以
 提前创建——`pool_size` 只对能创建容量的 driver 有效。
+
+日志与 `/metrics` 里的实例名就是端点自己的 `host:port`；只有 `claims` 与 `workloads` 会给出自己形状的名字
+（`byre-…`），一路上不做任何改名。
 
 两个后果。端点数量就是并发身份的容量上限，超了 `Acquire` 返回 `no capacity`。还有，释放后的端点里还留着上
 一个身份的东西，清理是主机自己的事，所以一个身份一个端点才是唯一安全的默认。见
@@ -202,7 +220,7 @@ curl -s localhost:8099/metrics | grep '^byre_'  # byre_up 1, byre_leases_idle 1,
       image: "<registry>/<image>:<tag>"
       start_command: ["/usr/sbin/sshd", "-D", "-e"]
       ready_timeout: 180s
-    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
+    ssh: {user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
 ```
 
 实例是用一个跑 `sshd`、信任 pool key 的镜像创建出来的 Pod。就绪用 Kubernetes 自己的判据——报 `PodReady`
@@ -224,7 +242,7 @@ curl -s localhost:8099/metrics | grep '^byre_'  # byre_up 1, byre_leases_idle 1,
       object_kind: "<Kind>"
       endpoint_field: ["status", "sandbox", "serviceFQDN"]
       ready_timeout: 120s
-    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
+    ssh: {user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
 ```
 
 `claims` 是一种 API*形状*——创建对象、等 status 里出现地址、结束时删掉——不是内置的某个 CRD，所以 GVK
@@ -244,15 +262,19 @@ curl -s localhost:8099/metrics | grep '^byre_'  # byre_up 1, byre_leases_idle 1,
       list: ["/usr/local/bin/list-ci-vms"]
       timeout: 120s
       env: ["CLOUD_PROFILE=ci"]
-    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
+    ssh: {user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
 ```
 
 `acquire` 在 stdout 上只打印一个 JSON 对象——
 `{"id":"vm-17","addr":"192.0.2.17:22","user":"ci","private_key":"/path/key"}`——环境里有 `BYRE_IDENTITY`；
 `user` 与 `private_key` 可以省略，那时用 `ssh` 块里的值兜底。`release` 拿到 `BYRE_INSTANCE_ID` 与
-`BYRE_INSTANCE_ADDR`。`list` 可选，打印同样对象的 JSON 数组；没有它，重启后的网关无法接管这个后端留下的
-实例，留在外面的就一直留在外面。就绪判据就是打印出来的 `addr`——等待逻辑属于你的程序。完整契约与一份示例
-脚本见 [`docs/handbook/backends.md`](docs/handbook/backends.md)。
+`BYRE_INSTANCE_ADDR`。就绪判据就是打印出来的 `addr`——等待逻辑属于你的程序。
+
+`list` 是重启后**接管**的依据：实例的记录里带 `"annotations":{"byre.io/identity":"<fingerprint>"}` 才会被
+接管，而这个注解必须由 `acquire` 与 `list` **两边都**打印；没有注解的实例会被保留并记一条
+`instance kept at startup`，绝不会被销毁——归不了属的实例，网关无权删（ADR-0009）。不配 `list`，重启就
+什么也接管不到，你的程序留下的实例一直留在外面，只是不在网关的账上。完整契约与一份示例脚本见
+[`docs/handbook/backends.md`](docs/handbook/backends.md)。
 
 一个身份就是一把客户端密钥。`fingerprint` 来自 `ssh-keygen -lf key.pub -E sha256`，`SHA256:` 前缀与
 base64 补位都会被归一化，所以同一把钥匙的两种写法不会变成两个身份。`aliases` 只用于日志标签，从不参与路由。
@@ -263,11 +285,29 @@ base64 补位都会被归一化，所以同一把钥匙的两种写法不会变�
 仓库里有容器镜像和 kustomize overlay；想先试试网关，两个都不需要。
 
 ```sh
-make image                                            # byre:<git describe>，非 root，只读根文件系统
-kubectl apply -k deploy/                              # ns、SA、RBAC、ConfigMap、Deployment、Service
-kubectl apply -f deploy/instances-rbac.example.yaml   # 单独一条：那条授权在另一个 namespace
+# 1. 构建并推送到 registry——集群只能从 registry 拉，拉不到你本机
+make image-push IMAGE_REGISTRY=<registry>/<team>   # 推出 <registry>/<team>/byre:<tag>
+docker inspect --format '{{index .RepoDigests 0}}' <registry>/<team>/byre:<tag>   # 要钉的 digest
+# 2. 把这条引用填进 deploy/：仓库里放的是占位符，不是能跑的默认值
+#      deploy/deployment.yaml:39              image: <registry>/byre@sha256:<digest>
+#      deploy/kustomization.yaml  (images:)   name:    <registry>/byre@sha256:<digest>
+#                                             newName: <registry>/<team>/byre
+#                                             digest:  sha256:<digest>
+#    kustomize 按字面匹配这个引用（`<digest>` 不是它能解析的 digest），所以两处占位符必须写成一样。
+# 3. pool key：Deployment 以 Secret 挂载它，缺了不是警告
 kubectl -n byre-system create secret generic byre-pool-key --from-file=id_key=/path/to/key
+# 4. 网关本体
+kubectl apply -k deploy/                              # ns、SA、RBAC、ConfigMap、Deployment、Service
+# 5. 落在实例所在 namespace 的那条授权——先把两个 namespace 填进去
+INSTANCES_NS=<instances-ns> GATEWAY_NS=byre-system \
+  sed -e "s/__INSTANCES_NS__/$INSTANCES_NS/g" -e "s/__GATEWAY_NS__/$GATEWAY_NS/g" \
+  deploy/instances-rbac.example.yaml | kubectl apply -f -
+kubectl -n byre-system rollout status deploy/byre
 ```
+
+有两条会在租出第一个实例之前就失败，而且看起来都不像配置问题：跳过第 2 步，Pod 停在 `ImagePullBackOff`
+（`<registry>/byre@sha256:<digest>` 是占位符，kubelet 解析不了）；跳过第 3 步，Pod 停在 `CreateContainerConfigError`——
+pool key 那个卷不是 `optional`。
 
 分开 apply 不是偷懒。`kubectl apply -k deploy/` 把网关装进它自己的 namespace，而它租的实例在另一个
 namespace，kustomize 的 `namespace:` 又会一次性改写所有对象——所以那条授权只能单独 apply。漏掉它是这个项目
@@ -296,10 +336,14 @@ namespace，kustomize 的 `namespace:` 又会一次性改写所有对象——�
   两个都没实现。
 - **`/healthz` 不代表"我能发实例"。** 它回答"进程活着"，并打印编进二进制的版本号。缺跨 namespace 授权的
   网关照样是绿的，池从不预热，每次 checkout 都返回 403。
-- **`provision: command` 没有 `list` 就不能接管。** 它创建的实例比进程活得久，而且没人回收。校验器不拒绝
-  这种配置，因为它是合法的。
-- **没有自动化端到端门禁。** `docs/acceptance/` 里的集群跑是人工执行并记录的；基于 `kind` 的 CI 还是
-  roadmap 项，镜像与清单只做了服务端 dry-run 校验。
+- **`provision: command` 只接管得回来的东西。** 重启会接管 `list` 报出来、且带
+  `annotations.byre.io/identity` 的实例，其余保留并告警——这是拿"泄漏"换"不误删"：没有注解的 lister 会留下
+  热容量，而不是销毁在用的租约。只在 `acquire` 或只在 `list` 里打印注解，结果是实例能被列出、却永远匹配不上
+  重连的那个身份。
+- **没有自动化端到端门禁。** `docs/acceptance/` 里的集群跑是人工执行并记录的。执行器是
+  `BYRE_CFG=config.yaml BYRE_KEY=<客户端钥匙> test/e2e/run.sh [--ttl-ok]`（等价写法
+  `make e2e CONFIG=… KEY=…`）；它对着一个已经在跑的网关做断言，缺这两个变量时打印 `No target given` 并以 2
+  退出。基于 `kind` 的 CI 还是 roadmap 项。
 - **`endpoints` 活不过重启。** 这个 driver 把归属放在内存里，所以重启后的网关重新轮转，重连的客户端落到
   下一个端点上——这是实测，不是推断。`claims` 与 `workloads` 能活下来：身份被写在对象上。
 - **`pool_size: 0` 停不掉实例创建。** `ApplyDefaults` 把显式的 0 当作没写，同样地，显式的 `grace: 0s`
@@ -316,7 +360,12 @@ namespace，kustomize 的 `namespace:` 又会一次性改写所有对象——�
 | [handbook/operations.md](docs/handbook/operations.md) | 安装、RBAC、host key 轮换、metrics、升级、症状 |
 | [handbook/troubleshooting.md](docs/handbook/troubleshooting.md) | 每种故障在客户端和网关日志里分别长什么样 |
 | [roadmap.md](docs/roadmap.md) · [adr/](docs/adr/) | v1 明确不做什么、按什么顺序到来；每个决策以及反转它的条件 |
+| [examples/](examples/) | 每种形态一份可跑配置，另有 `examples/local-quickstart/`——把上面的快速开始落成可复制的文件 |
 | [acceptance/](docs/acceptance/) · [docs/README.md](docs/README.md) | 真实集群上验证了什么；以及全部文档的索引 |
+
+只有英文的文档（中文还没来得及翻，`scripts/check-i18n.sh` 会把它们列出来而不是静默跳过）：
+`docs/handbook/{architecture,backends,operations,troubleshooting}.md`、`docs/release.md`、`docs/adr/*`、
+`docs/acceptance/*`、以及 `examples/{static-endpoints,pod-image,kubernetes-sandbox}/README.md`。
 
 ## 依赖
 

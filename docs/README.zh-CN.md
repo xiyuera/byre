@@ -8,9 +8,18 @@
 | 文档 | 回答什么 |
 |---|---|
 | [handbook/architecture.md](handbook/architecture.md) | 各个部件怎么拼起来——身份、租约、池、后端、就绪判据——以及四种看起来显然的修法为什么都不成立 |
-| [handbook/backends.md](handbook/backends.md) | 四种 provision 的细节：每个字段、就绪判据、失败行为，以及怎么写一个 `command` 后端 |
-| [handbook/operations.md](handbook/operations.md) | 怎么跑：首次安装、不在 overlay 里的那条授权、host key 轮换、metrics、升级、卸载 |
+| [handbook/backends.md](handbook/backends.md) | 四种 provision 的细节：该选哪种、每个字段、就绪判据、失败行为，以及 `command` 的契约 |
+| [handbook/operations.md](handbook/operations.md) | 怎么跑：首次安装、不在 overlay 里的那条授权、host key 轮换、metrics、命令行参数、升级、卸载 |
 | [handbook/troubleshooting.md](handbook/troubleshooting.md) | 每种故障在客户端和网关日志里分别长什么样，先查什么 |
+
+## 可直接跑的示例
+
+| 示例 | 形态 | 是什么 |
+|---|---|---|
+| [examples/local-quickstart/](../examples/local-quickstart/README.zh-CN.md) | `endpoints` | README 的 Quick start 落成文件：一台机器，不需要集群 |
+| [examples/static-endpoints/](../examples/static-endpoints/README.md) | `endpoints` | 一组固定的实验机 |
+| [examples/pod-image/](../examples/pod-image/README.md) | `workloads` | 一个最小的 sshd 镜像，以及据此建 Pod 的 backend |
+| [examples/kubernetes-sandbox/](../examples/kubernetes-sandbox/README.md) | `claims` | 一个模板、一个热池，以及从池里领实例的 backend |
 
 ## 决策与记录
 
