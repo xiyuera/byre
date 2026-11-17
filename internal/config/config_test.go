@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,10 +15,19 @@ const goodFP = "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU"
 
 func intPtr(n int) *int { return &n }
 
-func baseConfig() *Config {
+// hostKeyPath is a host_key inside the test's own temp dir. Validate probes write access to the nearest
+// existing ancestor of a host_key that does not exist yet, so a fixture rooted at a path like
+// /var/lib/byre only passes when the test happens to run as root.
+func hostKeyPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "hostkey", "id_ed25519")
+}
+
+func baseConfig(t *testing.T) *Config {
+	t.Helper()
 	return &Config{
 		Listen:  ":2222",
-		HostKey: "/var/lib/byre/hostkey/id_ed25519",
+		HostKey: hostKeyPath(t),
 		Lease: Lease{
 			TTL:      NewDuration(360 * time.Second),
 			Grace:    NewDuration(60 * time.Second),
@@ -38,7 +48,7 @@ func baseConfig() *Config {
 }
 
 func TestValidateAcceptsMinimalConfig(t *testing.T) {
-	c := baseConfig()
+	c := baseConfig(t)
 	c.ApplyDefaults()
 	if err := c.Validate(); err != nil {
 		t.Fatalf("expected valid config, got: %v", err)
@@ -47,7 +57,7 @@ func TestValidateAcceptsMinimalConfig(t *testing.T) {
 
 func TestValidateFillsDefaults(t *testing.T) {
 	c := &Config{
-		HostKey:    "/var/lib/byre/hostkey/id_ed25519",
+		HostKey:    hostKeyPath(t),
 		Backends:   []Backend{{Name: "b", Provision: ProvisionEndpoints, Endpoints: []string{"192.0.2.1:22"}, SSH: SSH{User: "u", PrivateKey: "/k"}}},
 		Identities: []Identity{{Fingerprint: goodFP, Backend: "b"}},
 	}
@@ -69,8 +79,8 @@ func TestValidateFillsDefaults(t *testing.T) {
 // TestApplyDefaultsKeepsExplicitZero is the F7 regression: an explicit `pool_size: 0` is the documented
 // way to run one smoke test without warm pods, and it used to be replaced by the default of 2.
 func TestApplyDefaultsKeepsExplicitZero(t *testing.T) {
-	path := writeTemp(t, `
-host_key: /var/lib/byre/hostkey/id_ed25519
+	path := writeTemp(t, fmt.Sprintf(`
+host_key: %s
 lease:
   ttl: 360s
   grace: 0s
@@ -81,9 +91,9 @@ backends:
     endpoints: ["192.0.2.1:22"]
     ssh: {port: 22, user: u, private_key: /k}
 identities:
-  - fingerprint: "`+goodFP+`"
+  - fingerprint: "%s"
     backend: s
-`)
+`, hostKeyPath(t), goodFP))
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -109,7 +119,7 @@ func TestExplicitZeroIsNotRepaired(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			body := "host_key: /k\n" + tc.body + "\nidentities:\n  - fingerprint: \"" + goodFP + "\"\n    backend: s\n"
+			body := "host_key: " + hostKeyPath(t) + "\n" + tc.body + "\nidentities:\n  - fingerprint: \"" + goodFP + "\"\n    backend: s\n"
 			path := writeTemp(t, body)
 			_, err := Load(path)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -187,7 +197,7 @@ func TestValidateRejects(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			c := baseConfig()
+			c := baseConfig(t)
 			c.ApplyDefaults()
 			tc.mutate(c)
 			if tc.wantSub == "" {
@@ -250,9 +260,9 @@ func writeTemp(t *testing.T, body string) string {
 }
 
 func TestLoadValidFile(t *testing.T) {
-	path := writeTemp(t, `
+	path := writeTemp(t, fmt.Sprintf(`
 listen: ":2222"
-host_key: /var/lib/byre/hostkey/id_ed25519
+host_key: %s
 lease:
   ttl: 360s
   grace: 60s
@@ -273,9 +283,9 @@ backends:
       user: sandbox
       private_key: /keys/pool
 identities:
-  - fingerprint: "`+goodFP+`"
+  - fingerprint: "%s"
     backend: claims
-`)
+`, hostKeyPath(t), goodFP))
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -325,7 +335,7 @@ identities: []
 // exist: "scale the pool to 0, rotate the key, scale it back" was impossible while 0 was rewritten into
 // the default of 2 before validation saw it.
 func TestExplicitZeroPoolSizeSurvivesDefaults(t *testing.T) {
-	c := baseConfig()
+	c := baseConfig(t)
 	c.Lease.PoolSize = intPtr(0)
 	c.ApplyDefaults()
 	if got := c.Lease.PoolSizeValue(); got != 0 {
@@ -336,7 +346,7 @@ func TestExplicitZeroPoolSizeSurvivesDefaults(t *testing.T) {
 	}
 
 	// Absent means the default, and the default is materialised so logs and Validate agree.
-	c2 := baseConfig()
+	c2 := baseConfig(t)
 	c2.Lease.PoolSize = nil
 	c2.ApplyDefaults()
 	if got := c2.Lease.PoolSizeValue(); got != DefaultPoolSize {
@@ -348,9 +358,9 @@ func TestExplicitZeroPoolSizeSurvivesDefaults(t *testing.T) {
 }
 
 func TestLoadKeepsExplicitZeroPoolSize(t *testing.T) {
-	path := writeTemp(t, `
+	path := writeTemp(t, fmt.Sprintf(`
 listen: ":2222"
-host_key: /var/lib/byre/hostkey/id_ed25519
+host_key: %s
 lease:
   pool_size: 0
 backends:
@@ -359,9 +369,9 @@ backends:
     endpoints: ["192.0.2.1:22"]
     ssh: {user: u, private_key: /k}
 identities:
-  - fingerprint: "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU"
+  - fingerprint: "%s"
     backend: b
-`)
+`, hostKeyPath(t), goodFP))
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -372,36 +382,63 @@ identities:
 }
 
 // TestHostKeyPathIsChecked: -check-config has to catch the first-install failure ADR-0006 records — a
-// configured host_key whose directory cannot hold the generated key.
+// configured host_key whose directory cannot hold the generated key. Each case is its own subtest so
+// both environments show which judgement ran.
 func TestHostKeyPathIsChecked(t *testing.T) {
-	ok := baseConfig()
-	ok.HostKey = filepath.Join(t.TempDir(), "id_ed25519")
-	ok.ApplyDefaults()
-	if err := ok.Validate(); err != nil {
-		t.Fatalf("a writable host_key path must validate: %v", err)
-	}
+	t.Run("writable temp dir", func(t *testing.T) {
+		ok := baseConfig(t)
+		ok.HostKey = filepath.Join(t.TempDir(), "id_ed25519")
+		ok.ApplyDefaults()
+		if err := ok.Validate(); err != nil {
+			t.Fatalf("a writable host_key path must validate: %v", err)
+		}
+	})
 
-	bad := baseConfig()
-	bad.HostKey = "/proc/byre/hostkey/id_ed25519"
-	bad.ApplyDefaults()
-	err := bad.Validate()
-	if err == nil || !strings.Contains(err.Error(), "host_key") {
-		t.Fatalf("err = %v, want a host_key violation", err)
-	}
+	t.Run("unwritable temp dir", func(t *testing.T) {
+		// The fixture makes its own directory unwritable instead of borrowing one that happens to be
+		// read-only in a given environment. Mode bits do not restrain uid 0, so under root this case
+		// would pass for the wrong reason: skip it rather than report a green that proves nothing.
+		if os.Geteuid() == 0 {
+			t.Skip("running as root: mode bits do not make a directory unwritable for uid 0")
+		}
+		locked := t.TempDir()
+		if err := os.Chmod(locked, 0o500); err != nil {
+			t.Fatalf("chmod 0500 on the fixture dir: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+		noWrite := baseConfig(t)
+		noWrite.HostKey = filepath.Join(locked, "hostkey", "id_ed25519")
+		noWrite.ApplyDefaults()
+		if err := noWrite.Validate(); err == nil || !strings.Contains(err.Error(), "not writable") {
+			t.Fatalf("err = %v, want a 'not writable' violation", err)
+		}
+	})
 
-	asDir := baseConfig()
-	asDir.HostKey = t.TempDir()
-	asDir.ApplyDefaults()
-	if err := asDir.Validate(); err == nil || !strings.Contains(err.Error(), "directory") {
-		t.Fatalf("err = %v, want 'is a directory'", err)
-	}
+	t.Run("read-only path", func(t *testing.T) {
+		// /proc rejects writes for every uid, root included, so this judgement holds in both.
+		bad := baseConfig(t)
+		bad.HostKey = "/proc/byre/hostkey/id_ed25519"
+		bad.ApplyDefaults()
+		if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "host_key") {
+			t.Fatalf("err = %v, want a host_key violation", err)
+		}
+	})
+
+	t.Run("path is a directory", func(t *testing.T) {
+		asDir := baseConfig(t)
+		asDir.HostKey = t.TempDir()
+		asDir.ApplyDefaults()
+		if err := asDir.Validate(); err == nil || !strings.Contains(err.Error(), "directory") {
+			t.Fatalf("err = %v, want 'is a directory'", err)
+		}
+	})
 }
 
 // TestEmptyHostKeyNeedsTheEphemeralOptIn: ADR-0006 keeps the ephemeral key available for tests, but an
 // empty host_key is no longer something a config file drifts into: it fails validation unless the binary
 // was started with -allow-ephemeral-hostkey, and even then the omission is reported.
 func TestEmptyHostKeyNeedsTheEphemeralOptIn(t *testing.T) {
-	c := baseConfig()
+	c := baseConfig(t)
 	c.HostKey = ""
 	c.ApplyDefaults()
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "host_key is required") {
