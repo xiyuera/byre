@@ -422,6 +422,9 @@ included. Changes go through a pull request with four green checks and one
 approval. The rules, and the two operations that are exempt from them, are in
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+Participation is covered by [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), adapted from the Contributor
+Covenant 2.1.
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).

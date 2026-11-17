@@ -12,6 +12,10 @@
 4. **Fail fast.** A configuration error must stop startup with every violation listed. Silent defaults
    are how "it worked yesterday" bugs start.
 
+Those four are about the code. How contributors treat each other is
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — Contributor Covenant 2.1, with a Chinese summary at the
+end of it.
+
 ## How a change reaches `main`
 
 `main` is protected by the forge, and the protection applies to **every**
