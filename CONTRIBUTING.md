@@ -342,9 +342,71 @@ By making a contribution to this project, I certify that:
     license(s) involved.
 ```
 
-CI rejects a pull request whose commits lack `Signed-off-by:` matching the author. Sign-off is a
-statement that the contribution may be distributed under Apache-2.0 (the licence already grants the
-inbound right in §5); it is the record, not the permission.
+Sign-off is a statement that the contribution may be distributed under Apache-2.0 (the licence
+already grants the inbound right in §5); it is the record, not the permission.
 
-**History:** commits made before the DCO was adopted carry no sign-off and cannot be signed
-retroactively. They are listed in the release notes as pre-DCO.
+### What the check does
+
+CI runs this over every commit a run added:
+
+```sh
+base="${GITHUB_BASE_SHA:-${GITHUB_BEFORE:-HEAD~1}}"
+bad=0
+for c in $(git rev-list "$base..HEAD"); do
+  author="$(git log -1 --format='%ae' "$c")"
+  if ! git log -1 --format='%B' "$c" | grep -qi "^Signed-off-by: .*<$author>"; then
+    echo "missing or mismatched Signed-off-by: $(git log -1 --format='%h %s' "$c")"
+    bad=1
+  fi
+done
+[ "$bad" = 0 ]
+```
+
+A commit passes when its message carries a `Signed-off-by:` line naming the address that same commit
+was authored with. `-s` writes that line from the author identity, so what this mostly catches is not
+a forgotten flag but an identity that answers to nobody: `x <x@x>`, the shared placeholder account
+the first commits used, or a branch whose commits were made under two different addresses. Commit as
+the role account described in [contributing-from-agents.md](docs/contributing-from-agents.md), let
+`-s` write the trailer, and do not override the identity with `-c user.name=` or `-c user.email=`.
+
+The range is what the run added, not the whole history. A pull request run is based on the merge
+target, so it checks the branch's own commits; a push run is based on the previous tip of the branch
+being pushed, so on `main` it checks the push itself.
+
+### Merging
+
+A merge commit is a new commit, so it is checked like any other. That is what the merge button gets
+wrong: the commit it writes is authored by whoever clicked it and carries no `Signed-off-by`, so the
+run for `main` fails even when every commit on the branch was signed. On 2026-11-17, seventeen of
+the eighteen merge commits in `main` failed for exactly this reason.
+
+Land a branch with a merge that signs itself:
+
+```sh
+git switch main
+git merge --no-ff --signoff <branch>
+git push
+```
+
+Merging through the forge works only if the message carries a `Signed-off-by:` line naming the
+author the forge is about to write as the commit's author; the default
+`Merge pull request #N from <branch>` names nobody and signs nothing.
+
+### Before the policy
+
+Sign-off became policy in `94d5b52`, where the licence and NOTICE files went in. The commits before
+it were authored under a shared placeholder identity and stay unsigned. A sign-off is a statement
+the author makes, so it cannot be made on their behalf now, and re-signing them would rewrite every
+hash below that point — the published tags, the release assets and the anchors in earlier
+verification records all refer to the old ones. A build from before the policy is recognisable from
+the `commit` recorded in its `build-info.txt`.
+
+Those commits are only harmless while a run does not reach them. A branch that merges `main` into it
+pulls the unsigned history into the range and fails, so rebase onto the merge target instead, and
+check what a pull request will see before pushing:
+
+```sh
+git rev-list --count "$(git merge-base HEAD origin/main)"..HEAD
+```
+
+Put any other range in place of `$base..HEAD` in the check above to see what the gate says about it.
