@@ -321,8 +321,25 @@ func TestForeignBackendRefusedAfterLease(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer c.Close()
-	if e := h.manager.Lookup(h.identity); e == nil || e.Backend != "lab" {
-		t.Fatalf("lease not recorded: %+v", e)
+	if e := waitForLease(t, h, 2*time.Second); e.Backend != "lab" {
+		t.Fatalf("lease recorded against backend %q, want lab", e.Backend)
+	}
+}
+
+// waitForLease polls until the front end has recorded a lease for the allowed identity.
+// The lease is written by the server goroutine after it finishes the handshake, so a client's
+// Dial returning first is expected: reading the map straight after Dial is a race, not a defect.
+func waitForLease(t *testing.T, h *harness, timeout time.Duration) *lease.Entry {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if e := h.manager.Lookup(h.identity); e != nil {
+			return e
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no lease recorded for the allowed key within %s", timeout)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
