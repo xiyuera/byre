@@ -37,13 +37,6 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
 
 ## [0.3.1] - 2026-11-17
 
-### Added
-
-- Lease and front-end tests that actually run concurrently (`-race` previously had no concurrent code
-  path to look at), plus regressions for each item above.
-- `byre_instances_discarded` metric; `reason` on the `lease released` log line.
-- `docs/adr/0012`: lease-table locking and the `pending`/`leased`/`draining` phases.
-
 ### Fixed
 
 - **A slow backend call no longer freezes the gateway.** `Acquire` held the lease table's mutex across
@@ -87,38 +80,169 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
   port, so the second request looked like a duplicate and `cancel-tcpip-forward` could never match.
 - `known_hosts` appends are verified by reading the line back and serialised with a file lock.
 
+### Added
+
+- Lease and front-end tests that actually run concurrently (`-race` previously had no concurrent code
+  path to look at), plus regressions for each item above.
+- `byre_instances_discarded` metric; `reason` on the `lease released` log line.
+- `docs/adr/0012`: lease-table locking and the `pending`/`leased`/`draining` phases.
+
+### Changed
+
+- `docs/architecture.md` and `docs/operations.md` moved to `docs/handbook/`, and the documentation index
+  now separates the handbook from decisions and records. The runbook's log examples were rewritten to the
+  lines the binary actually emits.
+
 ## [0.3.0] - 2026-11-17
 
-The configuration schema now says what a backend *does* rather than naming the product it happens to
-be (ADR-0007). **Breaking for existing installations:** no 0.2.x configuration file loads unchanged.
+The configuration schema now says what a backend *does*, instead of naming the product it happens to
+be (ADR-0007). For an existing installation this is breaking: no 0.2.x configuration file loads
+unchanged.
 
 ### Changed (breaking)
 
-- `backend.type` is gone, replaced by `backend.provision` with four values: `claims`, `workloads`,
-  `endpoints`, `command`. A file that still says `type` fails with a sentence, not a schema error.
-- `provider.kind` is gone; `provider.claim_resource` → `provider.resource`,
+- `backend.type` is gone, replaced by `backend.provision` with four values: `claims` (a controller
+  hands one over), `workloads` (we create the pod), `endpoints` (a fixed list of existing hosts) and
+  `command` (a program does it). A file that still says `type` fails with a sentence rather than a
+  schema error: `backend.type was replaced by backend.provision (claims|workloads|endpoints|command);
+  the value "kubernetes" is not used`.
+- `provider.kind` is gone, and so is `backend.type`. 0.2.x needed both: `type: kubernetes` +
+  `provider.kind: sandbox-claim` → `provision: claims`; `type: kubernetes` + `provider.kind: pod` →
+  `provision: workloads`; `type: static` (no `provider` block) → `provision: endpoints`.
+- Two claim fields are renamed: `provider.claim_resource` → `provider.resource`, and
   `provider.claim_kind` → `provider.object_kind`.
-- The `ssh` block means the same thing under every provision; readiness lives in
-  `provider.ready_timeout`.
+- The `ssh` block now means the same thing under every provision, and readiness lives in one place
+  (`provider.ready_timeout`) instead of being described per kind.
 
-See [CHANGELOG.md](CHANGELOG.md) for the
-whole-set migration snippet.
+Old → new, whole backend:
 
-### Also in this tag
+```yaml
+# 0.2.x
+backends:
+  - name: k8s-claims
+    type: kubernetes
+    namespace: "<namespace>"
+    provider:
+      kind: sandbox-claim
+      template: "<template-name>"
+      api_group: "<api-group>"
+      api_version: "<api-version>"
+      claim_resource: "<plural-resource>"
+      claim_kind: "<Kind>"
+    ssh: { port: 22, user: "<remote-user>", private_key: "/etc/byre/keys/id_key" }
 
-The tag was re-cut onto the current `main` before publication, so the assets here are built from
-tag `v0.3.0`, which contains the work merged after the first cut:
+# 0.3.0
+backends:
+  - name: k8s-claims
+    provision: claims
+    namespace: "<namespace>"
+    provider:
+      template: "<template-name>"
+      api_group: "<api-group>"
+      api_version: "<api-version>"
+      resource: "<plural-resource>"
+      object_kind: "<Kind>"
+    ssh: { port: 22, user: "<remote-user>", private_key: "/etc/byre/keys/id_key" }
+```
 
-- **The `command` backend adopts what it left running.** A gateway restart no longer destroys instances
-  an agent is still using: the driver lists what it owns, and only what it can prove stale is removed.
-- **A lease is invalid the moment its instance is gone** — no more forwarding to an address that no
-  longer exists.
+The `static` backend had no `provider` block at all, so its migration is a separate edit:
+
+```yaml
+# 0.2.x
+backends:
+  - name: lab
+    type: static
+    endpoints: ["192.0.2.11:22", "192.0.2.12:22"]
+    ssh: { port: 22, user: "<remote-user>", private_key: "/etc/byre/keys/id_key" }
+
+# 0.3.0
+backends:
+  - name: lab
+    provision: endpoints
+    endpoints: ["192.0.2.11:22", "192.0.2.12:22"]
+    ssh: { port: 22, user: "<remote-user>", private_key: "/etc/byre/keys/id_key" }
+```
+
+The upgrade is the rename itself; nothing changed in what the gateway does at runtime. Run
+`byre -check-config -config <file>` with the new binary before rolling it: the four provisions are
+validated without contacting a cluster.
+
+### Added
+
+- `provision: command`, the escape hatch: an external program provisions the instance and prints one
+  JSON object per acquire (`{"id","addr","user?","private_key?"}`). An optional `list` command lets a
+  restarted gateway adopt what it left running; without it, orphans from that backend are the
+  operator's to clean up, and `deploy/config.example.yaml` says so in a comment.
+- `deploy/config.example.yaml` now shows all four provisions, each with only the fields it needs.
+- `docs/handbook/backends.md`: field tables for the four provisions, the shared `ssh` block, the
+  readiness rule per shape, failure behaviour, and the `command` contract with a worked script.
+- `docs/handbook/troubleshooting.md`: each symptom with the log line that identifies it, the measured
+  reclaim clock, and what `-check-config` exit 2 does and does not mean.
+- Two facts that were previously discovered the hard way, now documented and measured: `endpoints` does
+  not survive a gateway restart (its ownership is in memory, so the round-robin starts over), and `~` in
+  `ssh.private_key` is not expanded — `-check-config` passes and the first dial fails.
+
+### Changed
+
+- The README now opens with what byre is, a five-minute Quick start that runs on one machine, and a table
+  of where the SSH backends come from — the design argument that used to fill the file moved into
+  `docs/handbook/architecture.md` §7. No code changed.
+- `docs/architecture.md` and `docs/operations.md` moved to `docs/handbook/`, and the documentation index
+  now separates the handbook from decisions and records.
+- The maintenance rules in `CONTRIBUTING.md` point at the handbook, and so does the comment in
+  `deploy/instances-rbac.example.yaml`.
+
+### Fixed
+
+- `-check-config` no longer needs cluster credentials. It validates the provisioning configuration and
+  builds the drivers without API clients, so the shipped example returns 0 on a workstation that has
+  never seen a cluster (it used to exit 2 with "unable to load in-cluster configuration", which made
+  the documented pre-flight check unusable outside the cluster).
+- The placeholder fingerprint in `deploy/config.example.yaml` was not valid base64, so the example the
+  project ships failed its own validation.
+- Error text and two tests still said `provider.kind` and `claim_resource`/`claim_kind`.
+- Three files arrived unformatted; `make lint` (gofmt) is green again. (The commit that introduced
+  them no longer exists after the history rewrite.)
+- **The `command` backend adopts what it left running.** A gateway restart no longer
+  destroys instances an agent is still using: the driver lists what it owns, and only what it
+  can prove stale is removed.
+- **A lease is invalid the moment its instance is gone** — no more forwarding to an address
+  that no longer exists.
 - **`/readyz` exists** and a truncated SSH banner is treated as a failure rather than a banner.
-- README rewritten: what byre is, a five-minute Quick start, where the SSH backends come from, and the
-  design argument moved to `docs/handbook/architecture.md`. Chinese translation follows section by
-  section; `docs/handbook/` gains `backends.md` and `troubleshooting.md`.
-- Documentation no longer carries this cluster's addresses; the registry section describes the two
-  tiers without naming hosts.
+
+### Documentation
+
+- `README.md` is rewritten to argue the design instead of announcing it: the connection pattern that
+  breaks per-connection allocation, the four repairs that look obvious, the three invariants with the
+  commands that check them, what the lease costs, and what is known to be wrong. `README.zh-CN.md`
+  follows it section for section.
+- `docs/architecture.md`, `docs/operations.md`, `docs/roadmap.md`, `docs/release.md`,
+  `docs/integrations/agent-runtime.md`, `examples/`, `deploy/rbac.yaml`, `.gitea/ISSUE_TEMPLATE/`
+  and `CONTRIBUTING.md` use the provision vocabulary. The old words now appear only where they are
+  deliberately kept: this file's migration notes, ADR-0003 (marked as superseded on the schema, with a
+  pointer to ADR-0007), ADR-0007 itself, and the acceptance logs.
+- README rewritten: what byre is, a five-minute Quick start, where the SSH backends come
+  from, and the design argument moved to `docs/handbook/architecture.md`. Chinese translation
+  follows section by section; `docs/handbook/` gains `backends.md` and `troubleshooting.md`.
+- Documentation no longer carries this cluster's addresses; the registry section describes
+  the two tiers without naming hosts.
+
+### Build
+
+- A release can now be rebuilt byte for byte from its own assets. The stamped date is the commit date in
+  UTC, read once and shared by both architectures; it used to be `date -u` evaluated inside the
+  per-architecture loop, so the arm64 and amd64 binaries of one tag were stamped seconds apart and the
+  pair could not both match a rebuild.
+- `build-info.txt` records what is needed to reproduce the bytes: version, full commit, tag, build date,
+  the exact `ldflags` string, the `GOOS`/`GOARCH` of every asset, the Go toolchain, and the digest of the
+  job image. It also carries a `reproduce=` line with the command to run.
+- The release job names the toolchain it built with (`go1.23.12` in `library/ci-go:1.23`, digest
+  `sha256:4066…`) and fails rather than publishing when the image's Go differs from that pin. The 0.2.0
+  assets were built by go1.23.4 on a machine that was not this pipeline, which is why they cannot be
+  reproduced from this source.
+- `SHA256SUMS` now covers `build-info.txt` as well as the binaries. It cannot cover itself.
+- The build lives in `make dist`, which the workflow calls: what the pipeline does and what a person runs
+  locally are the same command.
 
 ## [0.2.0] - 2026-11-17
 
