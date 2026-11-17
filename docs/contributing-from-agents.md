@@ -6,11 +6,13 @@ successor, `byre contributors <noreply@example.com>`. Those identities are hones
 a change and useless about *who*: the log cannot tell a review from an implementation, and a mistake
 cannot be routed back to the role that made it.
 
-Of the 106 commits since the sign-off policy, 47 carry the owner account
-(`xiyuera_hermes <xiyuera@gmail.com>`), 37 `_eng`, 8 `_ops`, 13 `xiyuera <admin@example.invalid>` and 1
-the old placeholder — `git log --format='%an|%ae' 94d5b52..origin/main | sort | uniq -c` reproduces
-that line at any point in the history. The role accounts are what makes the log readable and a sign-off mean something: the
-trailer has to name the account that made the change (see [CONTRIBUTING](../CONTRIBUTING.md)).
+Most commits since the sign-off policy carry the owner account
+(`xiyuera_hermes <xiyuera@gmail.com>`), then `_eng` and `_ops`, with a handful of
+`xiyuera <admin@example.invalid>` and the old placeholder —
+`git log --format='%an|%ae' 94d5b52..origin/main | sort | uniq -c` reproduces the split at any
+point in the history, and the counts move as commits land. No sign-off can name an account outside that list: the gate compares the trailer's
+address with the commit's own author address, so the account has to be one a maintainer
+can look up (see [CONTRIBUTING](../CONTRIBUTING.md)).
 
 Two gaps are still open rather than historical. The owner account is not in the table above, although it
 is the most frequent author since the policy — it does release, compliance and cross-role work, so it has
