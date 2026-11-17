@@ -214,9 +214,12 @@ back to `proxy.golang.org`, which in this cluster intermittently returns `EOF`
 part-way through the larger module zips:
 
 ```
+internal/backend/kubernetes.go:15:2: k8s.io/api@v0.31.4:
+  Get "https://proxy.golang.org/k8s.io/api/@v/v0.31.4.zip": EOF
 internal/backend/kubernetes.go:24:2: k8s.io/client-go@v0.31.4:
   Get "https://proxy.golang.org/k8s.io/client-go/@v/v0.31.4.zip": EOF
-... the same for apimachinery, yaml.v3 and x/crypto (8 lines in total)
+... 19 such lines over 5 modules: k8s.io/api (1), apimachinery (8),
+    client-go (7), gopkg.in/yaml.v3 (1), golang.org/x/crypto (2)
 ```
 
 That is a network failure, not your change: the same commit has passed and failed
