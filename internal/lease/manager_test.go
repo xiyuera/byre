@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"keypod/internal/backend"
+	"byre/internal/backend"
 )
 
 type fakeBackend struct {

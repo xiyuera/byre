@@ -18,8 +18,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"keypod/internal/backend"
-	"keypod/internal/lease"
+	"byre/internal/backend"
+	"byre/internal/lease"
 )
 
 // ---------------------------------------------------------------- fake target instance

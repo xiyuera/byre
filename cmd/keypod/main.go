@@ -14,11 +14,11 @@ import (
 	"syscall"
 	"time"
 
-	"keypod/internal/backend"
-	"keypod/internal/config"
-	"keypod/internal/lease"
-	"keypod/internal/sshfront"
-	"keypod/internal/version"
+	"byre/internal/backend"
+	"byre/internal/config"
+	"byre/internal/lease"
+	"byre/internal/sshfront"
+	"byre/internal/version"
 )
 
 func main() {

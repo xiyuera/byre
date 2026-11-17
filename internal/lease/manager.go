@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"keypod/internal/backend"
+	"byre/internal/backend"
 )
 
 // Entry is one live lease.

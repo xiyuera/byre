@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"keypod/internal/backend"
+	"byre/internal/backend"
 )
 
 func waitFor(t *testing.T, what string, cond func() bool) {

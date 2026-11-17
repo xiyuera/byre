@@ -23,14 +23,14 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"keypod/internal/backend"
-	"keypod/internal/lease"
+	"byre/internal/backend"
+	"byre/internal/lease"
 )
 
 // Permission extension keys carried on an authenticated connection.
 const (
-	ExtIdentity = "keypod/identity"
-	ExtBackend  = "keypod/backend"
+	ExtIdentity = "byre/identity"
+	ExtBackend  = "byre/backend"
 )
 
 // Identity is one allowed client, resolved from configuration.

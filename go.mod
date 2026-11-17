@@ -1,4 +1,4 @@
-module keypod
+module byre
 
 go 1.23
 

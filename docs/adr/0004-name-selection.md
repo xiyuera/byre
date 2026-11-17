@@ -1,6 +1,7 @@
 # ADR-0004 — Choosing the name
 
-- Status: **accepted, contested** — see "Correction" at the end
+- Status: **superseded** — the name became `cranage`; see `docs/rename-to-cranage.md`
+  (the correction below is kept for its reasoning, not because the name survived it)
 - Date: 2026-11-17
 - Deciders: maintainers
 

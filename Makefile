@@ -6,9 +6,9 @@ COMMIT     ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 LDFLAGS := -s -w \
-	-X keypod/internal/version.Version=$(VERSION) \
-	-X keypod/internal/version.Commit=$(COMMIT) \
-	-X keypod/internal/version.BuildDate=$(BUILD_DATE)
+	-X byre/internal/version.Version=$(VERSION) \
+	-X byre/internal/version.Commit=$(COMMIT) \
+	-X byre/internal/version.BuildDate=$(BUILD_DATE)
 
 .PHONY: all build test test-race lint fmt vet tidy clean e2e check-config render image image-push help
 

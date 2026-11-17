@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"keypod/internal/backend"
+	"byre/internal/backend"
 )
 
 // Pooler is implemented by backends that can create an instance *before* an identity asks for it.
