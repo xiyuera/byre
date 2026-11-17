@@ -20,7 +20,8 @@ to before it.
 | `v0.2.0` | `b1e5eccdcf5b86579855bd0aecadbdcf0082332d` | `0ee8c66a055ae16a88dcb7e8c01f53e415b7e4fb` |
 | `v0.3.0` | `04a0712b0b661b226320d420845c5e848544e37e` | `c1727d39a3d72c0ef2582008a41eaa8e3e081ea3` |
 | `v0.3.1` | `8167e8e35848d3692d982d955b744602d28aad15` | `76489ee738eac8aed3af3f90257d2fd5b98fcbbd` |
-| `main` | — | `d4b1ff4a7337bfb8d0d2672117889446197cf1dd` |
+| `v0.3.2` | `6aaff3cf8dbf04341d02c0dc54d5be8198105690` | `a5380319a752a515c2b3cef47d25f2aa3c0eb720` |
+| `main` | — | `a5380319a752a515c2b3cef47d25f2aa3c0eb720` | `main` moves; this row is a snapshot at `v0.3.2`. Read the current value with `git rev-parse origin/main`, never from this table |
 
 ## Published hashes that no longer exist
 
