@@ -270,11 +270,11 @@ curl -s localhost:8099/metrics | grep '^byre_'  # byre_up 1, byre_leases_idle 1,
 `user` 与 `private_key` 可以省略，那时用 `ssh` 块里的值兜底。`release` 拿到 `BYRE_INSTANCE_ID` 与
 `BYRE_INSTANCE_ADDR`。就绪判据就是打印出来的 `addr`——等待逻辑属于你的程序。
 
-`list` 是目前唯一应当留空的字段：它在启动时被调用一次，而它报出来的每个实例都会被**释放**而不是接管——
-command 实例身上没有身份注解，管理器把列出来的东西当作上一个进程留下的陈旧容量。在语义改掉之前别配
-`command.list`；不配的话，你的程序留下的实例就一直留在外面，只是不在网关的账上。完整契约与一份示例脚本见
-[`docs/handbook/backends.md`](docs/handbook/backends.md)。完整契约与一份示例
-脚本见 [`docs/handbook/backends.md`](docs/handbook/backends.md)。
+`list` 是重启后**接管**的依据：实例的记录里带 `"annotations":{"byre.io/identity":"<fingerprint>"}` 才会被
+接管，而这个注解必须由 `acquire` 与 `list` **两边都**打印；没有注解的实例会被保留并记一条
+`instance kept at startup`，绝不会被销毁——归不了属的实例，网关无权删（ADR-0009）。不配 `list`，重启就
+什么也接管不到，你的程序留下的实例一直留在外面，只是不在网关的账上。完整契约与一份示例脚本见
+[`docs/handbook/backends.md`](docs/handbook/backends.md)。
 
 一个身份就是一把客户端密钥。`fingerprint` 来自 `ssh-keygen -lf key.pub -E sha256`，`SHA256:` 前缀与
 base64 补位都会被归一化，所以同一把钥匙的两种写法不会变成两个身份。`aliases` 只用于日志标签，从不参与路由。
@@ -286,10 +286,14 @@ base64 补位都会被归一化，所以同一把钥匙的两种写法不会变�
 
 ```sh
 # 1. 构建并推送到 registry——集群只能从 registry 拉，拉不到你本机
-make image                                                       # byre:<git describe>
-make image-push IMAGE_REGISTRY=<registry>/<team>                 # <registry>/<team>/byre:<git describe>
-# 2. 把 overlay 指过去；仓库里的 kustomization 渲染出来是裸的 `byre:dev`
-cd deploy && kustomize edit set image byre=<registry>/<team>/byre:<tag> && cd ..
+make image-push IMAGE_REGISTRY=<registry>/<team>   # 推出 <registry>/<team>/byre:<tag>
+docker inspect --format '{{index .RepoDigests 0}}' <registry>/<team>/byre:<tag>   # 要钉的 digest
+# 2. 把这条引用填进 deploy/：仓库里放的是占位符，不是能跑的默认值
+#      deploy/deployment.yaml:39              image: <registry>/byre@sha256:<digest>
+#      deploy/kustomization.yaml  (images:)   name:    <registry>/byre@sha256:<digest>
+#                                             newName: <registry>/<team>/byre
+#                                             digest:  sha256:<digest>
+#    kustomize 按字面匹配这个引用（`<digest>` 不是它能解析的 digest），所以两处占位符必须写成一样。
 # 3. pool key：Deployment 以 Secret 挂载它，缺了不是警告
 kubectl -n byre-system create secret generic byre-pool-key --from-file=id_key=/path/to/key
 # 4. 网关本体
@@ -302,7 +306,7 @@ kubectl -n byre-system rollout status deploy/byre
 ```
 
 有两条会在租出第一个实例之前就失败，而且看起来都不像配置问题：跳过第 2 步，Pod 停在 `ImagePullBackOff`
-（裸 `byre:dev` 会被当成 Docker Hub 上的镜像）；跳过第 3 步，Pod 停在 `CreateContainerConfigError`——
+（`<registry>/byre@sha256:<digest>` 是占位符，kubelet 解析不了）；跳过第 3 步，Pod 停在 `CreateContainerConfigError`——
 pool key 那个卷不是 `optional`。
 
 分开 apply 不是偷懒。`kubectl apply -k deploy/` 把网关装进它自己的 namespace，而它租的实例在另一个
@@ -332,9 +336,10 @@ namespace，kustomize 的 `namespace:` 又会一次性改写所有对象——�
   两个都没实现。
 - **`/healthz` 不代表"我能发实例"。** 它回答"进程活着"，并打印编进二进制的版本号。缺跨 namespace 授权的
   网关照样是绿的，池从不预热，每次 checkout 都返回 403。
-- **`provision: command` 目前谁也接管不了。** `list` 在启动时会被调用，但它报出来的实例会被释放（那些实例
-  没有身份注解），所以一个列出自有库存的 command 后端，重启时等于把它们销毁。别配 `command.list`；这样你的
-  程序创建的实例会比网关活得久、也没人回收，并且校验器不会拒绝——它是合法配置。
+- **`provision: command` 只接管得回来的东西。** 重启会接管 `list` 报出来、且带
+  `annotations.byre.io/identity` 的实例，其余保留并告警——这是拿"泄漏"换"不误删"：没有注解的 lister 会留下
+  热容量，而不是销毁在用的租约。只在 `acquire` 或只在 `list` 里打印注解，结果是实例能被列出、却永远匹配不上
+  重连的那个身份。
 - **没有自动化端到端门禁。** `docs/acceptance/` 里的集群跑是人工执行并记录的。执行器是
   `BYRE_CFG=config.yaml BYRE_KEY=<客户端钥匙> test/e2e/run.sh [--ttl-ok]`（等价写法
   `make e2e CONFIG=… KEY=…`）；它对着一个已经在跑的网关做断言，缺这两个变量时打印 `No target given` 并以 2

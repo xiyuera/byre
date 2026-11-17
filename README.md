@@ -292,12 +292,12 @@ environment; `user` and `private_key` may be omitted, and then the `ssh` block i
 gets `BYRE_INSTANCE_ID` and `BYRE_INSTANCE_ADDR`. Readiness is `addr` as printed — implementing the wait is
 your program's business.
 
-`list` is the one field to leave out today. It is called once at startup, and every instance it reports is
-**released**, not adopted: a command instance carries no identity annotation, so the manager treats what it
-finds as stale capacity from a previous process. Do not configure `command.list` until that changes (the
-issue is tracked with the adoption work); without it, whatever your program left running simply stays
-running, outside the gateway's accounting. The full contract, with a worked example script, is in
-[`docs/handbook/backends.md`](docs/handbook/backends.md).
+`list` is what lets a restarted gateway adopt. An instance is adopted when its record carries
+`"annotations":{"byre.io/identity":"<fingerprint>"}`, printed by **both** `acquire` and `list`; an
+instance reported without one is kept and logged (`instance kept at startup`), never destroyed — a
+gateway that cannot attribute an instance may not delete it (ADR-0009). Without `list`, a restart adopts
+nothing and whatever your program left running stays running, outside the gateway's accounting. The full
+contract, with a worked example script, is in [`docs/handbook/backends.md`](docs/handbook/backends.md).
 
 An identity is one client key. `fingerprint` comes from `ssh-keygen -lf key.pub -E sha256`, and
 `SHA256:` plus base64 padding are normalised away, so two spellings of one key cannot become two
@@ -310,10 +310,15 @@ A container image and a kustomize overlay live in the repo; neither is needed to
 
 ```sh
 # 1. build and publish the image — the cluster can only pull from a registry, never from your disk
-make image                                                       # byre:<git describe>
-make image-push IMAGE_REGISTRY=<registry>/<team>                 # <registry>/<team>/byre:<git describe>
-# 2. point the overlay at it; the checked-in kustomization renders the bare name `byre:dev`
-cd deploy && kustomize edit set image byre=<registry>/<team>/byre:<tag> && cd ..
+make image-push IMAGE_REGISTRY=<registry>/<team>   # pushes <registry>/<team>/byre:<tag>
+docker inspect --format '{{index .RepoDigests 0}}' <registry>/<team>/byre:<tag>   # the digest to pin
+# 2. put that reference into deploy/: what is checked in is a placeholder, not a working default
+#      deploy/deployment.yaml:39              image: <registry>/byre@sha256:<digest>
+#      deploy/kustomization.yaml  (images:)   name:    <registry>/byre@sha256:<digest>
+#                                             newName: <registry>/<team>/byre
+#                                             digest:  sha256:<digest>
+#    kustomize matches the reference as written — `<digest>` is not a digest it can parse — so both
+#    lines have to spell the placeholder the same way.
 # 3. the pool key: the Deployment mounts it as a Secret, and a missing one is not a warning
 kubectl -n byre-system create secret generic byre-pool-key --from-file=id_key=/path/to/key
 # 4. the gateway itself
@@ -326,8 +331,9 @@ kubectl -n byre-system rollout status deploy/byre
 ```
 
 Two ways for that to fail before anything is leased, and neither looks like a configuration problem:
-without step 2 the pod stops in `ImagePullBackOff` (a bare `byre:dev` is resolved against Docker Hub),
-and without step 3 it stops in `CreateContainerConfigError` — the pool-key volume is not `optional`.
+without step 2 the pod stops in `ImagePullBackOff` (`<registry>/byre@sha256:<digest>` is a placeholder;
+kubelet cannot resolve it), and without step 3 it stops in `CreateContainerConfigError` — the pool-key
+volume is not `optional`.
 
 The split apply is not laziness. `kubectl apply -k deploy/` installs the gateway in its own namespace,
 while the instances it leases live in another, and kustomize's `namespace:` rewrites every object at once —
@@ -361,11 +367,11 @@ identifier SSH already verifies — the public key — and hangs the lease on it
 - **`/healthz` does not mean "I can hand out an instance".** It answers "the process is up" and prints the
   version stamped into the binary. A gateway missing its cross-namespace grant is green, never warms its
   pool, and refuses every checkout with a 403.
-- **`provision: command` cannot adopt anything yet.** `list` is called at startup, but what it reports is
-  released (those instances carry no identity annotation), so a `command` backend that lists its inventory
-  has it destroyed on the next restart. Leave `command.list` out; instances your program created then
-  outlive the gateway and nobody reaps them, which the validator does not reject because it is a legal
-  configuration.
+- **`provision: command` adopts only what it can attribute.** A restart adopts the instances `list`
+  reports with `annotations.byre.io/identity` and keeps the rest with a warning — a deliberate leak in
+  place of a destructive cleanup, so an un-annotated lister leaves warm capacity behind rather than
+  destroying live leases. Printing the annotation in `acquire` but not in `list` (or the reverse) gives an
+  instance that is listed but never matched to the identity that reconnects.
 - **No automated end-to-end gate.** The cluster runs in `docs/acceptance/` were executed and recorded by
   hand. The harness is `BYRE_CFG=config.yaml BYRE_KEY=<client key> test/e2e/run.sh [--ttl-ok]` (or the same
   through `make e2e CONFIG=… KEY=…`); it asserts against a gateway that is already running, and without

@@ -17,7 +17,7 @@ in its fields.
 | `endpoints` | no — ownership is in memory | no (`Create` not implemented) | no | yes |
 | `workloads` | yes — identity annotation on the pod | yes | yes (create/delete/patch pods) | unit tests with a fake client |
 | `claims` | yes — identity annotation on the object | yes | yes (the configured GVK) | yes (the recorded run) |
-| `command` | not yet — see `command.list` below | no | no | unit tests |
+| `command` | yes — when `list` reports `annotations.byre.io/identity` | no | no | unit tests |
 
 ## The block
 
@@ -185,7 +185,7 @@ your config, not in this binary.
 |---|---|---|
 | `command.acquire` | yes | argv, not a shell string — no globbing, no pipes, no `$VAR` |
 | `command.release` | no | argv; without it, release is a logged no-op |
-| `command.list` | no | argv; **leave it out today** — what it reports is released at startup (see below) |
+| `command.list` | no | argv; a restart adopts the entries that carry `annotations.byre.io/identity` and keeps the rest (see below) |
 | `command.timeout` | no | 120s per invocation; bounds the program, not its children |
 | `command.env` | no | `KEY=VALUE` **appended** to the inherited environment, never replacing it |
 
@@ -206,6 +206,7 @@ on stdout is fatal: `acquire printed 58 bytes that are not one JSON object: inva
 | `addr` | yes | `host:port` the gateway dials |
 | `user` | no | falls back to `ssh.user` (`command.go:104`) |
 | `private_key` | no | falls back to `ssh.private_key` (`command.go:105`) |
+| `annotations` | no | durable hints, the identity binding among them; must appear in `acquire` **and** `list` for adoption to match (`command.go:106-126`) |
 
 `id` and `addr` are checked after decoding: an empty `id` or `addr` fails the acquire with
 `returned an unusable instance: Addr is empty` (`internal/backend/backend.go:35-45`). The `ssh.user` /
@@ -236,13 +237,22 @@ a script ending in `sleep 4 & sleep 4` was waited on for 4s, while the same scri
 was cut at 2s. If your provisioner spawns helpers, make it `exec` its real work or `wait` on its own
 children.
 
-**`list` currently destroys what it reports.** At startup the manager lists every driver, and an instance
-without a `byre.io/identity` annotation is treated as stale capacity from a previous process and
-**released** (`internal/lease/manager.go:244-250`). A `command` record has no annotation field at all
-(`command.go:93-98`), so every instance a lister reports is destroyed — measured: a lister reporting
-`vm-adopted` produced `BYRE_INSTANCE_ID=vm-adopted` in the release program within the same startup. Until
-adoption for `command` lands, do not configure `list`; instances your program creates then outlive the
-gateway, which is the lesser evil.
+**`list` is how a restart adopts, and what it cannot attribute it keeps.** `Manager.Adopt` runs before
+the pool warms: an instance whose record carries `byre.io/identity` is put back in the lease table
+(`internal/lease/manager.go:225-302`). Whether an *unannotated* instance is released depends on the
+driver, and only a driver that makes the promise gets that: `kubernetes` and `endpoints` implement
+`backend.StaleCapacity` and report every instance they lease as carrying an identity, so an anonymous one
+is their own stale capacity (`backend.go:87-99`); `command` does not implement it, so an unannotated
+instance is **kept** and logged:
+
+```
+{"msg":"instance kept at startup","instance_id":"vm-anon","backend":"cloud","reason":"no byre.io/identity annotation and the driver cannot promise that anonymous instances are stale; destroying it could kill a live lease"}
+```
+
+That is ADR-0009, and it is a deliberate leak: destroying something in use is unrecoverable, leaving warm
+capacity behind is not. `adoption finished` is printed even when nothing was adopted. To make adoption
+work, print `"annotations":{"byre.io/identity":"<fingerprint>"}` in **both** `acquire` and `list`
+(`command.go:162-163`) — the fingerprint is the same base64 body `BYRE_IDENTITY` carries.
 
 ### A worked example (20 lines)
 
@@ -258,9 +268,10 @@ key=/etc/byre/keys/ci
 printf '{"id":"%s","addr":"%s:22","user":"ci","private_key":"%s"}\n' "$name" "$ip" "$key"
 ```
 
-`release` gets `BYRE_INSTANCE_ID` and `BYRE_INSTANCE_ADDR`. Do not write a `list` yet (the reason is
-above): without one, instances your program creates outlive the gateway, so your own runbook has to own
-their cleanup — nothing in byre will notice them again.
+`release` gets `BYRE_INSTANCE_ID` and `BYRE_INSTANCE_ADDR`. Write a `list` if a restart should adopt:
+print `"annotations":{"byre.io/identity":"<fingerprint>"}` in both `acquire` and `list`, and the identity
+that reconnects gets its instance back. Without a `list`, instances your program creates outlive the
+gateway and nothing in byre notices them again — your runbook owns the cleanup.
 
 ## Failure behaviour, by shape
 

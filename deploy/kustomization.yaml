@@ -21,9 +21,24 @@ configMapGenerator:
     files:
       - config.yaml=config.example.yaml
 
+# The image ships as a placeholder, never a working default: this project has no registry of its own,
+# and a bare name (`byre`) is what produced `library/byre` on Docker Hub and an ImagePullBackOff.
+#
+# Kustomize matches an image by the reference as written. `sha256:<digest>` is not a real digest, so the
+# whole string is the match key here — measured, not assumed: with `name: byre` the transformer leaves
+# the placeholder untouched. Keep the two lines in agreement when you edit them, or override this block
+# in an overlay:
+#
+#   images:
+#     - name: <registry>/byre@sha256:<digest>
+#       newName: registry.example/team/byre
+#       digest: sha256:<64 hex characters>
 images:
-  - name: byre
-    newTag: dev
+  - name: <registry>/byre@sha256:<digest>
+    newName: <registry>/byre
+    digest: sha256:<digest>
 
 # The pool key is not managed here on purpose: create it yourself so it never lands in git.
 #   kubectl -n byre-system create secret generic byre-pool-key --from-file=id_key=/path/to/key
+# A missing Secret does not produce a helpful event: the Pod sits in CreateContainerConfigError because
+# the volume is not optional. See docs/operations.md ("Deploy") for the full sequence.

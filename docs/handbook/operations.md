@@ -7,30 +7,58 @@ Field-level detail for each backend is in [backends.md](backends.md), and the fa
 ## Deploy
 
 ```sh
+make image-push IMAGE_REGISTRY=<registry>/<team>   # pushes the tag, prints no digest
+podman push --digestfile /tmp/digest <registry>/<team>/byre:<tag>   # or read it back with docker inspect
+# fill the image reference in deploy/ (see below), then:
+kubectl -n byre-system create secret generic byre-pool-key --from-file=id_key=/path/to/key
 kubectl apply -k deploy/
+kubectl -n byre-system rollout status deploy/byre
 ```
+
+The image reference in `deploy/deployment.yaml` is a **placeholder** (`<registry>/byre@sha256:<digest>`),
+not a working default: this project has no registry of its own, and a bare name (`byre`) sends kubelet to
+Docker Hub for `library/byre` — an ImagePullBackOff that reads like a broken manifest. Fill it in either
+with an overlay whose `images:` block names the reference **exactly as written in the manifest**
+(kustomize matches the string literally, because `sha256:<digest>` is not a digest it can parse), or with
+`kubectl -n byre-system set image deploy/byre byre=<registry>/byre@sha256:<digest>`.
+
+Pin by **digest**, not by tag. A tag is a mutable pointer: the same tag can be re-pushed with different
+content, and with `imagePullPolicy: IfNotPresent` the node keeps its cached layers, so the Deployment
+reports the new tag while the process is still the old build. A digest is a content hash — if the content
+changes, the value changes, and a pull cannot silently answer with something else. `/healthz` prints the
+version compiled into the binary, which is how you tell which build is actually running.
+
+**The pool key Secret is deliberately not part of `kubectl apply -k deploy/`** — creating it from a file
+here would put a private key in git. Create it before the first rollout, in the same namespace:
+
+```sh
+kubectl -n byre-system create secret generic byre-pool-key --from-file=id_key=/path/to/pool_key
+```
+
+Skipping it does not fail loudly: the Deployment's volume on that Secret is not optional, so the Pod sits
+in `CreateContainerConfigError` and never starts. That is the intended failure mode — the alternative
+(making the volume optional) lets the gateway start with no key and fail every acquire with a misleading
+SSH error instead.
 
 `deploy/` creates: ServiceAccount, Role/RoleBinding (in the target namespace), Deployment (SSH front end
 on 2222, health on 8099), Service (ClusterIP 2222). The configuration comes from a ConfigMap; the pool
-key comes from a Secret. Both are examples — copy, then edit.
+key comes from the Secret above. Both are examples — copy, then edit.
 
 ## Build and publish the image
 
 ```sh
 make image                                        # byre:<git describe>; lands in the local daemon only
-make image-push IMAGE_REGISTRY=<registry>/<team>  # <registry>/<team>/byre:<tag>
-kustomize edit set image byre=<registry>/<team>/byre:<tag>   # else the overlay renders the bare byre:dev
-kubectl -n byre-system create secret generic byre-pool-key --from-file=id_key=/path/to/key
-kubectl apply -k deploy/                          # one shot: ns, SA, RBAC, ConfigMap, Deployment, Service
-kubectl -n byre-system rollout status deploy/byre
-kubectl -n byre-system port-forward svc/byre 2222:2222   # or expose it the way your cluster does
+make image-push IMAGE_REGISTRY=<registry>/<team>  # pushes <registry>/<team>/byre:<tag>; see the digest below
+# then fill the placeholder in both places — they are matched as a string, see deploy/kustomization.yaml:
+#   deploy/deployment.yaml:39          image: <registry>/byre@sha256:<digest>
+#   deploy/kustomization.yaml images:  name: <registry>/byre@sha256:<digest>, newName: …, digest: …
 ```
 
 Two steps above are not optional and both fail in ways that do not mention them. `make image` only feeds
-the local container runtime, and `deploy/kustomization.yaml` rewrites the image name without adding a
-registry (`images: - name: byre / newTag: dev`), so a cluster that cannot see your laptop stops in
-`ImagePullBackOff`. A missing `byre-pool-key` Secret is worse: the volume is not `optional`
-(`deploy/deployment.yaml:77-80`), so the pod never starts and sits in `CreateContainerConfigError`.
+the local container runtime, and the manifest ships `<registry>/byre@sha256:<digest>` — a placeholder that
+kubelet cannot resolve, so an unfilled `deploy/` stops in `ImagePullBackOff`. A missing `byre-pool-key`
+Secret is worse: the volume is not `optional` (`deploy/deployment.yaml:77-80`), so the pod never starts
+and sits in `CreateContainerConfigError`.
 
 The image is a static binary on Alpine; nothing else is installed. The image's own user is `10001:10001`,
 while the shipped Deployment runs the container as uid `65532` with `fsGroup: 10001`

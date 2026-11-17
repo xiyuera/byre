@@ -83,9 +83,9 @@ backends:
 
   # ---------------------------------------------------------------- 4. anything else, via a program
   # The provisioner prints one JSON object; `user`/`private_key` may be omitted and fall back to the
-  # ssh block below. Do NOT configure `list` yet: what it reports is released at startup, because a
-  # command instance carries no identity annotation. Without `list`, instances your program creates
-  # outlive the gateway — keep their cleanup in your own runbook.
+  # ssh block below. `list` exists to adopt: an instance is adopted when its record carries
+  # `annotations.byre.io/identity`, and one that does not is kept and logged, never destroyed — a
+  # restarted gateway may not guess (ADR-0009). Without `list` a restart adopts nothing at all.
   # - name: cloud
   #   provision: command
   #   command:
@@ -93,6 +93,10 @@ backends:
   #     acquire: ["/usr/local/bin/provision-ci-vm"]
   #     # BYRE_INSTANCE_ID and BYRE_INSTANCE_ADDR are in the environment.
   #     release: ["/usr/local/bin/destroy-ci-vm"]
+  #     # A restart can only adopt what it can attribute: print
+  #     #   "annotations":{"byre.io/identity":"<fingerprint>"}
+  #     # in both the acquire answer and every list entry (ADR-0009).
+  #     list:    ["/usr/local/bin/list-ci-vms"]   # optional: [{id,addr,user?,private_key?,annotations?}, ...]
   #     timeout: 120s
   #     env: ["CLOUD_PROFILE=ci"]
   #   ssh:
