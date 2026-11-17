@@ -174,6 +174,23 @@ before the protection existed. They are not rewritten now because rewriting
 `main` again would invalidate another batch of published hashes for no benefit
 (`docs/tag-map.md` records what that cost the first time).
 
+One commit after the policy is in the same position. `9352915`, the squash of
+pull request #26 on 2026-11-18, is authored and committed by `hermes-ops`, and
+its message carries `Co-authored-by` and no `Signed-off-by`, so its push run
+fails `dco`. The squash was pressed by `hermes-ops`, the account that wrote the
+branch, at 01:22:28 — the same second the reviewing account's rebase request
+returned HTTP 500. The content is the head that was approved: `9352915^{tree}`
+and `f3360da^{tree}` are equal, so nothing in the change is in question.
+
+Three facts decide what to do with it. Rewriting `main` would invalidate another
+batch of published hashes, which is the cost the paragraph above already refused
+to pay. Rewriting is also the owner's action and not a contributor's, because it
+means lifting the branch protection: `hermes-ops` reads `permissions.admin=false`
+on this repository, so the account that squashed cannot rewrite what it squashed.
+And leaving it costs nothing at run time — a push run bases `dco` on the previous
+tip, so the next push to `main` is checked from `9352915` onwards and turns the
+tip green without this commit changing. So it stays, registered here.
+
 ### After merging
 
 Delete the branch. Fifteen merged branches were still on the forge when this was
@@ -417,3 +434,8 @@ git rev-list --count "origin/main..HEAD"
 
 This counts the branch's own commits — what a pull-request run checks when its base is the branch
 point.
+
+The policy starts at that commit; a commit that lands after it without a sign-off is an exception
+rather than a case the policy never covered. Each exception gets a paragraph in
+[`What main's history already looks like`](#what-mains-history-already-looks-like) saying what
+landed, how it happened and why it is not rewritten.
