@@ -10,7 +10,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 
 if [ -n "${BYRE_CFG:-}" ] && [ -n "${BYRE_KEY:-}" ]; then
-    exec "$here/cluster-acceptance.sh" "$BYRE_CFG" "$BYRE_KEY" "${1:-}"
+    exec "$here/cluster-acceptance.sh" "$BYRE_CFG" "$BYRE_KEY" "$@"
 fi
 
 cat >&2 <<'MSG'
