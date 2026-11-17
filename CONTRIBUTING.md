@@ -399,11 +399,9 @@ contribution.
 
 Sign-off became policy in the commit that added the licence and NOTICE files (find it with
 `git log -S 'Developer Certificate of Origin' -- CONTRIBUTING.md`). The 31 commits before it are all
-unsigned. Most were authored under a shared placeholder identity — `keypod contributors`, the name the
-project had before the rename, plus one later `byre contributors`; the other seven predate the naming
-rule and carry early role accounts. A sign-off is a statement the author makes, so it cannot be made
-on their behalf now, and re-signing them would rewrite every hash below that point — the published
-tags, the release assets and the anchors in earlier verification records all refer to the old ones. A
+unsigned: 24 by `keypod contributors`, the placeholder the project used before the rename, and 7 by
+early role accounts that predate the naming rule. A sign-off is a statement the author makes, so it cannot be made
+on their behalf now. A
 build from before the policy is recognisable from the `commit` recorded in its `build-info.txt`.
 
 That history matters at run time, not just for tidiness. The counts and the reason they are not being
@@ -416,5 +414,5 @@ will see before pushing:
 git rev-list --count "origin/main..HEAD"
 ```
 
-`origin/main..HEAD` rather than a `merge-base` range on purpose: once the branch has merged `main`,
-the merge base moves and the count understates what the run actually checks.
+This counts the branch's own commits — what a pull-request run checks when its base is the branch
+point.

@@ -8,9 +8,10 @@ cannot be routed back to the role that made it.
 
 Since the sign-off policy the log carries a role account instead, which is what makes it readable and
 what makes a sign-off mean something: the trailer has to name that account (see
-[CONTRIBUTING](../CONTRIBUTING.md)). The exception is 13 commits authored as
-`xiyuera <admin@example.invalid>` before the per-role accounts were introduced — they are in the
-history, they are not a pattern to copy.
+[CONTRIBUTING](../CONTRIBUTING.md)). One gap is still open rather than historical: 13 commits are authored as
+`xiyuera <admin@example.invalid>`, scattered through the post-policy history and interleaved with
+role-account commits — the most recent at 17:41, eleven commits below this file's own last change.
+That identity is still in use, so it is a hole to close, not a leftover to explain.
 
 ## One account per role
 
