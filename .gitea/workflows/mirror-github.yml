@@ -1,0 +1,139 @@
+name: mirror-github
+
+# Gitea is the source of truth; this job publishes a whitelisted slice of it to GitHub.
+#
+# NOTE: Gitea reserves the GITHUB_ prefix for secret/variable names, hence MIRROR_GH_*.
+#
+# It runs here rather than as a Gitea push-mirror because the Gitea *container* cannot reach the
+# internet: it resolves github.com to a poisoned address and the host firewall drops its traffic to the
+# local proxy. The CI job pod runs on the node that can, so the mirror follows the network, not the wish.
+#
+# What is published, by design:
+#   branches: only the ones listed in `PUBLISH_BRANCHES`
+#   tags:     only ones matching `PUBLISH_TAGS`
+#   release:  on a tag, the built binaries + SHA256SUMS, so the GitHub side is a release, not just code
+# Everything else (internal branches, WIP, tickets) stays here.
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: mirror-github
+  cancel-in-progress: false
+
+env:
+  PUBLISH_BRANCHES: "main"
+  PUBLISH_TAGS: "v*"
+
+jobs:
+  mirror:
+    runs-on: k8s-go
+    steps:
+      - name: Fetch from this instance (all branches and tags)
+        run: |
+          set -eu
+          git init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git -c http.sslVerify=false -c http.extraheader="Authorization: token ${{ github.token }}" \
+            fetch -q origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+          echo "branches:"; git for-each-ref --format='  %(refname:short)' refs/remotes/origin
+          echo "tags:"; git tag --list "$PUBLISH_TAGS"
+
+      - name: Push branches and tags to GitHub
+        env:
+          GH_TOKEN: ${{ secrets.MIRROR_GH_TOKEN }}
+          GH_REPO: ${{ vars.MIRROR_GH_REPO }}
+        run: |
+          set -eu
+          : "${GH_REPO:?set the repository variable MIRROR_GH_REPO, e.g. owner/name}"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git"
+
+          for b in $PUBLISH_BRANCHES; do
+            git push -q --force "$remote" "refs/remotes/origin/${b}:refs/heads/${b}"
+            echo "pushed branch ${b}"
+          done
+          # Tags are immutable once published: never force them.
+          for t in $(git tag --list "$PUBLISH_TAGS"); do
+            git push -q "$remote" "refs/tags/${t}:refs/tags/${t}" || echo "tag ${t} already on GitHub (left alone)"
+          done
+
+  release:
+    # A tag is the only thing that produces published binaries; branches are code only.
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: mirror
+    runs-on: k8s-go
+    steps:
+      - name: Fetch the tagged tree
+        run: |
+          set -eu
+          git init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git -c http.sslVerify=false -c http.extraheader="Authorization: token ${{ github.token }}" \
+            fetch -q --depth 1 origin "${GITHUB_REF_NAME}"
+          git checkout -q FETCH_HEAD
+
+      - name: Build the published artifacts
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+            go build -trimpath -ldflags "-s -w -X byre/internal/version.Version=${tag}" \
+            -o "dist/byre-${tag}-linux-arm64" ./cmd/byre
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -ldflags "-s -w -X byre/internal/version.Version=${tag}" \
+            -o "dist/byre-${tag}-linux-amd64" ./cmd/byre
+          # Build metadata must be recorded, because the binary embeds nothing that says when it was
+          # made: without this file a published artifact cannot be reproduced or even dated.
+          {
+            echo "tag: ${tag}"
+            echo "commit: ${GITHUB_SHA}"
+            echo "go: $(go version)"
+            echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > dist/build-info.txt
+          ( cd dist && sha256sum ./* > SHA256SUMS && cat SHA256SUMS )
+
+      - name: Publish the release on GitHub
+        env:
+          GH_TOKEN: ${{ secrets.MIRROR_GH_TOKEN }}
+          GH_REPO: ${{ vars.MIRROR_GH_REPO }}
+        run: |
+          set -eu
+          : "${GH_REPO:?set the repository variable MIRROR_GH_REPO, e.g. owner/name}"
+          tag="${GITHUB_REF_NAME}"
+          api="https://api.github.com/repos/${GH_REPO}"
+
+          # Notes come from CHANGELOG.md so the two hosts cannot drift in what a version means.
+          body=$(awk -v t="${tag}" '
+            $0 ~ "^## \\[" t "\\]" {f=1; next}
+            f && /^## \[/ {exit}
+            f' CHANGELOG.md)
+          [ -n "$body" ] || body="Release ${tag}."
+
+          # No jq in the job image, so the JSON is assembled by hand with proper escaping. One less
+          # binary to keep in the image, at the cost of four lines here.
+          esc_body=$(printf '%s' "$body" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'BEGIN{ORS="\\n"} {print}' | sed 's/\\n$//')
+          payload="{\"tag_name\":\"${tag}\",\"name\":\"${tag}\",\"body\":\"${esc_body}\",\"draft\":false,\"prerelease\":false}"
+          code=$(curl -sS -o /tmp/rel.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            -d "$payload" "${api}/releases")
+          if [ "$code" = "201" ]; then
+            echo "created release ${tag}"
+          elif [ "$code" = "422" ]; then
+            echo "release ${tag} already exists — leaving it alone"
+            exit 0
+          else
+            echo "release creation failed: HTTP ${code}"; cat /tmp/rel.json; exit 1
+          fi
+
+          upload=$(sed -n 's/.*"upload_url":"\([^"]*\)".*/\1/p' /tmp/rel.json | sed 's/{.*}//')
+          for f in dist/*; do
+            base=$(basename "$f")
+            curl -sS --fail -o /dev/null -X POST \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$f" "${upload}?name=${base}" && echo "uploaded ${base}"
+          done
