@@ -51,7 +51,7 @@ dist:
 		echo "ldflags=$(LDFLAGS)"; \
 		echo "ci_image=$(CI_IMAGE)"; \
 		echo "ci_image_digest=$(CI_IMAGE_DIGEST)"; \
-		echo "reproduce=git clone <repository> && cd byre && git checkout $(COMMIT_FULL) && make dist VERSION=$(VERSION) COMMIT=$(COMMIT) BUILD_DATE=$(BUILD_DATE)"; \
+		echo "reproduce=git clone <repository> && cd byre && git checkout $(COMMIT_FULL) && make dist VERSION=$(VERSION) COMMIT=$(COMMIT) BUILD_DATE=$(BUILD_DATE) CI_IMAGE=$(CI_IMAGE) CI_IMAGE_DIGEST=$(CI_IMAGE_DIGEST)"; \
 	} > dist/build-info.txt
 	@cd dist && sha256sum byre-* build-info.txt > SHA256SUMS && cat SHA256SUMS
 
