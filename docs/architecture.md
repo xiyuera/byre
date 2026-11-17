@@ -3,7 +3,7 @@
 ## 1. Shape
 
 ```
-             ┌──────────────────────────── keypod ────────────────────────────┐
+             ┌──────────────────────────── byre ────────────────────────────┐
 client ──────┤ :2222  ssh front end                                            │
 (pubkey)     │          │                                                     │
              │          ├── auth: publickey → identity = sha256(key)           │
@@ -56,7 +56,7 @@ Splicing is byte-level after channel setup: no protocol inspection of the payloa
 ## 4. Recovery
 
 On startup — **before** warming the pool — the manager lists every instance each driver owns
-(`app.kubernetes.io/managed-by=keypod`) and rebuilds the identity table from the `keypod.io/identity`
+(`app.kubernetes.io/managed-by=byre`) and rebuilds the identity table from the `byre.io/identity`
 annotation. Instances without that annotation are the previous process's warm capacity: they are
 destroyed and the pool is refilled, so a restart never accumulates orphans.
 

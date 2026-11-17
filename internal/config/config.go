@@ -1,4 +1,4 @@
-// Package config holds keypod's declarative configuration and its validation rules.
+// Package config holds byre's declarative configuration and its validation rules.
 //
 // The gateway deliberately knows nothing about what an "instance" physically is. A backend declares
 // three things and nothing else: how an instance is obtained (sandbox-claim, a bare pod, or a list of

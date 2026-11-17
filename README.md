@@ -8,7 +8,7 @@ session, and that instance is held exclusively until the lease expires.
 > non-default client identity (see `docs/acceptance/`). Still single-replica and without an automated
 > e2e gate; hardening is M5.
 
-> Renamed from `keypod` (see `docs/rename-to-byre.md`). Not affiliated with, endorsed by, or derived from
+> Renamed from `byre` (see `docs/rename-to-byre.md`). Not affiliated with, endorsed by, or derived from
 > any same-named project; the name is a cowshed, and the licence grants no trademark rights.
 
 ## This is a program, not a library
@@ -41,7 +41,7 @@ lease expires after ttl of inactivity, any connection renews it
 ## Architecture (target)
 
 ```
-client ──ssh(pubkey)──> keypod:2222
+client ──ssh(pubkey)──> byre:2222
                           │ 1. auth: publickey -> identity
                           │ 2. lease:  identity  -> lease (memory + instance annotations)
                           │ 3. backend: acquire instance (pool first, then create)
@@ -90,7 +90,7 @@ Full reference: [`docs/architecture.md`](docs/architecture.md) · decisions:
 ## Build
 
 ```sh
-make build     # bin/keypod
+make build     # bin/byre
 make test      # unit tests
 make lint      # gofmt + go vet (+ golangci-lint when installed)
 make e2e       # end-to-end against a kind cluster

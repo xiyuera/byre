@@ -1,23 +1,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: keypod
+  name: byre
   labels:
-    app.kubernetes.io/name: keypod
+    app.kubernetes.io/name: byre
 spec:
   replicas: 1 # single replica by design (docs/roadmap.md: multi-replica is v0.3)
   selector:
     matchLabels:
-      app.kubernetes.io/name: keypod
+      app.kubernetes.io/name: byre
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: keypod
+        app.kubernetes.io/name: byre
       annotations:
         # keep a rollout from killing live sessions abruptly: the manager adopts instances on start
-        kubectl.kubernetes.io/default-container: keypod
+        kubectl.kubernetes.io/default-container: byre
     spec:
-      serviceAccountName: keypod
+      serviceAccountName: byre
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -29,15 +29,15 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: keypod
-          image: keypod
+        - name: byre
+          image: byre
           imagePullPolicy: IfNotPresent
-          args: ["-config", "/etc/keypod/config.yaml"]
+          args: ["-config", "/etc/byre/config.yaml"]
           env:
             # accept-new host keys are appended under $HOME; the root filesystem is read-only here, so
             # HOME points at an emptyDir mounted below.
             - name: HOME
-              value: /home/keypod
+              value: /home/byre
           ports:
             - name: ssh
               containerPort: 2222
@@ -61,25 +61,25 @@ spec:
               drop: ["ALL"]
           volumeMounts:
             - name: config
-              mountPath: /etc/keypod
+              mountPath: /etc/byre
               readOnly: true
             - name: pool-key
-              mountPath: /etc/keypod/keys
+              mountPath: /etc/byre/keys
               readOnly: true
             - name: home
-              mountPath: /home/keypod
+              mountPath: /home/byre
             - name: host-key
-              mountPath: /var/lib/keypod/hostkey
+              mountPath: /var/lib/byre/hostkey
       volumes:
         - name: config
           configMap:
-            name: keypod-config
+            name: byre-config
         - name: pool-key
           secret:
-            secretName: keypod-pool-key
+            secretName: byre-pool-key
             defaultMode: 0400
         - name: home
           emptyDir: {}
         - name: host-key
           persistentVolumeClaim:
-            claimName: keypod-hostkey
+            claimName: byre-hostkey

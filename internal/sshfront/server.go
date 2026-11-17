@@ -169,7 +169,7 @@ func (s *Server) Close() error {
 
 func (s *Server) serverConfig() *ssh.ServerConfig {
 	cfg := &ssh.ServerConfig{
-		ServerVersion: "SSH-2.0-keypod",
+		ServerVersion: "SSH-2.0-byre",
 		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			fp := Fingerprint(key)
 			id, ok := s.cfg.Identities[fp]
@@ -340,7 +340,7 @@ func loadOrCreateHostKey(path string) (ssh.Signer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate host key: %w", err)
 	}
-	block, err := ssh.MarshalPrivateKey(priv, "keypod-host")
+	block, err := ssh.MarshalPrivateKey(priv, "byre-host")
 	if err != nil {
 		return nil, fmt.Errorf("marshal host key: %w", err)
 	}

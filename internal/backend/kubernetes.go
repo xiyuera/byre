@@ -33,8 +33,8 @@ const (
 // and nothing else.
 const (
 	LabelManaged  = "app.kubernetes.io/managed-by"
-	LabelInstance = "keypod.io/instance"
-	LabelIdentity = "keypod.io/identity"
+	LabelInstance = "byre.io/instance"
+	LabelIdentity = "byre.io/identity"
 )
 
 // ProviderSpec is the declarative description of "what an instance is and how it is started".
@@ -242,7 +242,7 @@ func (k *Kubernetes) List(ctx context.Context) ([]Instance, error) {
 	switch k.cfg.Provider.Kind {
 	case KindPod:
 		pods, err := k.client.CoreV1().Pods(k.cfg.Namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: LabelManaged + "=keypod",
+			LabelSelector: LabelManaged + "=byre",
 		})
 		if err != nil {
 			return nil, fmt.Errorf("list pods: %w", err)
@@ -254,7 +254,7 @@ func (k *Kubernetes) List(ctx context.Context) ([]Instance, error) {
 		return out, nil
 	case KindSandboxClaim:
 		list, err := k.dyn.Resource(k.gvr()).Namespace(k.cfg.Namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: LabelManaged + "=keypod",
+			LabelSelector: LabelManaged + "=byre",
 		})
 		if err != nil {
 			return nil, fmt.Errorf("list %s: %w", k.cfg.Provider.ClaimResource, err)
@@ -281,13 +281,13 @@ func (k *Kubernetes) Adopt(ctx context.Context, ins []Instance) error {
 // ---------------------------------------------------------------- pods
 
 func (k *Kubernetes) createPod(ctx context.Context) (Instance, error) {
-	name := "keypod-" + randomSuffix()
+	name := "byre-" + randomSuffix()
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: k.cfg.Namespace,
 			Labels: map[string]string{
-				LabelManaged: "keypod",
+				LabelManaged: "byre",
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -364,7 +364,7 @@ func (k *Kubernetes) gvr() schema.GroupVersionResource {
 }
 
 func (k *Kubernetes) createClaim(ctx context.Context) (Instance, error) {
-	name := "keypod-" + randomSuffix()
+	name := "byre-" + randomSuffix()
 	// Only the selectors that were configured are sent: CRD schemas reject unknown or mutually
 	// exclusive fields, so inventing one would make the backend unusable for that cluster.
 	spec := map[string]any{}
@@ -380,7 +380,7 @@ func (k *Kubernetes) createClaim(ctx context.Context) (Instance, error) {
 		"metadata": map[string]any{
 			"name":      name,
 			"namespace": k.cfg.Namespace,
-			"labels":    map[string]any{LabelManaged: "keypod"},
+			"labels":    map[string]any{LabelManaged: "byre"},
 		},
 		"spec": spec,
 	}}

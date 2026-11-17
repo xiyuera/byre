@@ -1,4 +1,4 @@
-// Package backend defines what keypod needs from the outside world and nothing more:
+// Package backend defines what byre needs from the outside world and nothing more:
 // how to obtain an instance, how to reach it, and how to give it back.
 //
 // A driver never leaks its provider's types upward. Whatever a "sandbox" is, the gateway only ever

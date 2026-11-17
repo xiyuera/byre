@@ -1,6 +1,6 @@
 # Example: any image that speaks SSH (`provider.kind: pod`)
 
-This is the escape hatch: keypod creates a bare pod from an image you name, waits for it to accept SSH,
+This is the escape hatch: byre creates a bare pod from an image you name, waits for it to accept SSH,
 and deletes it at the end of the lease. No CRD, no template, no orchestrator-specific wiring.
 
 ## A minimal image
@@ -18,7 +18,7 @@ CMD ["/usr/sbin/sshd", "-D", "-e"]
 ```
 
 Build and push it to whatever registry your cluster can pull from. Nothing in this file is
-keypod-specific: any image that runs `sshd` and trusts the pool key works.
+byre-specific: any image that runs `sshd` and trusts the pool key works.
 
 ## Backend
 
@@ -35,13 +35,13 @@ backends:
     ssh:
       port: 22
       user: root
-      private_key: /etc/keypod/keys/id_key
+      private_key: /etc/byre/keys/id_key
       host_key_policy: accept-new
 ```
 
 ## Notes
 
-- The pod is annotated `keypod/managed=true` so a restarted gateway can adopt or reap it.
+- The pod is annotated `byre/managed=true` so a restarted gateway can adopt or reap it.
 - `ready_timeout` covers image pull, not just boot; a cold multi-hundred-MB image regularly needs >120s.
 - No volume is attached: instances are disposable by design. Clients that need state must move it in and
   out themselves (that is exactly what the reference client's file sync does).

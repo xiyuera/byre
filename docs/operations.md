@@ -13,20 +13,20 @@ key comes from a Secret. Both are examples — copy, then edit.
 ## Build and publish the image
 
 ```sh
-make image                                   # keypod:<git describe>
+make image                                   # byre:<git describe>
 make image-push IMAGE_REGISTRY=<registry>/<team>
 kubectl apply -k deploy/                     # one shot: ns, SA, RBAC, ConfigMap, Deployment, Service
-kubectl -n keypod-system create secret generic keypod-pool-key --from-file=id_key=/path/to/key
-kubectl -n keypod-system rollout status deploy/keypod
-kubectl -n keypod-system port-forward svc/keypod 2222:2222   # or expose it the way your cluster does
+kubectl -n byre-system create secret generic byre-pool-key --from-file=id_key=/path/to/key
+kubectl -n byre-system rollout status deploy/byre
+kubectl -n byre-system port-forward svc/byre 2222:2222   # or expose it the way your cluster does
 ```
 
 The image is a static binary on Alpine; nothing else is installed. The container runs as uid 10001,
 drops all capabilities and keeps a read-only root filesystem, with `$HOME` on an emptyDir because
 `accept-new` host keys are appended to `$HOME/.ssh/known_hosts`.
 
-The gateway's **own** SSH host key lives on the `keypod-hostkey` PVC (`host_key:
-/var/lib/keypod/hostkey/id_ed25519`). On first start the file does not exist and the gateway creates it,
+The gateway's **own** SSH host key lives on the `byre-hostkey` PVC (`host_key:
+/var/lib/byre/hostkey/id_ed25519`). On first start the file does not exist and the gateway creates it,
 logging the fingerprint (`generated a new host key and persisted it`). Distribute that fingerprint to
 clients; from then on restarts keep the same identity.
 
@@ -35,10 +35,10 @@ To supply your own key instead, mount a Secret at that path — an existing file
 Rotation (deliberate):
 
 ```sh
-kubectl -n keypod-system scale deploy/keypod --replicas=0
-kubectl -n keypod-system exec <debug-pod> -- rm /var/lib/keypod/hostkey/id_ed25519   # or replace the file
-kubectl -n keypod-system scale deploy/keypod --replicas=1
-kubectl -n keypod-system logs deploy/keypod | grep fingerprint                       # publish the new one
+kubectl -n byre-system scale deploy/byre --replicas=0
+kubectl -n byre-system exec <debug-pod> -- rm /var/lib/byre/hostkey/id_ed25519   # or replace the file
+kubectl -n byre-system scale deploy/byre --replicas=1
+kubectl -n byre-system logs deploy/byre | grep fingerprint                       # publish the new one
 # on every client:
 ssh-keygen -R '[<gateway-host>]:<port>'
 ```
@@ -47,8 +47,8 @@ If the build host cannot reach a base-image registry, build the binary first and
 variant, which pulls nothing (`FROM scratch`):
 
 ```sh
-CGO_ENABLED=0 GOOS=linux go build -trimpath -o bin/keypod ./cmd/keypod
-podman build -f Dockerfile.prebuilt -t <registry>/keypod:<tag> .   # docker works the same way
+CGO_ENABLED=0 GOOS=linux go build -trimpath -o bin/byre ./cmd/byre
+podman build -f Dockerfile.prebuilt -t <registry>/byre:<tag> .   # docker works the same way
 ```
 
 Pin the image by **digest**, not by tag: with `imagePullPolicy: IfNotPresent` a re-pushed tag keeps the
@@ -56,8 +56,8 @@ node's cached layers, so the Deployment reports the new tag while the running pr
 build (`/healthz` shows the truth — it prints the version stamped into the binary).
 
 ```sh
-podman push --digestfile /tmp/digest <registry>/keypod:<tag>
-kubectl -n keypod-system set image deploy/keypod keypod=<registry>/keypod@<digest>
+podman push --digestfile /tmp/digest <registry>/byre:<tag>
+kubectl -n byre-system set image deploy/byre byre=<registry>/byre@<digest>
 ```
 
 ### The grant that is not in the overlay
@@ -71,7 +71,7 @@ warms, and every checkout returns 403 — which reads as "the backend is down". 
 gateway is alive but cannot hand out instances:
 
 ```sh
-kubectl -n <instances-ns> auth can-i patch sandboxclaims --as system:serviceaccount:<gateway-ns>:keypod
+kubectl -n <instances-ns> auth can-i patch sandboxclaims --as system:serviceaccount:<gateway-ns>:byre
 ```
 
 **If `pool_size > 0`,** the gateway will start creating instances immediately. **There is currently no way to
@@ -83,7 +83,7 @@ ConfigMap for a first smoke test if you do not want warm capacity yet.
 ## Validate a configuration before shipping it
 
 ```sh
-keypod -config /etc/keypod/config.yaml -check-config
+byre -config /etc/byre/config.yaml -check-config
 ```
 
 Exits non-zero and lists *every* violation (not the first one) when the file is wrong: unknown fields,
@@ -113,7 +113,7 @@ Suggested probes: liveness `/healthz` with `periodSeconds: 10`, readiness `/heal
 | `provider.endpoint_field` | `status.sandbox.serviceFQDN` | where the claim exposes its SSH address; a bare host gets `:22` |
 | `provider.image` | — | `pod` kind: any image that runs sshd and trusts the pool key |
 
-Warm capacity is reported as `keypod_pool_warm{backend=...}`. A pool that never reaches `pool_size`
+Warm capacity is reported as `byre_pool_warm{backend=...}`. A pool that never reaches `pool_size`
 means `Create` is failing (image pull, quota, missing template) — check the gateway log for
 `pool refill failed`.
 
@@ -142,16 +142,16 @@ reconstruct a key.
 ## Restarting or upgrading safely
 
 1. The new process adopts live leases first and destroys unannotated (stale pool) objects second, then
-   refills the pool. Expect `keypod_leases_adopted` to be non-zero when clients were connected.
+   refills the pool. Expect `byre_leases_adopted` to be non-zero when clients were connected.
 2. A client that reconnects during this window keeps its instance. A client whose lease had already
    expired gets a new one — that is the documented contract, not a regression.
-3. Watch `keypod_pool_warm{backend=...}` return to `pool_size`; a pool that stays at 0 means `Create`
+3. Watch `byre_pool_warm{backend=...}` return to `pool_size`; a pool that stays at 0 means `Create`
    is failing (see the tunables table).
 
 ## Running the acceptance checks
 
 ```sh
-KEYPOD_CFG=config.yaml KEYPOD_KEY=path/to/client_key test/e2e/run.sh
+BYRE_CFG=config.yaml BYRE_KEY=path/to/client_key test/e2e/run.sh
 # add --ttl-ok to include the 320s idle-reconnect check
 ```
 
@@ -160,12 +160,12 @@ pool counters. It is the same sequence recorded in `docs/acceptance/`.
 
 ## Upgrading
 
-1. `keypod -check-config` with the new binary against the current file.
+1. `byre -check-config` with the new binary against the current file.
 2. Roll the Deployment; the manager adopts live instances on startup (ADR-0002 consequences).
-3. Watch `keypod_leases_active` return to its previous value; a permanent drop means adoption failed and
+3. Watch `byre_leases_active` return to its previous value; a permanent drop means adoption failed and
    instances are being recreated under clients that still hold state.
 
 ## Uninstalling
 
-Delete the Deployment and Service, then delete instances carrying `keypod/managed=true`. Static hosts
+Delete the Deployment and Service, then delete instances carrying `byre/managed=true`. Static hosts
 are untouched by design: the gateway never destroys what it did not create.

@@ -7,7 +7,7 @@ than in a public issue. Include a description, the affected version, and a repro
 
 ## Threat model
 
-keypod is a gateway that terminates SSH, so the interesting surfaces are:
+byre is a gateway that terminates SSH, so the interesting surfaces are:
 
 | surface | what it means here |
 |---|---|
@@ -19,7 +19,7 @@ keypod is a gateway that terminates SSH, so the interesting surfaces are:
 
 ## Out of scope
 
-- A compromised instance can read anything mounted into it. keypod does not sandbox the workload.
+- A compromised instance can read anything mounted into it. byre does not sandbox the workload.
 - A leaked client private key is a leaked identity. Rotating it is the operator's job.
 - Multi-tenant isolation between clients is *not* a goal: two clients sharing one key are one identity
   by design (ADR-0001).

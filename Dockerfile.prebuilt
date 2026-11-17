@@ -3,19 +3,19 @@
 # Image for a binary that was already built (make build). Same runtime contract as Dockerfile, but it
 # pulls nothing: useful on hosts that cannot reach a base-image registry.
 #
-#   CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w ..." -o bin/keypod ./cmd/keypod
-#   podman build -f Dockerfile.prebuilt -t <registry>/keypod:<tag> .
+#   CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w ..." -o bin/byre ./cmd/byre
+#   podman build -f Dockerfile.prebuilt -t <registry>/byre:<tag> .
 FROM scratch
 
 # A passwd entry is copied rather than generated: scratch has no tools, and the file must exist for
 # user lookups inside the container.
 COPY packaging/passwd /etc/passwd
-COPY bin/keypod /keypod
+COPY bin/byre /byre
 
-ENV HOME=/home/keypod
+ENV HOME=/home/byre
 USER 10001:10001
 
 EXPOSE 2222 8099
 
-ENTRYPOINT ["/keypod"]
-CMD ["-config", "/etc/keypod/config.yaml"]
+ENTRYPOINT ["/byre"]
+CMD ["-config", "/etc/byre/config.yaml"]

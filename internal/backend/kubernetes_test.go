@@ -94,7 +94,7 @@ func TestPodCreateListRelease(t *testing.T) {
 	if in.Addr != "192.0.2.7:22" {
 		t.Fatalf("addr = %q, want 192.0.2.7:22", in.Addr)
 	}
-	if !strings.HasPrefix(in.ID, "keypod-") {
+	if !strings.HasPrefix(in.ID, "byre-") {
 		t.Fatalf("id = %q, want the generated pod name", in.ID)
 	}
 	if in.Annotations[LabelIdentity] != "identity-a" {
@@ -119,7 +119,7 @@ func TestPodCreateListRelease(t *testing.T) {
 	if len(pods.Items) != 1 {
 		t.Fatalf("pods = %d, want 1", len(pods.Items))
 	}
-	if got := pods.Items[0].Labels[LabelManaged]; got != "keypod" {
+	if got := pods.Items[0].Labels[LabelManaged]; got != "byre" {
 		t.Fatalf("managed-by label = %q", got)
 	}
 	if len(pods.Items[0].Spec.Containers) != 1 || pods.Items[0].Spec.Containers[0].Image != "registry.example/sshd:1" {
@@ -297,7 +297,7 @@ func TestClaimIsNotReadyUntilEndpointResolves(t *testing.T) {
 	dyn.PrependReactor("create", claimGVR.Resource, func(action ktesting.Action) (bool, runtime.Object, error) {
 		obj := action.(ktesting.CreateAction).GetObject().(*unstructured.Unstructured)
 		obj.Object["status"] = map[string]any{
-			"sandbox": map[string]any{"serviceFQDN": "keypod-1.instances.svc.cluster.local"},
+			"sandbox": map[string]any{"serviceFQDN": "byre-1.instances.svc.cluster.local"},
 		}
 		return false, nil, nil
 	})
@@ -327,7 +327,7 @@ func TestClaimSucceedsOnceDNSAnswers(t *testing.T) {
 	dyn.PrependReactor("create", claimGVR.Resource, func(action ktesting.Action) (bool, runtime.Object, error) {
 		obj := action.(ktesting.CreateAction).GetObject().(*unstructured.Unstructured)
 		obj.Object["status"] = map[string]any{
-			"sandbox": map[string]any{"serviceFQDN": "keypod-1.instances.svc.cluster.local"},
+			"sandbox": map[string]any{"serviceFQDN": "byre-1.instances.svc.cluster.local"},
 		}
 		return false, nil, nil
 	})
@@ -350,7 +350,7 @@ func TestClaimSucceedsOnceDNSAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if in.Addr != "keypod-1.instances.svc.cluster.local:22" {
+	if in.Addr != "byre-1.instances.svc.cluster.local:22" {
 		t.Fatalf("addr = %q", in.Addr)
 	}
 	if calls < 3 {
@@ -367,7 +367,7 @@ func TestClaimFallsBackToPodIPWhenServiceNameDoesNotAnswer(t *testing.T) {
 		obj := action.(ktesting.CreateAction).GetObject().(*unstructured.Unstructured)
 		obj.Object["status"] = map[string]any{
 			"sandbox": map[string]any{
-				"serviceFQDN": "keypod-1.instances.svc.cluster.local",
+				"serviceFQDN": "byre-1.instances.svc.cluster.local",
 				"podIPs":      []any{"192.0.2.9"},
 			},
 		}
@@ -377,7 +377,7 @@ func TestClaimFallsBackToPodIPWhenServiceNameDoesNotAnswer(t *testing.T) {
 
 	// The service name is not answering yet; the pod IP is.
 	withProbe(t, func(_ context.Context, addr string) error {
-		if strings.HasPrefix(addr, "keypod-1.") {
+		if strings.HasPrefix(addr, "byre-1.") {
 			return errors.New("no such host")
 		}
 		return nil

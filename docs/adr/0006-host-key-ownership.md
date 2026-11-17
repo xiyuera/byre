@@ -30,12 +30,12 @@ Persistence is part of the product, in three states:
 | path exists | load it, never rewrite | deployments that supply their own key (Secret, config management) |
 | path missing | **generate, write 0600, `WARN` with the fingerprint** | first install |
 
-The bundled manifests give the third case durable storage: a `keypod-hostkey` PVC mounted at
-`/var/lib/keypod/hostkey`. `ReadWriteOnce` is sufficient because v1 runs one replica.
+The bundled manifests give the third case durable storage: a `byre-hostkey` PVC mounted at
+`/var/lib/byre/hostkey`. `ReadWriteOnce` is sufficient because v1 runs one replica.
 
 Two boundaries are deliberate:
 
-- `/etc/keypod` holds configuration (read-only); `/var/lib/keypod` holds state. Mixing them means a
+- `/etc/byre` holds configuration (read-only); `/var/lib/byre` holds state. Mixing them means a
   read-only root filesystem breaks key generation, which is how the first attempt at `fsGroup` failed.
 - The key is never derived from anything else (the pool key, the Service account, a hash of config).
   A host key that can be recomputed is not an identity: it can be recomputed by someone else.

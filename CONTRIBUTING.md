@@ -44,7 +44,7 @@ Body: why, then what changed, then how it was verified. Reference the ADR when o
 
 ## Reporting a bug
 
-Include: keypod version (`keypod -version`), the relevant log lines (identity prefixes are fine,
+Include: byre version (`byre -version`), the relevant log lines (identity prefixes are fine,
 full keys never are), the backend type, and whether the client uses `ControlMaster`.
 
 ## Security

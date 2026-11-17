@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: keypod
+  name: byre
   labels:
-    app.kubernetes.io/name: keypod
+    app.kubernetes.io/name: byre
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: keypod
+    app.kubernetes.io/name: byre
   ports:
     - name: ssh
       port: 2222

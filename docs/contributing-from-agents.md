@@ -1,6 +1,6 @@
 # Contributing from an agent
 
-Every commit so far is authored by `keypod contributors <noreply@example.com>`. That identity is honest
+Every commit so far is authored by `byre contributors <noreply@example.com>`. That identity is honest
 about *what* produced a change and useless about *who*: the log cannot tell a review from an
 implementation, and a mistake cannot be routed back to the role that made it.
 

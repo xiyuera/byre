@@ -1,5 +1,5 @@
 SHELL      := /bin/sh
-BIN        := bin/keypod
+BIN        := bin/byre
 PKG        := ./...
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT     ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -15,7 +15,7 @@ LDFLAGS := -s -w \
 all: build
 
 build:
-	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN) ./cmd/keypod
+	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN) ./cmd/byre
 	@echo "built $(BIN) ($(VERSION))"
 
 test:
@@ -45,9 +45,9 @@ check-config: build
 	$(BIN) -config $(CONFIG) -check-config
 
 e2e:
-	@KEYPOD_CFG=$(CONFIG) KEYPOD_KEY=$(KEY) ./test/e2e/run.sh
+	@BYRE_CFG=$(CONFIG) BYRE_KEY=$(KEY) ./test/e2e/run.sh
 
-IMAGE          ?= keypod:$(VERSION)
+IMAGE          ?= byre:$(VERSION)
 # Override with your own registry: make image-push IMAGE_REGISTRY=registry.example.com/team
 IMAGE_REGISTRY ?= localhost:5000
 

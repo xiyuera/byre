@@ -1,15 +1,15 @@
-# keypod configuration — copy, then replace every <placeholder>.
+# byre configuration — copy, then replace every <placeholder>.
 #
 # Nothing here is specific to the project's own deployment: any SSH-capable unit can be described.
-# Validate before applying:  keypod -config config.yaml -check-config
+# Validate before applying:  byre -config config.yaml -check-config
 
 listen: ":2222"
 
 # SSH host key clients pin. Point this at durable storage: the gateway creates the key on first start
-# if the file is absent, and reuses it afterwards. With the bundled manifests that is the keypod-hostkey
+# if the file is absent, and reuses it afterwards. With the bundled manifests that is the byre-hostkey
 # PVC; to supply your own key, mount a Secret here instead. Leaving it empty gives an ephemeral key,
 # which is only acceptable for tests (every restart changes the fingerprint).
-host_key: /var/lib/keypod/hostkey/id_ed25519
+host_key: /var/lib/byre/hostkey/id_ed25519
 
 lease:
   # Must exceed the client's idle timeout (the reference client idles out at 300s).
@@ -40,7 +40,7 @@ backends:
     ssh:
       port: 22
       user: "<remote-user>"
-      private_key: /etc/keypod/keys/id_key
+      private_key: /etc/byre/keys/id_key
       host_key_policy: accept-new
 
   # ---------------------------------------------------------------- any image that runs sshd
@@ -55,7 +55,7 @@ backends:
   #   ssh:
   #     port: 22
   #     user: "<remote-user>"
-  #     private_key: /etc/keypod/keys/id_key
+  #     private_key: /etc/byre/keys/id_key
   #     host_key_policy: accept-new
 
   # ---------------------------------------------------------------- long-lived hosts, no orchestration
@@ -65,7 +65,7 @@ backends:
   #   ssh:
   #     port: 22
   #     user: "<remote-user>"
-  #     private_key: /etc/keypod/keys/id_key
+  #     private_key: /etc/byre/keys/id_key
   #     host_key_policy: strict
 
 identities:

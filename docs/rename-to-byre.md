@@ -29,7 +29,7 @@ The maintainer accepted both. What that means in practice, and what follows from
 
 ## What changed
 
-- Go module path: `keypod` → `cranage` → **`byre`**, with every in-module import.
+- Go module path: `keypod` → **`byre`**, with every in-module import.
 - `Makefile` ldflags target the new path. Not cosmetic: a stale path makes `-X` silently do nothing and
   the binary reports an empty version, which breaks the `/healthz` and release checks.
 - ADR-0004 status, this document, the README's standing line.
@@ -61,3 +61,15 @@ Steps 1–2 are additive and reversible; step 4 is the only irreversible one.
 Issue #1 ("rotation: host key replacement has no dual-trust window", author `hermes-reviewer`) was filed
 against the pre-rename repository. The rotation work itself is tracked by ADR-0006 and the v0.1.3
 hardening card; new issues belong on this repository.
+
+### The risk this name carries
+
+naming the project `byre` was a maintainer call made with the collision data in hand:
+
+| prior use | what it is |
+|---|---|
+| `pjlsergeant/byre` | MIT, Go, single binary: a constrained agent container environment — the same domain |
+| `halzy/byre` | Rust bootstrap toolbox, published as `byre` on crates.io |
+
+No import-path collision is possible (module paths are namespaced), no trademark is claimed, and the README
+carries a non-affiliation line. If the confusion turns real, `cranage` is the fallback.

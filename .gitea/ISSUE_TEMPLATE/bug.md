@@ -18,7 +18,7 @@ labels: bug
 - [ ] neither / not sure
 
 **Environment**
-- keypod version (`keypod -version`):
+- byre version (`byre -version`):
 - backend type (`static` / `kubernetes` + `provider.kind`):
 - pool size, ttl, grace:
 - client (and whether it uses `ControlMaster`):

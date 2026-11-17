@@ -3,9 +3,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: keypod
+  name: byre
   labels:
-    app.kubernetes.io/name: keypod
+    app.kubernetes.io/name: byre
 rules:
   # declarative sandbox claims (provider.kind: sandbox-claim)
   - apiGroups: ["extensions.agents.x-k8s.io"]
@@ -31,13 +31,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: keypod
+  name: byre
   labels:
-    app.kubernetes.io/name: keypod
+    app.kubernetes.io/name: byre
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: keypod
+  name: byre
 subjects:
   - kind: ServiceAccount
-    name: keypod
+    name: byre

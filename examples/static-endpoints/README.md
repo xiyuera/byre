@@ -13,7 +13,7 @@ backends:
     ssh:
       port: 22
       user: "<remote-user>"
-      private_key: /etc/keypod/keys/id_key
+      private_key: /etc/byre/keys/id_key
       host_key_policy: strict     # long-lived hosts should be in known_hosts
 ```
 

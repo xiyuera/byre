@@ -3,9 +3,9 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: keypod-hostkey
+  name: byre-hostkey
   labels:
-    app.kubernetes.io/name: keypod
+    app.kubernetes.io/name: byre
 spec:
   accessModes: ["ReadWriteOnce"]
   resources:

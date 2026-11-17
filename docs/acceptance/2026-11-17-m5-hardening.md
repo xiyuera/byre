@@ -45,7 +45,7 @@ ConfigMap        OK      (generated from config.example.yaml, as kustomize does)
 ```
 
 The temporary namespace needed for those checks (`dry-run` still requires the parent namespace to
-exist) was deleted afterwards; `GET /api/v1/namespaces/keypod-system` returns `NotFound`.
+exist) was deleted afterwards; `GET /api/v1/namespaces/byre-system` returns `NotFound`.
 
 **Not verified:** actually running the image inside the cluster. That needs an image build
 (`docker build` / `ko` / `buildah`) plus `kubectl apply -k`, none of which exist in the build

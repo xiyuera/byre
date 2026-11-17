@@ -50,7 +50,7 @@ The claim's status must expose the SSH endpoint at `endpoint_field` (default
 `status.sandbox.serviceFQDN`). A bare host is accepted and gets `:22` appended. If your API puts the
 address elsewhere, change the path — no code change is needed.
 
-## 3. Point keypod at it
+## 3. Point byre at it
 
 ```yaml
 backends:
@@ -70,14 +70,14 @@ backends:
     ssh:
       port: 22
       user: "<remote-user>"
-      private_key: /etc/keypod/keys/id_key
+      private_key: /etc/byre/keys/id_key
       host_key_policy: accept-new
 ```
 
 ## 4. Verify
 
 ```sh
-keypod -config config.yaml -check-config       # schema and references
+byre -config config.yaml -check-config       # schema and references
 kubectl -n <namespace> get <sandboxclaims> -w  # one object appears per identity while leased
 ssh -i <client-key> -p 2222 <user>@<gateway>   # auth, then hostname
 ```

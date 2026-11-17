@@ -1,4 +1,4 @@
-// Command keypod is a lease-based SSH gateway: a client authenticates with a public key and receives
+// Command byre is a lease-based SSH gateway: a client authenticates with a public key and receives
 // one instance for the whole session, held exclusively until the lease expires.
 package main
 
@@ -136,12 +136,12 @@ func main() {
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		active, idle := mgr.Stats()
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		fmt.Fprintf(w, "# HELP keypod_up Whether the process is running.\n# TYPE keypod_up gauge\nkeypod_up 1\n")
-		fmt.Fprintf(w, "# HELP keypod_leases_active Leases with at least one open connection.\n# TYPE keypod_leases_active gauge\nkeypod_leases_active %d\n", active)
-		fmt.Fprintf(w, "# HELP keypod_leases_idle Leases without connections, waiting to be reaped.\n# TYPE keypod_leases_idle gauge\nkeypod_leases_idle %d\n", idle)
-		fmt.Fprintf(w, "# HELP keypod_leases_adopted Leases recovered from existing instances at startup.\n# TYPE keypod_leases_adopted counter\nkeypod_leases_adopted %d\n", mgr.AdoptedTotal())
+		fmt.Fprintf(w, "# HELP byre_up Whether the process is running.\n# TYPE byre_up gauge\nbyre_up 1\n")
+		fmt.Fprintf(w, "# HELP byre_leases_active Leases with at least one open connection.\n# TYPE byre_leases_active gauge\nbyre_leases_active %d\n", active)
+		fmt.Fprintf(w, "# HELP byre_leases_idle Leases without connections, waiting to be reaped.\n# TYPE byre_leases_idle gauge\nbyre_leases_idle %d\n", idle)
+		fmt.Fprintf(w, "# HELP byre_leases_adopted Leases recovered from existing instances at startup.\n# TYPE byre_leases_adopted counter\nbyre_leases_adopted %d\n", mgr.AdoptedTotal())
 		for name := range backends {
-			fmt.Fprintf(w, "keypod_pool_warm{backend=%q} %d\n", name, mgr.WarmSize(name))
+			fmt.Fprintf(w, "byre_pool_warm{backend=%q} %d\n", name, mgr.WarmSize(name))
 		}
 	})
 	health := &http.Server{Addr: ":8099", Handler: mux, ReadHeaderTimeout: 5 * time.Second}

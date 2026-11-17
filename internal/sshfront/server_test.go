@@ -198,7 +198,7 @@ func startGatewayWith(t *testing.T, endpoint string, driver backend.Backend) *ha
 
 	fp := Fingerprint(clientSigner.PublicKey())
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if os.Getenv("KEYPOD_TEST_LOG") != "" {
+	if os.Getenv("BYRE_TEST_LOG") != "" {
 		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}
 	srv, err := New(Config{

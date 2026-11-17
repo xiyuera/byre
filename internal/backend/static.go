@@ -9,7 +9,7 @@ import (
 // StaticConfig describes a driver over pre-existing SSH endpoints (lab machines, long-lived hosts).
 //
 // Nothing is created or destroyed: an endpoint is leased to one identity at a time and handed back on
-// release. This driver exists so that keypod is useful without any orchestrator at all — and so that
+// release. This driver exists so that byre is useful without any orchestrator at all — and so that
 // the core can be tested end to end without a cluster.
 type StaticConfig struct {
 	Name          string

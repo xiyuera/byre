@@ -76,11 +76,11 @@ ssh -p <port> -i <client-key> <user>@<gateway> hostname   # twice; must match
 # 2. a credential file the client syncs is byte-identical on the instance
 ssh -p <port> -i <client-key> <user>@<gateway> sha256sum ~/.hermes/credentials/kubeconfig
 # 3. a real session through the client's own backend
-KEYPOD_CFG=<config> KEYPOD_KEY=<client-key> test/e2e/run.sh
+BYRE_CFG=<config> BYRE_KEY=<client-key> test/e2e/run.sh
 ```
 
-Expected counters immediately after a session: `keypod_leases_active` 1, `keypod_leases_idle` 0 (while
-connected), `keypod_pool_warm` back to `pool_size` after the checkout refills.
+Expected counters immediately after a session: `byre_leases_active` 1, `byre_leases_idle` 0 (while
+connected), `byre_pool_warm` back to `pool_size` after the checkout refills.
 
 ## 6. Known client behaviours to design around
 

@@ -50,7 +50,7 @@ so a lease cannot expire while the client still believes it holds the instance.
   because the annotation is a hint, not a promise: the worst case is one lost file tree, immediately
   corrected by the client's next full sync.
 - Because allocation is no longer 1:1 with sockets, "how many instances are in use" cannot be read off
-  the connection count; it needs the lease table (exposed as `keypod_leases_active` in M3).
+  the connection count; it needs the lease table (exposed as `byre_leases_active` in M3).
 
 ## Alternatives rejected
 

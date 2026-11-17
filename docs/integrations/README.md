@@ -1,7 +1,7 @@
 # Integrations
 
 Product-specific notes live here and only here. The core (code, config schema, examples) stays generic:
-a reader should be able to use keypod without knowing which clients exist.
+a reader should be able to use byre without knowing which clients exist.
 
 ## What an integration note must contain
 

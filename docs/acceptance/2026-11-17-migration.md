@@ -28,7 +28,7 @@ a hand-rolled `ssh` command:
 
 ```
 profile ssh: root@<gateway>:2222 key=id_ed25519
-instance: keypod-b171c9c2  uid=0
+instance: byre-b171c9c2  uid=0
 credential sha: local=c843e4f9aa0eef3c remote=c843e4f9aa0eef3c
 kubectl whoami: <expected identity>
 PASS  session
@@ -56,10 +56,10 @@ passed=3 failed=0
 ## Reaping in the deployed setting
 
 ```
-t0     instance keypod-b171c9c2   idle 1
+t0     instance byre-b171c9c2   idle 1
 t+500  metrics: leases_active 0  leases_idle 0  pool_warm 2
-t+500  instance keypod-4896ea62
-RESULT: PASS reaped (keypod-b171c9c2 -> keypod-4896ea62)
+t+500  instance byre-4896ea62
+RESULT: PASS reaped (byre-b171c9c2 -> byre-4896ea62)
 ```
 
 The old instance is gone, the pool did not shrink, and the same identity came back to a fresh instance —

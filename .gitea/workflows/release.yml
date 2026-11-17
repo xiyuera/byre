@@ -1,0 +1,45 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build static binaries
+        run: |
+          set -eu
+          mkdir -p dist
+          for arch in arm64 amd64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
+              go build -trimpath \
+                -ldflags "-s -w -X byre/internal/version.Version=${GITHUB_REF_NAME} \
+                          -X byre/internal/version.Commit=$(git rev-parse --short HEAD) \
+                          -X byre/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                -o "dist/byre-${GITHUB_REF_NAME}-linux-${arch}" ./cmd/byre
+          done
+          go version > dist/build-info.txt
+          printf 'commit=%s\ntag=%s\nrun=%s\n' "$(git rev-parse HEAD)" "${GITHUB_REF_NAME}" "${GITHUB_RUN_ID}" \
+            >> dist/build-info.txt
+          ( cd dist && sha256sum byre-* > SHA256SUMS )
+
+      - name: Publish the Gitea release
+        env:
+          TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          set -eu
+          api="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
+          rel=$(curl -fsS -X POST -H "Authorization: token $TOKEN" -H 'Content-Type: application/json' \
+            -d "{\"tag_name\":\"${GITHUB_REF_NAME}\",\"name\":\"${GITHUB_REF_NAME}\",\"body\":\"See CHANGELOG.md\",\"prerelease\":false}" \
+            "$api/releases")
+          id=$(printf '%s' "$rel" | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)
+          # The release body is replaced by hand with the changelog section; assets are what the pipeline owns.
+          for f in dist/*; do
+            curl -fsS -X POST -H "Authorization: token $TOKEN" \
+              -F "attachment=@$f" "$api/releases/$id/assets?name=$(basename "$f")" >/dev/null
+          done
