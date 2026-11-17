@@ -10,6 +10,7 @@
 package config
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -43,7 +44,18 @@ const (
 )
 
 // Duration is a time.Duration that is written as a string ("360s") in YAML.
-type Duration time.Duration
+//
+// It remembers whether the key was present at all. An explicit `ttl: 0s` is a value somebody wrote, and
+// substituting the default over it turns a configuration mistake into a working gateway with a
+// different lifetime than the file says (F7).
+type Duration struct {
+	value time.Duration
+	set   bool
+}
+
+// NewDuration builds a Duration that counts as present. It exists for code and tests that do not come
+// from a YAML document.
+func NewDuration(d time.Duration) Duration { return Duration{value: d, set: true} }
 
 // UnmarshalYAML implements yaml.Unmarshaler.
 func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
@@ -55,25 +67,67 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	if err != nil {
 		return fmt.Errorf("invalid duration %q: %w", s, err)
 	}
-	*d = Duration(v)
+	d.value = v
+	d.set = true
 	return nil
 }
 
+// MarshalYAML writes the duration back as the string the file used.
+func (d Duration) MarshalYAML() (any, error) { return d.value.String(), nil }
+
 // Std returns the value as a time.Duration.
-func (d Duration) Std() time.Duration { return time.Duration(d) }
+func (d Duration) Std() time.Duration { return d.value }
+
+// IsSet reports whether the key appeared in the document.
+func (d Duration) IsSet() bool { return d.set }
 
 // String implements fmt.Stringer.
-func (d Duration) String() string { return time.Duration(d).String() }
+func (d Duration) String() string { return d.value.String() }
+
+// Number is an integer that remembers whether the key was present, so that an explicit 0 (which is
+// meaningful for pool_size) is not mistaken for a missing key.
+type Number struct {
+	value int
+	set   bool
+}
+
+// NewNumber builds a Number that counts as present.
+func NewNumber(v int) Number { return Number{value: v, set: true} }
+
+// UnmarshalYAML implements yaml.Unmarshaler.
+func (n *Number) UnmarshalYAML(node *yaml.Node) error {
+	var v int
+	if err := node.Decode(&v); err != nil {
+		return fmt.Errorf("expected an integer: %w", err)
+	}
+	n.value = v
+	n.set = true
+	return nil
+}
+
+// MarshalYAML writes the number back as an integer.
+func (n Number) MarshalYAML() (any, error) { return n.value, nil }
+
+// Value returns the configured integer.
+func (n Number) Value() int { return n.value }
+
+// IsSet reports whether the key appeared in the document.
+func (n Number) IsSet() bool { return n.set }
 
 // Config is the root document.
 type Config struct {
 	Listen string `yaml:"listen"`
 	// HostKey is the SSH host key clients pin. Without it a restart silently changes the fingerprint and
-	// every client with strict checking fails; generating one on the fly is fine only for tests.
+	// every client with strict checking fails; generating one on the fly is fine only for tests, which
+	// is why Validate rejects an empty value unless AllowEphemeralHostKey was set on the command line.
 	HostKey    string     `yaml:"host_key"`
 	Lease      Lease      `yaml:"lease"`
 	Backends   []Backend  `yaml:"backends"`
 	Identities []Identity `yaml:"identities"`
+
+	// AllowEphemeralHostKey is set by the binary from -allow-ephemeral-hostkey, never from YAML: a
+	// deployment must not be able to opt out of a stable fingerprint by editing its own config.
+	AllowEphemeralHostKey bool `yaml:"-"`
 }
 
 // Lease holds the timing and pool parameters of a lease.
@@ -159,7 +213,7 @@ type Provider struct {
 
 // SSH is how the gateway reaches an instance.
 type SSH struct {
-	Port          int    `yaml:"port"`
+	Port          Number `yaml:"port"`
 	User          string `yaml:"user"`
 	PrivateKey    string `yaml:"private_key"`
 	HostKeyPolicy string `yaml:"host_key_policy"` // strict | accept-new | insecure
@@ -172,8 +226,18 @@ type Identity struct {
 	Aliases     []string `yaml:"aliases"` // log labels only, never used for routing
 }
 
+// Option adjusts what Load accepts beyond the file itself.
+type Option func(*Config)
+
+// AllowEphemeralHostKey permits a configuration without host_key. It exists for tests and for
+// -check-config of a lab file; a deployment that ships without host_key makes every restart change the
+// gateway's fingerprint, which is the failure this project already hit once (ADR-0006).
+func AllowEphemeralHostKey(allow bool) Option {
+	return func(c *Config) { c.AllowEphemeralHostKey = allow }
+}
+
 // Load reads, defaults and validates a configuration file.
-func Load(path string) (*Config, error) {
+func Load(path string, opts ...Option) (*Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open config %s: %w", path, err)
@@ -186,6 +250,9 @@ func Load(path string) (*Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config %s: %w", path, err)
@@ -193,16 +260,18 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// ApplyDefaults fills every optional field with its documented default.
+// ApplyDefaults fills every optional field that the document did not mention. A field that is present
+// keeps its value even when that value is zero: `pool_size: 0` means "no warm capacity", and `ttl: 0s`
+// must be rejected by Validate rather than quietly replaced by an hour.
 func (c *Config) ApplyDefaults() {
 	if strings.TrimSpace(c.Listen) == "" {
 		c.Listen = DefaultListen
 	}
-	if c.Lease.TTL == 0 {
-		c.Lease.TTL = Duration(DefaultTTL)
+	if !c.Lease.TTL.IsSet() {
+		c.Lease.TTL = NewDuration(DefaultTTL)
 	}
-	if c.Lease.Grace == 0 {
-		c.Lease.Grace = Duration(DefaultGrace)
+	if !c.Lease.Grace.IsSet() {
+		c.Lease.Grace = NewDuration(DefaultGrace)
 	}
 	if c.Lease.PoolSize == nil {
 		def := DefaultPoolSize
@@ -210,17 +279,17 @@ func (c *Config) ApplyDefaults() {
 	}
 	for i := range c.Backends {
 		b := &c.Backends[i]
-		if b.SSH.Port == 0 {
-			b.SSH.Port = DefaultSSHPort
+		if !b.SSH.Port.IsSet() {
+			b.SSH.Port = NewNumber(DefaultSSHPort)
 		}
 		if strings.TrimSpace(b.SSH.HostKeyPolicy) == "" {
 			b.SSH.HostKeyPolicy = "accept-new"
 		}
-		if b.Provider.ReadyTimeout == 0 {
-			b.Provider.ReadyTimeout = Duration(DefaultReadyTimeout)
+		if !b.Provider.ReadyTimeout.IsSet() {
+			b.Provider.ReadyTimeout = NewDuration(DefaultReadyTimeout)
 		}
-		if b.Provision == ProvisionCommand && b.Command.Timeout == 0 {
-			b.Command.Timeout = Duration(DefaultCommandTimeout)
+		if b.Provision == ProvisionCommand && !b.Command.Timeout.IsSet() {
+			b.Command.Timeout = NewDuration(DefaultCommandTimeout)
 		}
 	}
 }
@@ -230,6 +299,10 @@ func (c *Config) Validate() error {
 	var errs []error
 	fail := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
 
+	if strings.TrimSpace(c.HostKey) == "" && !c.AllowEphemeralHostKey {
+		fail("host_key is required: without it every restart changes the gateway's fingerprint and every strict client stops connecting " +
+			"(use -allow-ephemeral-hostkey only for tests)")
+	}
 	if c.Lease.TTL.Std() <= 0 {
 		fail("lease.ttl must be > 0")
 	}
@@ -273,8 +346,8 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(b.SSH.PrivateKey) == "" {
 			fail("%s (%s): ssh.private_key is required", where, b.Name)
 		}
-		if b.SSH.Port < 1 || b.SSH.Port > 65535 {
-			fail("%s (%s): ssh.port %d out of range", where, b.Name, b.SSH.Port)
+		if port := b.SSH.Port.Value(); port < 1 || port > 65535 {
+			fail("%s (%s): ssh.port %d out of range", where, b.Name, port)
 		}
 		switch b.SSH.HostKeyPolicy {
 		case "strict", "accept-new", "insecure":
@@ -368,6 +441,14 @@ func checkHostKeyPath(path string) error {
 }
 
 func validateProvision(where string, b Backend, fail func(string, ...any)) {
+	// An explicit zero is a configuration mistake, not a request for a default: both timeouts are
+	// "how long to wait", and waiting for nothing fails every acquisition.
+	if b.Provider.ReadyTimeout.IsSet() && b.Provider.ReadyTimeout.Std() <= 0 {
+		fail("%s (%s): provider.ready_timeout must be > 0", where, b.Name)
+	}
+	if b.Command.Timeout.IsSet() && b.Command.Timeout.Std() <= 0 {
+		fail("%s (%s): command.timeout must be > 0", where, b.Name)
+	}
 	switch b.Provision {
 	case ProvisionClaims:
 		if strings.TrimSpace(b.Namespace) == "" {
@@ -419,6 +500,10 @@ func validateProvision(where string, b Backend, fail func(string, ...any)) {
 //
 // Accepted inputs: "SHA256:AbC...=" and the bare "AbC...=" body; the returned form is always the bare
 // unpadded base64 body, so two spellings of the same key never become two identities.
+//
+// The decoded length is checked, not just the base64 alphabet: sha256 fingerprints are 32 bytes, and a
+// truncated one decodes happily into a shorter string that can never match a real client key. That
+// failure is silent — the gateway starts, accepts nobody, and -check-config said the file was fine.
 func NormalizeFingerprint(s string) (string, error) {
 	raw := strings.TrimSpace(s)
 	if raw == "" {
@@ -431,8 +516,13 @@ func NormalizeFingerprint(s string) (string, error) {
 	if raw == "" {
 		return "", fmt.Errorf("fingerprint %q has no body", s)
 	}
-	if _, err := base64.RawStdEncoding.DecodeString(raw); err != nil {
+	sum, err := base64.RawStdEncoding.DecodeString(raw)
+	if err != nil {
 		return "", fmt.Errorf("fingerprint %q is not base64: %w", s, err)
+	}
+	if len(sum) != sha256.Size {
+		return "", fmt.Errorf("fingerprint %q decodes to %d bytes, want %d (a SHA256 fingerprint)",
+			s, len(sum), sha256.Size)
 	}
 	return raw, nil
 }

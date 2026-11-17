@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"sort"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -31,6 +32,14 @@ func main() {
 		listen      = flag.String("listen", "", "override listen address (default from config)")
 		checkConfig = flag.Bool("check-config", false, "validate configuration and exit")
 		showVersion = flag.Bool("version", false, "print version and exit")
+		// Without a stable host key every restart changes the fingerprint clients pin. Tests and lab
+		// runs need that escape hatch; a deployment does not, so it is opt-in and never a config key.
+		allowEphemeral = flag.Bool("allow-ephemeral-hostkey", false,
+			"run without host_key (tests only: the fingerprint changes on every restart)")
+		// The delay lives here, not in a preStop hook: the prebuilt image is `FROM scratch` and has no
+		// shell to run `sleep` with.
+		shutdownDelay = flag.Duration("shutdown-delay", 2*time.Second,
+			"wait after SIGTERM before dropping sessions, so the Service stops routing here first")
 	)
 	flag.Parse()
 
@@ -42,7 +51,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	cfg, err := config.Load(*cfgPath)
+	cfg, err := config.Load(*cfgPath, config.AllowEphemeralHostKey(*allowEphemeral))
 	if err != nil {
 		logger.Error("configuration rejected", "error", err)
 		os.Exit(2)
@@ -116,6 +125,8 @@ func main() {
 				logger.Warn("initial pool warm failed", "error", err)
 			}
 		}()
+	} else {
+		logger.Info("warm pool disabled by configuration", "pool_size", 0)
 	}
 
 	front, err := sshfront.New(sshfront.Config{
@@ -133,12 +144,21 @@ func main() {
 		logger.Error("ssh front end", "error", err)
 		os.Exit(1)
 	}
+	// Serve must not be cancelled by the same signal that starts the shutdown sequence: the delay below is
+	// the window in which the Service stops routing here, and a listener that closes at the first SIGTERM
+	// has no window at all (measured before this fix: port refused at 1.0s of a 2s delay). The listener is
+	// closed by the closeSessions step, after the delay has been waited.
+	serveCtx, stopServing := context.WithCancel(context.Background())
 	go func() {
-		if err := front.Serve(ctx); err != nil {
+		if err := front.Serve(serveCtx); err != nil {
 			logger.Error("ssh front end stopped", "error", err)
 			stop()
 		}
 	}()
+
+	// shuttingDown flips the moment SIGTERM arrives: readiness goes red before the delay, so a Service
+	// that is still deciding whether this pod is an endpoint stops choosing it.
+	var shuttingDown atomic.Bool
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -150,6 +170,11 @@ func main() {
 	// with warm capacity configured but no way to create instances must not receive traffic.
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if shuttingDown.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, "not ready: shutting down\n")
+			return
+		}
 		fs := mgr.FillState()
 		if !fs.CanProvision() {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -169,11 +194,40 @@ func main() {
 	}()
 
 	<-ctx.Done()
-	logger.Info("shutting down")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_ = health.Shutdown(shutdownCtx)
-	_ = front.Close()
+	logger.Info("shutting down", "delay", shutdownDelay.String())
+	shutdownSequence(*shutdownDelay, func() { shuttingDown.Store(true) }, func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = health.Shutdown(shutdownCtx)
+	}, func() {
+		stopServing()
+		_ = front.Close()
+	})
+}
+
+// shutdownSequence is everything that happens after the termination signal, in the order that matters:
+// readiness goes red first, then the process keeps accepting for `delay` (the window in which the
+// Service and the dataplane stop routing here), and only then are the health endpoint and the sessions
+// dropped. Closing the listener first would cut clients that are still being routed to it; waiting
+// forever is what the previous version did, and every rolling update had to be killed.
+//
+// It is a function so that the order — and the fact that the delay is actually waited — has a test. The
+// value (2s by default) is an operational judgement: it is longer than the endpoint removal this cluster
+// measures and shorter than any client's reconnect budget, so a rollout costs a reconnect, not a lease.
+func shutdownSequence(delay time.Duration, notReady, stopHealth, closeSessions func()) {
+	if delay < 0 {
+		delay = 0
+	}
+	if notReady != nil {
+		notReady()
+	}
+	time.Sleep(delay)
+	if stopHealth != nil {
+		stopHealth()
+	}
+	if closeSessions != nil {
+		closeSessions()
+	}
 }
 
 // metricsHandler serves the exposition. It is a named handler so that a test can read /metrics through an
@@ -216,6 +270,7 @@ func writeMetrics(w io.Writer, mgr *lease.Manager, backends map[string]backend.B
 	fmt.Fprintf(w, "# HELP byre_leases_active Leases with at least one open connection.\n# TYPE byre_leases_active gauge\nbyre_leases_active %d\n", active)
 	fmt.Fprintf(w, "# HELP byre_leases_idle Leases without connections, waiting to be reaped.\n# TYPE byre_leases_idle gauge\nbyre_leases_idle %d\n", idle)
 	fmt.Fprintf(w, "# HELP byre_leases_adopted Leases recovered from existing instances at startup.\n# TYPE byre_leases_adopted counter\nbyre_leases_adopted %d\n", mgr.AdoptedTotal())
+	fmt.Fprintf(w, "# HELP byre_instances_discarded Instances destroyed at startup because nothing could own them.\n# TYPE byre_instances_discarded counter\nbyre_instances_discarded %d\n", mgr.DiscardedTotal())
 	fmt.Fprintf(w, "# HELP byre_leases_adopted_pending Adopted leases no connection has picked up yet; add it to leases_active when comparing across a restart.\n# TYPE byre_leases_adopted_pending gauge\nbyre_leases_adopted_pending %d\n", mgr.AdoptedPending())
 	fmt.Fprintf(w, "# HELP byre_oldest_idle_lease_age_seconds Age of the oldest lease without a connection.\n# TYPE byre_oldest_idle_lease_age_seconds gauge\nbyre_oldest_idle_lease_age_seconds %g\n", mgr.OldestIdleAge().Seconds())
 	fmt.Fprintf(w, "# HELP byre_lease_dead_instance_total Leases dropped because the instance behind them no longer exists.\n# TYPE byre_lease_dead_instance_total counter\nbyre_lease_dead_instance_total %d\n", mgr.DeadInstancesTotal())

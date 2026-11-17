@@ -348,7 +348,8 @@ so that grant has to be applied on its own. Skipping it is the most misleading f
 The gateway's host key lives on its own PVC (`deploy/hostkey-pvc.yaml`), because it is the identity clients
 pin; the pool key — byre's key *to* the instances — comes from the Secret above. Rolling the Deployment
 adopts live leases first, so a client that reconnects during a rollout keeps its instance, but the SSH
-connections themselves are cut: there is no draining. Install, rotation, RBAC and symptoms:
+connections themselves are cut: there is no connection hand-off. The process lets go of them itself after
+`-shutdown-delay` (2s) instead of waiting out the grace period. Install, rotation, RBAC and symptoms:
 [`docs/handbook/operations.md`](docs/handbook/operations.md).
 
 ## How it compares

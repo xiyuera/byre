@@ -35,6 +35,11 @@ import (
 func NewWorkloadDriver(t *testing.T, name, namespace string) (*backend.Kubernetes, *fake.Clientset) {
 	t.Helper()
 
+	// The fake hands out 192.0.2.x addresses that nothing answers on, and readiness is now "the address
+	// answers and speaks SSH". Stub the probe: these tests are about the lease table and the front end.
+	restoreProbe := backend.SetReadyProbeForTest(func(context.Context, string) error { return nil })
+	t.Cleanup(restoreProbe)
+
 	cs := fake.NewSimpleClientset()
 	var seq int64
 	cs.PrependReactor("create", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {

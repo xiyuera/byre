@@ -3,6 +3,7 @@ package sshfront
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -74,18 +75,51 @@ func trustOnFirstUse(path string) (ssh.HostKeyCallback, error) {
 }
 
 // appendKnownHost records a key for an unknown host and verifies the write landed.
+//
+// The read-back matters: a known_hosts that silently lost a line does not degrade to "trust anything",
+// it refuses every later connection (see trustOnFirstUse). "The write returned no error" is not the
+// same statement as "the line is on disk", and the second one is the only one worth acting on.
 func appendKnownHost(path, hostname string, key ssh.PublicKey) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	line := knownhosts.Line([]string{hostname}, key) + "\n"
+
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open known_hosts %s: %w", path, err)
 	}
 	defer f.Close()
-	line := knownhosts.Line([]string{hostname}, key) + "\n"
+
+	// Two connections can discover the same host at the same moment; without a lock their lines can
+	// interleave into an unparsable file, which refuses every connection from then on.
+	if err := lockFile(f); err != nil {
+		return fmt.Errorf("lock known_hosts %s: %w", path, err)
+	}
+	defer func() { _ = unlockFile(f) }()
+
 	if _, err := f.WriteString(line); err != nil {
 		return fmt.Errorf("append known_hosts %s: %w", path, err)
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("flush known_hosts %s: %w", path, err)
+	}
+
+	end, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return fmt.Errorf("verify known_hosts %s: %w", path, err)
+	}
+	start := end - int64(len(line))
+	if start < 0 {
+		return fmt.Errorf("verify known_hosts %s: file is shorter than the line just written", path)
+	}
+	got := make([]byte, len(line))
+	if _, err := f.ReadAt(got, start); err != nil {
+		return fmt.Errorf("verify known_hosts %s: %w", path, err)
+	}
+	if string(got) != line {
+		return fmt.Errorf("known_hosts %s does not contain the line that was just written", path)
 	}
 	return nil
 }

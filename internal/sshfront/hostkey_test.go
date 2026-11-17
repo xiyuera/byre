@@ -1,9 +1,15 @@
 package sshfront
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 // TestHostKeyIsPersistedOnFirstStart is the first-install guarantee: a configured path that does not
@@ -91,5 +97,45 @@ func TestHostKeyUnreadablePathFails(t *testing.T) {
 	}
 	if _, err := loadOrCreateHostKey(path); err == nil {
 		t.Fatal("a malformed host key must be an error")
+	}
+}
+
+// TestAppendKnownHostConcurrent is the F14 regression. known_hosts is appended to by whichever
+// connection discovers a host first, and a line that is half written or interleaved with another makes
+// knownhosts.New fail — which accept-new treats as fatal, so every later connection is refused.
+func TestAppendKnownHostConcurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "known_hosts")
+
+	const n = 8
+	signers := make([]ssh.Signer, n)
+	for i := range signers {
+		signers[i] = newSigner(t) // generated here: t.Fatalf inside the goroutines below would race
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = appendKnownHost(path, fmt.Sprintf("host-%d.example", i), signers[i].PublicKey())
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("append #%d: %v", i, err)
+		}
+	}
+
+	if _, err := knownhosts.New(path); err != nil {
+		t.Fatalf("known_hosts is not parsable after concurrent appends: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read known_hosts: %v", err)
+	}
+	if got := strings.Count(string(data), "\n"); got != n {
+		t.Fatalf("known_hosts has %d lines, want %d", got, n)
 	}
 }

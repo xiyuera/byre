@@ -146,7 +146,10 @@ func forwardRemote(client *ssh.ServerConn, target *ssh.Client, req *ssh.Request,
 		return
 	}
 	bound := ln.Addr().(*net.TCPAddr)
-	key := fmt.Sprintf("%s:%d", p.BindAddr, p.BindPort)
+	// Key on the port that was actually bound, not the one that was asked for. With `-R 0:host:port`
+	// the request always says 0, so a request-keyed set makes the second forward look like a duplicate
+	// of the first and refuses it (and a cancel naming the allocated port can never match).
+	key := forwardKey(p.BindAddr, uint32(bound.Port))
 	if !listeners.add(key, ln) {
 		_ = ln.Close()
 		_ = req.Reply(false, nil)
@@ -195,8 +198,14 @@ func cancelRemote(req *ssh.Request, listeners *listenerSet) {
 		_ = req.Reply(false, nil)
 		return
 	}
-	ok := listeners.remove(fmt.Sprintf("%s:%d", p.BindAddr, p.BindPort))
+	ok := listeners.remove(forwardKey(p.BindAddr, p.BindPort))
 	_ = req.Reply(ok, nil)
+}
+
+// forwardKey identifies one remote forward: the address that was bound plus the port that was bound.
+// Both the request and the cancel are expressed in those terms once the port has been allocated.
+func forwardKey(bindAddr string, port uint32) string {
+	return net.JoinHostPort(bindAddr, strconv.FormatUint(uint64(port), 10))
 }
 
 // forwardRequests relays channel requests in one direction, answering the sender with the receiver's

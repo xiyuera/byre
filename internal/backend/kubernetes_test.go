@@ -99,6 +99,8 @@ func readyPodReactor(cs *fake.Clientset, ip string) {
 }
 
 func TestPodCreateListRelease(t *testing.T) {
+	// A pod that is Ready is not necessarily dialable; the driver must still see port 22 answer.
+	withProbe(t, func(context.Context, string) error { return nil })
 	cfg := baseKubeCfg()
 	cs := fake.NewSimpleClientset()
 	readyPodReactor(cs, "192.0.2.7")
@@ -193,6 +195,70 @@ func TestPodWaitsForReady(t *testing.T) {
 		t.Fatalf("timeout took %s, want ~300ms", elapsed)
 	}
 	// A failed acquisition must not leave the object behind.
+	pods, _ := cs.CoreV1().Pods("instances").List(context.Background(), metav1.ListOptions{})
+	if len(pods.Items) != 0 {
+		t.Fatalf("failed create left %d pods behind", len(pods.Items))
+	}
+}
+
+// TestPodIsNotReadyUntilPort22Answers is the F9 regression: PodReady is the kubelet's verdict on the
+// container's readiness probe, and an image that starts sshd from an entrypoint script is Ready first
+// and dialable later. ADR-0005 defines readiness as "one advertised address answers on 22", which the
+// claim path already did and the pod path did not.
+func TestPodIsNotReadyUntilPort22Answers(t *testing.T) {
+	cfg := baseKubeCfg()
+	cfg.Provider.ReadyTimeout = 3 * time.Second
+	cs := fake.NewSimpleClientset()
+	readyPodReactor(cs, "192.0.2.7") // Ready and has an IP from the first Get
+	cfg.Client = cs
+	cfg.Dynamic = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{claimGVR: "SandboxClaimList"})
+
+	var calls int
+	withProbe(t, func(context.Context, string) error {
+		calls++
+		if calls < 3 {
+			return errors.New("connection refused")
+		}
+		return nil
+	})
+
+	k, err := NewKubernetes(cfg)
+	if err != nil {
+		t.Fatalf("NewKubernetes: %v", err)
+	}
+	in, err := k.Create(context.Background())
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if in.Addr != "192.0.2.7:22" {
+		t.Fatalf("addr = %q", in.Addr)
+	}
+	if calls < 3 {
+		t.Fatalf("readiness was accepted after %d probes, want the port to be probed until it answers", calls)
+	}
+}
+
+// TestPodFailsWhenPortNeverAnswers: a pod that is Ready but never accepts on 22 must not be handed out
+// as an instance, and the object it created has to be cleaned up.
+func TestPodFailsWhenPortNeverAnswers(t *testing.T) {
+	cfg := baseKubeCfg()
+	cfg.Provider.ReadyTimeout = 300 * time.Millisecond
+	cs := fake.NewSimpleClientset()
+	readyPodReactor(cs, "192.0.2.9")
+	cfg.Client = cs
+	cfg.Dynamic = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{claimGVR: "SandboxClaimList"})
+
+	withProbe(t, func(context.Context, string) error { return errors.New("connection refused") })
+
+	k, err := NewKubernetes(cfg)
+	if err != nil {
+		t.Fatalf("NewKubernetes: %v", err)
+	}
+	if _, err := k.Create(context.Background()); err == nil {
+		t.Fatal("a pod that never answers on 22 was accepted as ready")
+	}
 	pods, _ := cs.CoreV1().Pods("instances").List(context.Background(), metav1.ListOptions{})
 	if len(pods.Items) != 0 {
 		t.Fatalf("failed create left %d pods behind", len(pods.Items))
@@ -598,6 +664,9 @@ func TestAdoptBackfillsUIDOnLegacyBinding(t *testing.T) {
 
 // TestBindingWritesObjectUID: the annotation is only useful if it is written when an instance is bound.
 func TestBindingWritesObjectUID(t *testing.T) {
+	// Readiness also probes the address (F9), and the fake's 192.0.2.7 answers nothing: this test is
+	// about the UID annotation, not about the pod being dialable.
+	withProbe(t, func(context.Context, string) error { return nil })
 	cfg := baseKubeCfg()
 	cs := fake.NewSimpleClientset()
 	readyPodReactor(cs, "192.0.2.7")
@@ -770,6 +839,8 @@ func TestProbeRejectsTruncatedBanner(t *testing.T) {
 // TestPodInstanceGetsConservativeSecurityContext covers the pod provider's defaults: an instance used to
 // run with no resources and no securityContext at all (root, default capabilities).
 func TestPodInstanceGetsConservativeSecurityContext(t *testing.T) {
+	// The pod is Ready but its address answers nothing; the probe is stubbed for the same reason as above.
+	withProbe(t, func(context.Context, string) error { return nil })
 	cfg := baseKubeCfg()
 	cs := fake.NewSimpleClientset()
 	readyPodReactor(cs, "192.0.2.7")

@@ -18,9 +18,10 @@
 
 listen: ":2222"
 
-# SSH host key clients pin. Point this at durable storage: the gateway creates the key on first start
-# if the file is absent, and reuses it afterwards. Leaving it empty gives an ephemeral key, which is only
-# acceptable for tests (every restart changes the fingerprint).
+# SSH host key clients pin. **Required** — validation rejects a config without it, because every restart
+# would otherwise change the fingerprint and every strict client would stop connecting (ADR-0006).
+# Point it at durable storage: the gateway creates the key on first start if the file is absent, and
+# reuses it afterwards. `-allow-ephemeral-hostkey` is the command-line escape hatch for tests only.
 host_key: /var/lib/byre/hostkey/id_ed25519
 
 lease:
@@ -29,8 +30,9 @@ lease:
   # Reconnect window after a disconnect; absorbs ControlMaster/ControlPersist expiry.
   grace: 60s
   # Warm instances kept ready. Each idle instance costs one pod-worth of memory, or whatever the
-  # provisioner's idle cost is. An explicit 0 is replaced by this default, and it only applies to
-  # backends that implement Create (endpoints and command warm nothing).
+  # provisioner's idle cost is. An explicit 0 disables warm capacity — instances are created on demand,
+  # which is what a first smoke test wants — and the pool only applies to backends that implement
+  # Create (endpoints and command warm nothing).
   pool_size: 2
 
 backends:

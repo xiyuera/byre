@@ -508,6 +508,13 @@ func (k *Kubernetes) waitForPod(ctx context.Context, name string) (string, error
 				return false, nil
 			}
 			addr = fmt.Sprintf("%s:%d", pod.Status.PodIP, 22)
+			// PodReady is the kubelet's verdict on the container's readiness probe, not proof that port
+			// 22 answers: images that start sshd from an entrypoint script are Ready first and dialable
+			// later. ADR-0005 makes readiness "one address answers on 22 from here", and the claim path
+			// already asks exactly that, so the pod path asks it too.
+			if err := probeAddr(ctx, addr); err != nil {
+				return false, nil
+			}
 			return true, nil
 		})
 	if err != nil {
