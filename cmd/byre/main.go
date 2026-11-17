@@ -31,6 +31,14 @@ func main() {
 		listen      = flag.String("listen", "", "override listen address (default from config)")
 		checkConfig = flag.Bool("check-config", false, "validate configuration and exit")
 		showVersion = flag.Bool("version", false, "print version and exit")
+		// Without a stable host key every restart changes the fingerprint clients pin. Tests and lab
+		// runs need that escape hatch; a deployment does not, so it is opt-in and never a config key.
+		allowEphemeral = flag.Bool("allow-ephemeral-hostkey", false,
+			"run without host_key (tests only: the fingerprint changes on every restart)")
+		// The delay lives here, not in a preStop hook: the prebuilt image is `FROM scratch` and has no
+		// shell to run `sleep` with.
+		shutdownDelay = flag.Duration("shutdown-delay", 2*time.Second,
+			"wait after SIGTERM before dropping sessions, so the Service stops routing here first")
 	)
 	flag.Parse()
 
@@ -42,7 +50,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	cfg, err := config.Load(*cfgPath)
+	cfg, err := config.Load(*cfgPath, config.AllowEphemeralHostKey(*allowEphemeral))
 	if err != nil {
 		logger.Error("configuration rejected", "error", err)
 		os.Exit(2)
@@ -116,6 +124,8 @@ func main() {
 				logger.Warn("initial pool warm failed", "error", err)
 			}
 		}()
+	} else {
+		logger.Info("warm pool disabled by configuration", "pool_size", 0)
 	}
 
 	front, err := sshfront.New(sshfront.Config{
@@ -169,7 +179,11 @@ func main() {
 	}()
 
 	<-ctx.Done()
-	logger.Info("shutting down")
+	logger.Info("shutting down", "delay", shutdownDelay.String())
+	// Keep accepting for a moment while the Service stops routing here (the endpoint is removed at the
+	// same instant SIGTERM arrives, and the dataplane needs a beat to agree), then drop everything.
+	// Before this existed the process only stopped accepting and then waited forever on open sessions.
+	time.Sleep(*shutdownDelay)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = health.Shutdown(shutdownCtx)
@@ -216,6 +230,7 @@ func writeMetrics(w io.Writer, mgr *lease.Manager, backends map[string]backend.B
 	fmt.Fprintf(w, "# HELP byre_leases_active Leases with at least one open connection.\n# TYPE byre_leases_active gauge\nbyre_leases_active %d\n", active)
 	fmt.Fprintf(w, "# HELP byre_leases_idle Leases without connections, waiting to be reaped.\n# TYPE byre_leases_idle gauge\nbyre_leases_idle %d\n", idle)
 	fmt.Fprintf(w, "# HELP byre_leases_adopted Leases recovered from existing instances at startup.\n# TYPE byre_leases_adopted counter\nbyre_leases_adopted %d\n", mgr.AdoptedTotal())
+	fmt.Fprintf(w, "# HELP byre_instances_discarded Instances destroyed at startup because nothing could own them.\n# TYPE byre_instances_discarded counter\nbyre_instances_discarded %d\n", mgr.DiscardedTotal())
 	fmt.Fprintf(w, "# HELP byre_leases_adopted_pending Adopted leases no connection has picked up yet; add it to leases_active when comparing across a restart.\n# TYPE byre_leases_adopted_pending gauge\nbyre_leases_adopted_pending %d\n", mgr.AdoptedPending())
 	fmt.Fprintf(w, "# HELP byre_oldest_idle_lease_age_seconds Age of the oldest lease without a connection.\n# TYPE byre_oldest_idle_lease_age_seconds gauge\nbyre_oldest_idle_lease_age_seconds %g\n", mgr.OldestIdleAge().Seconds())
 	fmt.Fprintf(w, "# HELP byre_lease_dead_instance_total Leases dropped because the instance behind them no longer exists.\n# TYPE byre_lease_dead_instance_total counter\nbyre_lease_dead_instance_total %d\n", mgr.DeadInstancesTotal())
