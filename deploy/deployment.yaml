@@ -30,7 +30,13 @@ spec:
           type: RuntimeDefault
       containers:
         - name: byre
-          image: byre
+          # Placeholder, not a default: there is no registry this project owns, and a bare name sends
+          # kubelet to Docker Hub looking for library/byre (ImagePullBackOff). Overwrite it from an
+          # overlay's images: block, or with
+          #   kubectl -n byre-system set image deploy/byre byre=<registry>/byre@sha256:<hex>
+          # A digest, not a tag: a tag can be re-pushed under the same name, and with IfNotPresent the
+          # node keeps running the old layers while the Deployment reports the new tag.
+          image: <registry>/byre@sha256:<digest>
           imagePullPolicy: IfNotPresent
           args: ["-config", "/etc/byre/config.yaml"]
           env:
