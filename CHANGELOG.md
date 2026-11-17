@@ -135,6 +135,23 @@ validated without contacting a cluster.
   deliberately kept: this file's migration notes, ADR-0003 (marked as superseded on the schema, with a
   pointer to ADR-0007), ADR-0007 itself, and the acceptance logs.
 
+### Build
+
+- A release can now be rebuilt byte for byte from its own assets. The stamped date is the commit date in
+  UTC, read once and shared by both architectures; it used to be `date -u` evaluated inside the
+  per-architecture loop, so the arm64 and amd64 binaries of one tag were stamped seconds apart and the
+  pair could not both match a rebuild.
+- `build-info.txt` records what is needed to reproduce the bytes: version, full commit, tag, build date,
+  the exact `ldflags` string, the `GOOS`/`GOARCH` of every asset, the Go toolchain, and the digest of the
+  job image. It also carries a `reproduce=` line with the command to run.
+- The release job names the toolchain it built with (`go1.23.12` in `library/ci-go:1.23`, digest
+  `sha256:4066…`) and fails rather than publishing when the image's Go differs from that pin. The 0.2.0
+  assets were built by go1.23.4 on a machine that was not this pipeline, which is why they cannot be
+  reproduced from this source.
+- `SHA256SUMS` now covers `build-info.txt` as well as the binaries. It cannot cover itself.
+- The build lives in `make dist`, which the workflow calls: what the pipeline does and what a person runs
+  locally are the same command.
+
 ## [0.2.0] - 2026-11-17
 
 First release that is safe to publish. Two things make it breaking for existing installations, both

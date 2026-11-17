@@ -23,16 +23,37 @@ A release is not "a passing CI run". It needs, in the release notes:
 
 ## How the pipeline works
 
-`.gitea/workflows/release.yml` runs on a `v*` tag:
+`.gitea/workflows/release.yml` runs on a `v*` tag and does nothing but supply inputs to `make dist`:
 
-1. build static `linux/arm64` and `linux/amd64` binaries, `CGO_ENABLED=0`;
-2. stamp version/commit/date through ldflags (`make build` already does this);
-3. write `SHA256SUMS` and a small `build-info.txt` (`go version`, commit, tag, workflow run);
-4. create the release on Gitea and upload those assets;
-5. if a `GH_TOKEN` secret exists, mirror the same release to GitHub.
+1. `make dist` builds static `linux/arm64` and `linux/amd64` binaries, `CGO_ENABLED=0`, with one build
+   date for both — the commit date in UTC, read once;
+2. the same target writes `build-info.txt` (version, commit, tag, build date, the exact `ldflags`, the
+   `GOOS`/`GOARCH` of every asset, the Go toolchain, the digest of the job image, and a `reproduce=`
+   line) and `SHA256SUMS` over the binaries and `build-info.txt`;
+3. create the release on Gitea through the API and upload those four files;
+4. if a `GH_TOKEN` secret exists, mirror the same release to GitHub.
 
-Steps 1–4 are what "a release" means here. Step 5 is optional on purpose: publishing to a second host is a
+Steps 1–3 are what "a release" means here. Step 4 is optional on purpose: publishing to a second host is a
 mirror, not a second source of truth.
+
+## Rebuilding a release
+
+The assets are an input, not a result: `build-info.txt` holds everything needed to rebuild the bytes.
+
+```sh
+git clone <repository> && cd byre
+git checkout <the commit= value from build-info.txt>
+make dist VERSION=<version> COMMIT=<commit_short> BUILD_DATE=<BuildDate> \
+          CI_IMAGE=<ci_image> CI_IMAGE_DIGEST=<ci_image_digest>
+cd dist && sha256sum -c SHA256SUMS
+```
+
+Two builds of one commit produce identical bytes, which is why the build date is the commit date rather
+than the clock on the builder. Anything that changes the bytes must change a field `build-info.txt`
+records: the source, the flags, or the compiler. The job image is pinned in `release.yml` and the job
+fails when the image's Go differs from the pin, so a compiler change cannot enter a release unnamed.
+
+`SHA256SUMS` covers every other asset but not itself — a checksum file cannot contain its own digest.
 
 ## Publishing to GitHub
 

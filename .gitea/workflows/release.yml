@@ -3,43 +3,95 @@ on:
   push:
     tags: ["v*"]
 
+# What this workflow is for: turn one tag into four assets that a stranger can rebuild byte for byte.
+# The build itself lives in `make dist`, so the same command works on a laptop; this file only supplies
+# the inputs (tag, commit, commit date, toolchain) and publishes the result.
+#
+# Three things used to make that impossible, all fixed here:
+#   * `date -u` was evaluated inside the per-architecture loop, so arm64 and amd64 were stamped two
+#     seconds apart. The date is now the commit date, computed once and shared.
+#   * build-info.txt did not record the date, the flags or the per-asset GOOS/GOARCH, so the four assets
+#     could not be turned back into the binary. It records all of them now (`make dist` writes it).
+#   * the job image's Go was never named, so nothing connected an asset to the compiler that made it.
+#     The toolchain is pinned below and asserted against the image at build time.
 jobs:
   build:
     runs-on: k8s-go
+    env:
+      # The runner label k8s-go binds this job to this image; the pin lives in the cluster, the
+      # fingerprint lives here. Addresses stay out of the repository: these strings are what
+      # build-info.txt records, and they are enough to identify the toolchain.
+      CI_IMAGE: library/ci-go:1.23
+      CI_IMAGE_DIGEST: sha256:40663a893f1b1be63da5cbc350dc55c175b71f95267e83214db5756ec322f528
+      CI_GO_VERSION: go1.23.12
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build static binaries
+      # Not actions/checkout: that action is JavaScript, and the job image has no Node and no route to
+      # the action host. Same reason (and same shape) as ci.yml, where the runner rejects builtin:checkout.
+      - name: Checkout, with the tag and the history it points into
         run: |
           set -eu
-          mkdir -p dist
-          for arch in arm64 amd64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
-              go build -trimpath \
-                -ldflags "-s -w -X byre/internal/version.Version=${GITHUB_REF_NAME} \
-                          -X byre/internal/version.Commit=$(git rev-parse --short HEAD) \
-                          -X byre/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-                -o "dist/byre-${GITHUB_REF_NAME}-linux-${arch}" ./cmd/byre
-          done
-          go version > dist/build-info.txt
-          printf 'commit=%s\ntag=%s\nrun=%s\n' "$(git rev-parse HEAD)" "${GITHUB_REF_NAME}" "${GITHUB_RUN_ID}" \
-            >> dist/build-info.txt
-          ( cd dist && sha256sum byre-* > SHA256SUMS )
+          git init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git -c http.sslVerify=false -c http.extraheader="Authorization: token ${{ github.token }}" \
+            fetch -q origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+          git checkout -q "${GITHUB_SHA}"
+          git describe --tags --exact-match
+
+      # A rebuilt asset that differs is either a flag change or a compiler change. Recording the
+      # compiler is what lets a reader tell those two apart; asserting it here is what stops the pin
+      # from silently going stale when the image is updated.
+      - name: The job image is the toolchain the release names
+        run: |
+          set -eu
+          got="$(go version | awk '{print $3}')"
+          echo "go in job image: ${got} (pinned: ${CI_GO_VERSION}, digest ${CI_IMAGE_DIGEST})"
+          [ "${got}" = "${CI_GO_VERSION}" ] || {
+            echo "the job image carries ${got}, this workflow pins ${CI_GO_VERSION}." >&2
+            echo "A release records the compiler it was built with; update CI_IMAGE_DIGEST and" >&2
+            echo "CI_GO_VERSION together, then re-tag, rather than publishing an unlabelled binary." >&2
+            exit 1
+          }
+
+      - name: Build both architectures, one build date
+        run: |
+          set -eu
+          make dist \
+            VERSION="${GITHUB_REF_NAME}" \
+            COMMIT="$(git rev-parse --short HEAD)" \
+            COMMIT_FULL="$(git rev-parse HEAD)" \
+            BUILD_DATE="$(TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd)" \
+            CI_IMAGE="${CI_IMAGE}" \
+            CI_IMAGE_DIGEST="${CI_IMAGE_DIGEST}"
+          cat dist/build-info.txt
 
       - name: Publish the Gitea release
         env:
           TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           set -eu
+          [ -n "${TOKEN}" ] || { echo "the RELEASE_TOKEN secret is not set on this repository" >&2; exit 1; }
           api="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
-          rel=$(curl -fsS -X POST -H "Authorization: token $TOKEN" -H 'Content-Type: application/json' \
-            -d "{\"tag_name\":\"${GITHUB_REF_NAME}\",\"name\":\"${GITHUB_REF_NAME}\",\"body\":\"See CHANGELOG.md\",\"prerelease\":false}" \
-            "$api/releases")
-          id=$(printf '%s' "$rel" | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)
-          # The release body is replaced by hand with the changelog section; assets are what the pipeline owns.
+          auth="Authorization: token ${TOKEN}"
+          # Re-running a tag must replace the assets, not fail on "already exists" and not leave a
+          # second copy of every file.
+          if curl -fsS -H "${auth}" "${api}/releases/tags/${GITHUB_REF_NAME}" -o /tmp/rel.json; then
+            id=$(sed -n 's/.*"id":\([0-9]*\).*/\1/p' /tmp/rel.json | head -1)
+            echo "release ${GITHUB_REF_NAME} exists (id=${id}); replacing its assets"
+            for a in $(curl -fsS -H "${auth}" "${api}/releases/${id}/assets" \
+                        | grep -o '"id":[0-9]*' | cut -d: -f2); do
+              curl -fsS -X DELETE -H "${auth}" "${api}/releases/assets/${a}" >/dev/null
+            done
+          else
+            rel=$(curl -fsS -X POST -H "${auth}" -H 'Content-Type: application/json' \
+              -d "{\"tag_name\":\"${GITHUB_REF_NAME}\",\"name\":\"${GITHUB_REF_NAME}\",\"body\":\"See CHANGELOG.md\",\"prerelease\":false}" \
+              "${api}/releases")
+            id=$(printf '%s' "${rel}" | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)
+          fi
+          [ -n "${id}" ] || { echo "could not determine the release id" >&2; exit 1; }
+          # The release body is replaced by hand with the changelog section; assets are what the
+          # pipeline owns.
           for f in dist/*; do
-            curl -fsS -X POST -H "Authorization: token $TOKEN" \
-              -F "attachment=@$f" "$api/releases/$id/assets?name=$(basename "$f")" >/dev/null
+            curl -fsS -X POST -H "${auth}" \
+              -F "attachment=@${f}" "${api}/releases/${id}/assets?name=$(basename "${f}")" >/dev/null
+            echo "uploaded $(basename "${f}")"
           done
