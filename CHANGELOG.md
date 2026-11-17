@@ -22,8 +22,9 @@ unchanged.
   `command` (a program does it). A file that still says `type` fails with a sentence rather than a
   schema error: `backend.type was replaced by backend.provision (claims|workloads|endpoints|command);
   the value "kubernetes" is not used`.
-- `provider.kind` is gone. The provision value decides the behaviour: `sandbox-claim` → `claims`,
-  `pod` → `workloads`, `static` → `endpoints`.
+- `provider.kind` is gone, and so is `backend.type`. 0.2.x needed both: `type: kubernetes` +
+  `provider.kind: sandbox-claim` → `provision: claims`; `type: kubernetes` + `provider.kind: pod` →
+  `provision: workloads`; `type: static` (no `provider` block) → `provision: endpoints`.
 - Two claim fields are renamed: `provider.claim_resource` → `provider.resource`, and
   `provider.claim_kind` → `provider.object_kind`.
 - The `ssh` block now means the same thing under every provision, and readiness lives in one place
@@ -60,6 +61,24 @@ backends:
     ssh: { port: 22, user: "<remote-user>", private_key: "/etc/byre/keys/id_key" }
 ```
 
+The `static` backend had no `provider` block at all, so its migration is a separate edit:
+
+```yaml
+# 0.2.x
+backends:
+  - name: lab
+    type: static
+    endpoints: ["192.0.2.11:22", "192.0.2.12:22"]
+    ssh: { port: 22, user: "<remote-user>", private_key: "/etc/byre/keys/id_key" }
+
+# 0.3.0
+backends:
+  - name: lab
+    provision: endpoints
+    endpoints: ["192.0.2.11:22", "192.0.2.12:22"]
+    ssh: { port: 22, user: "<remote-user>", private_key: "/etc/byre/keys/id_key" }
+```
+
 The upgrade is the rename itself; nothing changed in what the gateway does at runtime. Run
 `byre -check-config -config <file>` with the new binary before rolling it: the four provisions are
 validated without contacting a cluster.
@@ -69,7 +88,7 @@ validated without contacting a cluster.
 - `provision: command`, the escape hatch: an external program provisions the instance and prints one
   JSON object per acquire (`{"id","addr","user?","private_key?"}`). An optional `list` command lets a
   restarted gateway adopt what it left running; without it, orphans from that backend are the
-  operator's to clean up, and the configuration says so where you write it.
+  operator's to clean up, and `deploy/config.example.yaml` says so in a comment.
 - `deploy/config.example.yaml` now shows all four provisions, each with only the fields it needs.
 
 ### Fixed
@@ -90,9 +109,10 @@ validated without contacting a cluster.
   commands that check them, what the lease costs, and what is known to be wrong. `README.zh-CN.md`
   follows it section for section.
 - `docs/architecture.md`, `docs/operations.md`, `docs/roadmap.md`, `docs/release.md`,
-  `docs/integrations/agent-runtime.md`, `examples/` and `deploy/rbac.yaml` use the provision
-  vocabulary. The old words survive only where they are history: ADR-0003 (marked as superseded on
-  the schema, with a pointer to ADR-0007), ADR-0007 itself, and the acceptance logs.
+  `docs/integrations/agent-runtime.md`, `examples/`, `deploy/rbac.yaml`, `.gitea/ISSUE_TEMPLATE/`
+  and `CONTRIBUTING.md` use the provision vocabulary. The old words now appear only where they are
+  deliberately kept: this file's migration notes, ADR-0003 (marked as superseded on the schema, with a
+  pointer to ADR-0007), ADR-0007 itself, and the acceptance logs.
 
 ## [0.2.0] - 2026-11-17
 

@@ -1,11 +1,11 @@
 // Package config holds byre's declarative configuration and its validation rules.
 //
 // The gateway deliberately knows nothing about what an "instance" physically is. A backend declares
-// three things and nothing else: how an instance is obtained (sandbox-claim, a bare pod, or a list of
-// static endpoints), how it is reached over SSH, and how it is returned. Anything that speaks SSH can
+// three things and nothing else: how an instance is obtained (claims, workloads, endpoints, or
+// command), how it is reached over SSH, and how it is returned. Anything that speaks SSH can
 // therefore be described in configuration instead of code.
 //
-// Validation is strict and fail-fast: unknown fields, unknown backend types, duplicate identities or
+// Validation is strict and fail-fast: unknown fields, unknown provision values, duplicate identities or
 // missing required fields abort startup instead of silently falling back to a default.
 package config
 
@@ -119,7 +119,7 @@ type Command struct {
 
 // Provider declares what the instance is and how it is started.
 //
-// api_group / api_version / claim_resource exist so that no CRD is hardcoded: the same binary drives
+// api_group / api_version / resource / object_kind exist so that no CRD is hardcoded: the same binary drives
 // any declarative claim API, and the field names are configuration.
 type Provider struct {
 	// Selectors for a declarative claim API. Which CRD it is, is configuration: the binary knows the
@@ -319,10 +319,7 @@ func validateProvision(where string, b Backend, fail func(string, ...any)) {
 		if len(b.Command.Acquire) == 0 {
 			fail("%s (%s): command.acquire is required for provision %s", where, b.Name, b.Provision)
 		}
-		if len(b.Command.List) == 0 {
-			// Not an error: a backend that cannot list simply cannot be adopted after a restart.
-			_ = b
-		}
+		// A backend without list is legal: it simply cannot be adopted after a restart.
 	case "":
 		fail("%s (%s): provision is required (%s|%s|%s|%s)",
 			where, b.Name, ProvisionClaims, ProvisionWorkloads, ProvisionEndpoints, ProvisionCommand)

@@ -6,10 +6,11 @@ An SSH gateway for disposable instances. A client authenticates with a public ke
 which instance it gets, and it keeps that instance for as long as the client is working — not for as
 long as one TCP connection happens to live.
 
-> Status: **0.3.0, pre-1.0**. Identity, lease, warm pool, adoption across restarts and all four
-> provisioning shapes work end to end, and the numbers in this file come from runs recorded in
-> `docs/acceptance/`. Single replica, no automated end-to-end gate, and the image/manifest path is
-> verified by server-side dry-run only. See [Limits](#limits-and-things-known-to-be-wrong).
+> Status: **0.3.0, pre-1.0**. Identity, lease, warm pool and adoption across restarts are verified on
+> a real cluster (`docs/acceptance/`); of the four provisioning shapes only `claims` has a cluster run
+> — `workloads`, `endpoints` and `command` are covered by unit tests with a fake client only. Single
+> replica, no automated end-to-end gate, and the image/manifest path is verified by server-side dry-run
+> only. See [Limits](#limits-and-things-known-to-be-wrong).
 
 > Renamed from `keypod` (see `docs/rename-to-byre.md`). Not affiliated with, endorsed by, or derived
 > from any same-named project; the name is a cowshed, and the licence grants no trademark rights.
@@ -149,8 +150,9 @@ If a restart re-created the instance, it would destroy exactly the state the lea
 which turns "we rolled the gateway" into "every agent lost its working tree".
 
 The record these numbers come from, and the run that produced them, is
-`docs/acceptance/2026-11-17-m4.md`. `test/e2e/cluster-acceptance.sh` runs the first and the third
-against your own deployment (`--ttl-ok` includes the 320s wait).
+`docs/acceptance/2026-11-17-m4.md`. `test/e2e/cluster-acceptance.sh` runs the first invariant against
+your own deployment (`--ttl-ok` includes the 320s wait) and checks that `-L` reaches the instance; the
+third it cannot assert — restart the gateway yourself and look for `adopted existing leases` in the log.
 
 ## What this costs
 
@@ -241,7 +243,8 @@ Full reference: [`docs/architecture.md`](docs/architecture.md) · decisions:
   warms its pool, and refuses every checkout with a 403 — the most misleading failure this project
   has. `docs/operations.md` leads with it.
 - **`provision: command` without `list` cannot adopt.** Instances it created outlive the process and
-  nobody reaps them; the config says so when you validate it, rather than at the first restart.
+  nobody reaps them. `deploy/config.example.yaml` says so in a comment; the validator does not reject
+  it, because a command backend without `list` is a legal configuration.
 - **No automated end-to-end gate.** The cluster runs in `docs/acceptance/` were executed and recorded
   by hand, and the `kind`-based CI run is still a roadmap item. The image and `kubectl apply -k` path
   are validated by server-side dry-run (`?dryRun=All`) only; the build environment had no container
