@@ -436,8 +436,10 @@ func (m *Manager) Lookup(identity string) *Entry {
 }
 
 // Invalidate drops the lease for identity because the instance behind it turned out to be unusable.
-// It is what a failed dial calls: without it a dead instance is handed to every reconnect until
-// ttl+grace expires, even though healthy capacity may be idle.
+// The front end does not call it: a failed dial runs DiscardIfGone, which asks the backend whether the
+// object is really gone and keeps a lease whose instance merely refuses connections (ADR-0008).
+// Invalidate is for a caller that already knows the instance is unusable and does not want that question
+// asked. It is kept because that is a different fact, and it has tests.
 //
 // instanceID narrows the call to one instance, so a caller holding a stale snapshot cannot evict the
 // healthy lease that replaced it. Passing "" invalidates whatever the identity holds.

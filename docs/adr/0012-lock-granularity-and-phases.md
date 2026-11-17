@@ -43,8 +43,14 @@ looking past:
   removes the row **only if the table still points at that very row**, so a release can never delete a
   lease that was created while it was in flight. `backend.Static` already applied the same rule to its
   own ownership map (`Release` only clears the holder it recorded).
-- `Manager.Invalidate` exists because a failed dial is a fact only the front end has: without it, a dead
-  instance is handed to every reconnect until `ttl+grace` expires even though healthy capacity is idle.
+- `Manager.Invalidate` is the blunt instrument for a caller that already knows the instance is unusable:
+  it drops the row without asking the backend. The dial path uses the narrower `DiscardIfGone` instead
+  (ADR-0008): a refused connection may mean a deleted object *or* a wedged one, and only the first
+  justifies replacing an instance the client is still entitled to. `Invalidate` is therefore API with
+  tests and no production caller after the two changes met; the front end's choice is the narrower one.
+- The liveness probe on the reuse path is a backend read too, so it runs outside the lock for the same
+  reason as `Acquire`: a slow apiserver for one identity must not stall `Lookup`, `KeepAlive`, `Stats`,
+  `ReleaseConn` or another identity's `Acquire`.
 
 ## Alternatives considered
 
