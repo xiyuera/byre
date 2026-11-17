@@ -9,6 +9,8 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-18
+
 ### Added
 
 - **The contribution rules are in the repository, and `main` enforces them.** `CONTRIBUTING.md`
