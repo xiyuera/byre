@@ -399,8 +399,9 @@ contribution.
 
 Sign-off became policy in the commit that added the licence and NOTICE files (find it with
 `git log -S 'Developer Certificate of Origin' -- CONTRIBUTING.md`). The 31 commits before it are all
-unsigned: 24 by `keypod contributors`, the placeholder the project used before the rename, and 7 by
-early role accounts that predate the naming rule. A sign-off is a statement the author makes, so it cannot be made
+unsigned: 24 by `keypod contributors`, the placeholder the project used before the rename, 6 by the
+owner account, and 1 by an early reviewer account. None of the last seven is a role account in the
+sense the per-role table uses — they predate the naming rule. A sign-off is a statement the author makes, so it cannot be made
 on their behalf now. A
 build from before the policy is recognisable from the `commit` recorded in its `build-info.txt`.
 

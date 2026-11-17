@@ -6,12 +6,16 @@ successor, `byre contributors <noreply@example.com>`. Those identities are hones
 a change and useless about *who*: the log cannot tell a review from an implementation, and a mistake
 cannot be routed back to the role that made it.
 
-Since the sign-off policy the log carries a role account instead, which is what makes it readable and
-what makes a sign-off mean something: the trailer has to name that account (see
-[CONTRIBUTING](../CONTRIBUTING.md)). One gap is still open rather than historical: 13 commits are authored as
-`xiyuera <admin@example.invalid>`, scattered through the post-policy history and interleaved with
-role-account commits — the most recent at 17:41, eleven commits below this file's own last change.
-That identity is still in use, so it is a hole to close, not a leftover to explain.
+Of the 106 commits since the sign-off policy, 47 carry the owner account
+(`xiyuera_hermes <xiyuera@gmail.com>`), 37 `_eng`, 8 `_ops`, 13 `xiyuera <admin@example.invalid>` and 1
+the old placeholder — `git log --format='%an|%ae' 94d5b52..origin/main | sort | uniq -c` reproduces
+that line at any point in the history. The role accounts are what makes the log readable and a sign-off mean something: the
+trailer has to name the account that made the change (see [CONTRIBUTING](../CONTRIBUTING.md)).
+
+Two gaps are still open rather than historical. The owner account is not in the table above, although it
+is the most frequent author since the policy — it does release, compliance and cross-role work, so it has
+no single row. And 13 commits carry `xiyuera <admin@example.invalid>`, interleaved with role-account
+commits throughout, the most recent thirteen commits below main's tip.
 
 ## One account per role
 
