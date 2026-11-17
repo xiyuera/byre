@@ -286,6 +286,13 @@ func (k *Kubernetes) Adopt(ctx context.Context, ins []Instance) error {
 	return nil
 }
 
+// AnonymousInstancesAreStale implements StaleCapacity. Every object this driver creates carries
+// LabelIdentity, so a listed object without it is warm capacity from an earlier process: it belongs to
+// nobody, and the pool is refilled right after adoption.
+func (k *Kubernetes) AnonymousInstancesAreStale() bool { return true }
+
+var _ StaleCapacity = (*Kubernetes)(nil)
+
 // ---------------------------------------------------------------- pods
 
 func (k *Kubernetes) createPod(ctx context.Context) (Instance, error) {

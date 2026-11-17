@@ -88,11 +88,13 @@ func main() {
 	}
 
 	// Adoption must happen before warming: an unannotated instance found at startup is stale pool
-	// capacity and gets destroyed, while warming would immediately create more of it.
+	// capacity for drivers that can tell (see ADR-0009), while warming would immediately create more.
+	// The outcome is always logged, including "nothing adopted": a restart that quietly found nothing
+	// and a restart that quietly destroyed something used to look the same.
 	if n, err := mgr.Adopt(ctx); err != nil {
 		logger.Warn("adoption incomplete", "adopted", n, "error", err)
-	} else if n > 0 {
-		logger.Info("adopted existing leases", "count", n)
+	} else {
+		logger.Info("adoption finished", "adopted", n)
 	}
 
 	go mgr.RunReaper(ctx, 30*time.Second)

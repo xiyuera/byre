@@ -84,5 +84,20 @@ type Binder interface {
 	Bind(ctx context.Context, in Instance, identity string) error
 }
 
+// StaleCapacity is implemented by drivers whose List result is authoritative about identity: every
+// instance they have leased out carries LabelIdentity, so a listed instance without that annotation is
+// capacity left over from an earlier process rather than somebody's live lease.
+//
+// The command driver deliberately does not implement this. Its lister is an arbitrary program, and one
+// written before the annotation contract existed returns instances with no annotations at all; treating
+// those as stale is what made a gateway restart destroy instances an agent was still connected to (see
+// ADR-0009). For a driver that makes no such promise an anonymous instance is kept and reported, and
+// reclaiming it stays a human decision.
+type StaleCapacity interface {
+	// AnonymousInstancesAreStale reports whether releasing a listed instance that carries no
+	// LabelIdentity annotation is safe.
+	AnonymousInstancesAreStale() bool
+}
+
 // ErrNoCapacity is returned by Acquire when the driver is exhausted.
 var ErrNoCapacity = errors.New("no capacity")

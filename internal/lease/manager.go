@@ -213,9 +213,15 @@ func (m *Manager) Reap(ctx context.Context) (int, error) {
 // Adopt rebuilds the identity table from instances that already exist, so a restarted process hands
 // the same instance back to the same client instead of orphaning it and cold-starting a new one.
 //
-// Adoption is deliberately forgiving: an instance without an identity annotation is left alone (it
-// belongs to the pool, or to someone else), and a driver that cannot list is reported but does not
-// abort the others.
+// An instance that carries LabelIdentity is adopted. An instance that carries no annotation is *not*
+// automatically destroyed: whether "no identity" means "stale warm capacity" or "a lister that predates
+// the annotation contract" depends on the driver, and only a driver that promises the former
+// (backend.StaleCapacity) gets its anonymous instances released. Everything else is kept and reported,
+// because a gateway restart that silently kills a live lease is the worst possible outcome and it is
+// indistinguishable from a tidy cleanup in the log (ADR-0009).
+//
+// Adoption stays forgiving in the other direction too: a driver that cannot list is reported and does
+// not abort the others.
 func (m *Manager) Adopt(ctx context.Context) (int, error) {
 	m.mu.Lock()
 	drivers := make(map[string]backend.Backend, len(m.backends))
@@ -238,14 +244,24 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 			firstErr = fmt.Errorf("adopt on %q: %w", name, err)
 		}
 
+		// Only a driver that can promise "every instance I lease out carries an identity" may have its
+		// anonymous instances reclaimed. The command driver cannot, so its leftovers survive a restart.
+		anonymousIsStale := false
+		if sc, ok := drv.(backend.StaleCapacity); ok {
+			anonymousIsStale = sc.AnonymousInstancesAreStale()
+		}
+
 		now := m.now()
+		var toRelease, kept []backend.Instance
 		m.mu.Lock()
 		for _, in := range ins {
 			id := in.Annotations[backend.LabelIdentity]
 			if id == "" {
-				// Warm capacity left over from a previous process: destroy it rather than leave an
-				// object nobody tracks. The pool is refilled right after adoption.
-				_ = drv.Release(ctx, in)
+				if anonymousIsStale {
+					toRelease = append(toRelease, in)
+				} else {
+					kept = append(kept, in)
+				}
 				continue
 			}
 			if _, exists := m.byIdentity[id]; exists {
@@ -262,8 +278,38 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 			adopted++
 		}
 		m.mu.Unlock()
+
+		// Release outside the table lock: it is a network call, and one slow backend must not stall every
+		// session that is looking up its lease.
+		for _, in := range toRelease {
+			if err := drv.Release(ctx, in); err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("release anonymous instance %s on %q: %w", in.ID, name, err)
+				}
+				m.log().Warn("released instance at startup", "instance_id", in.ID, "backend", name,
+					"reason", "no "+backend.LabelIdentity+" annotation and the driver reports anonymous instances as stale capacity",
+					"error", err)
+				continue
+			}
+			m.log().Info("released instance at startup", "instance_id", in.ID, "backend", name,
+				"reason", "no "+backend.LabelIdentity+" annotation and the driver reports anonymous instances as stale capacity")
+		}
+		for _, in := range kept {
+			m.log().Warn("instance kept at startup", "instance_id", in.ID, "backend", name,
+				"reason", "no "+backend.LabelIdentity+" annotation and the driver cannot promise that anonymous instances are stale; destroying it could kill a live lease")
+		}
 	}
 	return adopted, firstErr
+}
+
+// log returns the manager's logger, or the default one. Call it without holding the table lock.
+func (m *Manager) log() *slog.Logger {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.logger == nil {
+		return slog.Default()
+	}
+	return m.logger
 }
 
 // AdoptedTotal reports how many leases were recovered from existing instances.

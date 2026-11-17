@@ -204,3 +204,77 @@ func TestStatsCountsActiveAndIdle(t *testing.T) {
 		t.Fatalf("stats = (%d active, %d idle), want (1, 1)", active, idle)
 	}
 }
+
+// staleBackend is fakeBackend plus the StaleCapacity promise: the honest statement for a driver that
+// creates every instance itself (kubernetes, static), where an unannotated instance really is capacity
+// nobody holds.
+type staleBackend struct{ *fakeBackend }
+
+func (s *staleBackend) AnonymousInstancesAreStale() bool { return true }
+
+// adoptionList is the restart from the bug report: vm-live carries byre.io/identity (an agent is using
+// it), vm-adopted carries no annotation at all because the lister predates the annotation contract.
+func adoptionList() []backend.Instance {
+	return []backend.Instance{
+		{
+			ID: "vm-live", Addr: "127.0.0.1:22022", User: "u", PrivateKey: "/k", HostKeyPolicy: "accept-new",
+			Annotations: map[string]string{backend.LabelIdentity: "fp-abc"},
+		},
+		{
+			ID: "vm-adopted", Addr: "127.0.0.1:22023", User: "u", PrivateKey: "/k", HostKeyPolicy: "accept-new",
+		},
+	}
+}
+
+// TestAdoptKeepsAnonymousInstancesOfADriverThatCannotJudgeThem is the regression test for the blocker:
+// a command-backend lister that reports no annotation used to have every instance destroyed at startup,
+// including the one an agent was still connected to. A restart must not destroy what it cannot identify.
+func TestAdoptKeepsAnonymousInstancesOfADriverThatCannotJudgeThem(t *testing.T) {
+	fb := &fakeBackend{name: "lab", list: adoptionList()}
+	m, err := New(360*time.Second, 60*time.Second, map[string]backend.Backend{"lab": fb})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	n, err := m.Adopt(context.Background())
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("adopted %d, want 1 (the annotated instance)", n)
+	}
+	if len(fb.released) != 0 {
+		t.Fatalf("startup destroyed %v; an instance without an annotation is not provably stale", fb.released)
+	}
+	if e := m.Lookup("fp-abc"); e == nil || e.Instance.ID != "vm-live" {
+		t.Fatalf("annotated instance was not adopted: %+v", e)
+	}
+	if e := m.Lookup(""); e != nil {
+		t.Fatalf("an anonymous instance was filed under an empty identity: %+v", e)
+	}
+}
+
+// TestAdoptReleasesAnonymousInstancesWhenTheDriverSaysTheyAreStale keeps the old cleanup for the drivers
+// that earned it: kubernetes labels everything it creates, so an unannotated object really is leftover
+// warm capacity and the pool is refilled right after.
+func TestAdoptReleasesAnonymousInstancesWhenTheDriverSaysTheyAreStale(t *testing.T) {
+	fb := &fakeBackend{name: "lab", list: adoptionList()}
+	m, err := New(360*time.Second, 60*time.Second, map[string]backend.Backend{"lab": &staleBackend{fakeBackend: fb}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	n, err := m.Adopt(context.Background())
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("adopted %d, want 1", n)
+	}
+	if len(fb.released) != 1 || fb.released[0] != "vm-adopted" {
+		t.Fatalf("released = %v, want [vm-adopted] (and never the annotated instance)", fb.released)
+	}
+	if e := m.Lookup("fp-abc"); e == nil || e.Instance.ID != "vm-live" {
+		t.Fatalf("annotated instance was not adopted: %+v", e)
+	}
+}

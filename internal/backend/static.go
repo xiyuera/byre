@@ -133,6 +133,13 @@ func (s *Static) Adopt(_ context.Context, ins []Instance) error {
 	return nil
 }
 
+// AnonymousInstancesAreStale implements StaleCapacity. Nothing here is created or destroyed: releasing
+// an endpoint only clears the in-memory owner map, so an endpoint listed without an identity is handed
+// back to the pool and no machine is touched.
+func (s *Static) AnonymousInstancesAreStale() bool { return true }
+
+var _ StaleCapacity = (*Static)(nil)
+
 func (s *Static) instance(endpoint, identity string) Instance {
 	state := "free"
 	if identity != "" {

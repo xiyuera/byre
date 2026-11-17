@@ -78,3 +78,49 @@ func TestCommandListReturnsInstances(t *testing.T) {
 		t.Fatalf("got %+v", ins)
 	}
 }
+
+func TestCommandAcquireCarriesAnnotations(t *testing.T) {
+	c, err := NewCommand(CommandConfig{
+		Name: "cloud",
+		Acquire: []string{"sh", "-c",
+			`printf '{"id":"vm-1","addr":"192.0.2.9:22","annotations":{"byre.io/identity":"fp-1"}}'`},
+		Timeout: 5 * time.Second, User: "ci", PrivateKey: "/etc/keys/ci",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, err := c.Acquire(context.Background(), "fp-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := in.Annotations[LabelIdentity]; got != "fp-1" {
+		t.Fatalf("annotations were dropped: %+v", in.Annotations)
+	}
+}
+
+// TestCommandListCarriesAnnotations is the other half of the blocker: a lister that reports
+// byre.io/identity must reach the manager with that annotation, or adoption can never recognise it.
+func TestCommandListCarriesAnnotations(t *testing.T) {
+	c, err := NewCommand(CommandConfig{
+		Name: "cloud", Acquire: []string{"true"},
+		List: []string{"sh", "-c",
+			`printf '[{"id":"a","addr":"1.2.3.4:22","annotations":{"byre.io/identity":"fp-1"}},{"id":"b","addr":"5.6.7.8:22"}]'`},
+		Timeout: 5 * time.Second, User: "u", PrivateKey: "k",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ins, err := c.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ins) != 2 {
+		t.Fatalf("got %d instances", len(ins))
+	}
+	if got := ins[0].Annotations[LabelIdentity]; got != "fp-1" {
+		t.Fatalf("list annotations were dropped: %+v", ins[0].Annotations)
+	}
+	if ins[1].Annotations != nil {
+		t.Fatalf("an instance with no annotations must not gain an empty map: %+v", ins[1].Annotations)
+	}
+}
