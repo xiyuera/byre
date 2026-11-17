@@ -74,7 +74,10 @@ gateway is alive but cannot hand out instances:
 kubectl -n <instances-ns> auth can-i patch sandboxclaims --as system:serviceaccount:<gateway-ns>:keypod
 ```
 
-**If `pool_size > 0`,** the gateway will start creating instances immediately. Set `pool_size: 0` in the
+**If `pool_size > 0`,** the gateway will start creating instances immediately. **There is currently no way to
+scale the pool to zero through config** — `ApplyDefaults` treats an explicit `0` the same as an absent key and
+substitutes the default (a known gap, tracked for v0.1.3). To stop instance creation today, scale the
+Deployment to zero replicas instead; that also stops the front door. To keep a smaller pool, set it below the
 ConfigMap for a first smoke test if you do not want warm capacity yet.
 
 ## Validate a configuration before shipping it
