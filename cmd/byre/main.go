@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"sort"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -150,6 +151,10 @@ func main() {
 		}
 	}()
 
+	// shuttingDown flips the moment SIGTERM arrives: readiness goes red before the delay, so a Service
+	// that is still deciding whether this pod is an endpoint stops choosing it.
+	var shuttingDown atomic.Bool
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -160,6 +165,11 @@ func main() {
 	// with warm capacity configured but no way to create instances must not receive traffic.
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if shuttingDown.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, "not ready: shutting down\n")
+			return
+		}
 		fs := mgr.FillState()
 		if !fs.CanProvision() {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -180,14 +190,36 @@ func main() {
 
 	<-ctx.Done()
 	logger.Info("shutting down", "delay", shutdownDelay.String())
-	// Keep accepting for a moment while the Service stops routing here (the endpoint is removed at the
-	// same instant SIGTERM arrives, and the dataplane needs a beat to agree), then drop everything.
-	// Before this existed the process only stopped accepting and then waited forever on open sessions.
-	time.Sleep(*shutdownDelay)
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_ = health.Shutdown(shutdownCtx)
-	_ = front.Close()
+	shutdownSequence(*shutdownDelay, func() { shuttingDown.Store(true) }, func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = health.Shutdown(shutdownCtx)
+	}, func() { _ = front.Close() })
+}
+
+// shutdownSequence is everything that happens after the termination signal, in the order that matters:
+// readiness goes red first, then the process keeps accepting for `delay` (the window in which the
+// Service and the dataplane stop routing here), and only then are the health endpoint and the sessions
+// dropped. Closing the listener first would cut clients that are still being routed to it; waiting
+// forever is what the previous version did, and every rolling update had to be killed.
+//
+// It is a function so that the order — and the fact that the delay is actually waited — has a test. The
+// value (2s by default) is an operational judgement: it is longer than the endpoint removal this cluster
+// measures and shorter than any client's reconnect budget, so a rollout costs a reconnect, not a lease.
+func shutdownSequence(delay time.Duration, notReady, stopHealth, closeSessions func()) {
+	if delay < 0 {
+		delay = 0
+	}
+	if notReady != nil {
+		notReady()
+	}
+	time.Sleep(delay)
+	if stopHealth != nil {
+		stopHealth()
+	}
+	if closeSessions != nil {
+		closeSessions()
+	}
 }
 
 // metricsHandler serves the exposition. It is a named handler so that a test can read /metrics through an

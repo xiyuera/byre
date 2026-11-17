@@ -318,7 +318,8 @@ namespace，kustomize 的 `namespace:` 又会一次性改写所有对象——�
 
 网关的 host key 放在自己的 PVC 上（`deploy/hostkey-pvc.yaml`），因为那是客户端 pin 的身份；pool key——byre
 *连向*实例的那把——来自上面的 Secret。滚动 Deployment 时新进程先接管活着的租约，所以滚动期间重连的客户端
-还能拿回同一实例，但 SSH 连接本身会被切断：没有 draining。安装、轮换、RBAC 与症状见
+还能拿回同一实例，但 SSH 连接本身会被切断：没有连接交接。进程在 `-shutdown-delay`（2s）后主动断开，
+不再等满 grace period 被 SIGKILL。安装、轮换、RBAC 与症状见
 [`docs/handbook/operations.md`](docs/handbook/operations.md)。
 
 ## 和其它方案比
