@@ -379,6 +379,12 @@ namespace，kustomize 的 `namespace:` 又会一次性改写所有对象——�
 gateway、proxy、cache 或 sidecar——一个静态二进制，两个监听。许可证见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
+## 贡献
+
+`main` 是受保护分支：任何账号直接推送都会被拒，包括 owner。改动通过 pull
+request 进入，需要四道检查全绿加一个批准。规则本身、以及两项不受此约束的
+例外操作，写在 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 ## 许可证
 
 Apache-2.0——见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。

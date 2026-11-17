@@ -415,6 +415,13 @@ remaining ones are English only by the rule in [`docs/i18n.md`](docs/i18n.md), n
 configuration file. Five direct modules, no gateway, proxy, cache or sidecar — one static binary with two
 listeners. Licences: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
+## Contributing
+
+`main` is protected: direct pushes are rejected for every account, the owner's
+included. Changes go through a pull request with four green checks and one
+approval. The rules, and the two operations that are exempt from them, are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).

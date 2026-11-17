@@ -12,6 +12,120 @@
 4. **Fail fast.** A configuration error must stop startup with every violation listed. Silent defaults
    are how "it worked yesterday" bugs start.
 
+## How a change reaches `main`
+
+`main` is protected by the forge, and the protection applies to **every**
+account including the owner: `enable_push: false`, `enable_force_push: false`.
+A direct push fails for everyone. This is deliberate — a rule the privileged
+account can skip is a habit, not a rule.
+
+```
+<role>/<slug>  →  PR  →  four checks green  →  one approval  →  merge
+```
+
+### Branches
+
+`main` is the only long-lived branch. Work branches are named for who and what:
+
+```
+eng/lease-row-phase      ops/registry-two-tiers      reviewer/pr-checklist
+```
+
+The first segment is the account doing the work, so it has to be one that
+exists; `docs/...` reads like a role but there is no `docs` account, and a branch
+that names a category instead of an actor makes the review trail shorter than it
+looks.
+
+`dev` is not a branch here. If a second integration branch is ever needed it
+gets the same protection on the day it is created — an unprotected `dev` would
+just be a second `main` with less review.
+
+### The four required checks
+
+| check | what it means |
+|---|---|
+| `ci / test` | `make fmt vet`, `go test ./...`, `go test -race ./...` (the whole module, not a subset), `make build` |
+| `ci / manifests` | `make render` — the kustomize tree renders. It does **not** schema-validate the output |
+| `ci / dco` | every commit in the push range carries a matching `Signed-off-by` |
+| `ci / i18n` | the translation manifest matches the files it indexes |
+
+A red check is information, not an obstacle: read the job log before rerunning.
+
+### Every commit needs `Signed-off-by`
+
+`git commit -s`. The `dco` job reads trailers over the range the push
+introduces and requires the trailer to match the author. Two consequences:
+
+* **Use rebase, not merge commits and not squash.** Gitea's merge button
+  produces a merge commit whose message carries no trailer. A squash produces a
+  single new commit authored by whoever pressed the button, so the trailers it
+  concatenates no longer match that commit's own author — and `dco` compares each
+  trailer against *that commit's* author (`Signed-off-by: .*<$author>`). Only a
+  rebase keeps the commits, their authors and their trailers intact.
+* Rewriting a commit can drop the trailer. If you amend, re-add it.
+
+### Who reviews
+
+One approval from an account other than the author. `hermes-reviewer` is the
+reviewer role; `hermes-eng`, `hermes-ops` and the owner can approve when the
+reviewer wrote the change.
+
+The reviewer answers three questions in a comment, not "looks good":
+
+1. Does the change do what its description says, and is that verifiable from
+   the diff?
+2. Does it break anything currently true — config keys, documented behaviour,
+   the deployment tree?
+3. Is anything unverified: a claim with no command behind it, a number with no
+   source?
+
+### Tags and releases
+
+A tag is created from a commit already on `main`. Pushing a `v*` tag is itself
+what triggers the release workflow (`on: push: tags`), so "wait until the release
+job passes, then tag" is not executable — nothing runs before the tag exists. The
+workable order is: merge → push the tag → watch the job → if it fails, fix
+forward and move the tag (`git tag -f`) rather than leaving a half-published
+asset set behind. A tag is never a route to get code onto `main`.
+
+Release assets must be rebuildable from the tag they name. If history is ever
+rewritten — it happened once, to remove internal addresses — every published
+`build-info.txt` that names a commit is invalidated, and the fixed point
+becomes the **tag**, not the commit hash. Record the old-to-new tag map under
+`docs/`; do not edit published assets in place.
+
+### The two operations that cannot go through a PR
+
+Both act on the repository itself, so both require an explicit decision
+recorded outside this file (a ticket, a task, a comment thread), the protection
+lifted for the duration, and the protection restored immediately after.
+
+* **Rewriting history.** A rewritten `main` invalidates every recorded commit
+  hash; the tag map is the deliverable.
+* **Restoring a deleted branch** whose content is not reachable from `main`.
+
+In both cases the evidence to leave behind is a push that *fails* — proof the
+protection is back on.
+
+### After merging
+
+Delete the branch. Fifteen merged branches were still on the forge when this was
+written; a branch whose content is already reachable from `main` is only
+clutter, and it makes `git branch -r` useless for spotting what is actually in
+flight. Delete it as part of the merge, not "later".
+
+If the history was ever rewritten, the old-to-new **tag map** belongs in
+`docs/tag-map.md` — inside the repository, not in an operator's notes. The
+mapping is the only thing that keeps a published `build-info.txt` traceable once
+the commit hash it names stops existing.
+
+### When a task board spawned you
+
+The branch, the PR and the review are part of delivering the task. A task that
+ends with "committed to main" has not delivered: it left the work where nobody
+could review it and where the next change overwrites it. Open the PR, put its
+number in the task, and let the review loop close it.
+
 ## Before opening a PR
 
 ```sh
