@@ -46,17 +46,19 @@ key comes from the Secret above. Both are examples — copy, then edit.
 
 ## Image registries: two tiers
 
-Two registries serve this cluster and they are not interchangeable:
+Two registries serve this cluster and they are not interchangeable. Below, `<your-gitea-host>:<port>`
+is your Gitea instance's container registry endpoint — the one releases are published to — and
+`<internal-registry-host>:<port>` is a throwaway registry that lives on the cluster network.
 
 | registry | role | auth | what belongs there |
 |---|---|---|---|
 | `<your-gitea-host>:<port>` (Gitea container registry) | release source of truth | token — `write:package` to push, `read:package` to pull | anything a workload runs: versioned tags, digests, traceable to a repository |
 | `<internal-registry-host>:<port>` (`registry:2`, self-signed CA) | scratch space | none — anonymous push is allowed | one-off experiments, manual builds, images nobody will need next month |
 
-The rule is one line: **anything that reaches production comes from the Gitea registry**. An image on
-5001 is temporary by default and may be deleted without notice. 5001 is kept rather than retired
-because a scratch registry that already speaks the v2 API is cheaper than teaching everyone
-`docker save` / `ctr import` for the occasional hand-built image.
+The rule is one line: **anything that reaches production comes from the Gitea registry**. An image in
+the scratch registry is temporary by default and may be deleted without notice. The scratch registry
+is kept rather than retired because it already speaks the v2 API, which is cheaper than teaching
+everyone `docker save` / `ctr import` for the occasional hand-built image.
 
 ### Repository names differ
 
@@ -64,7 +66,7 @@ Gitea requires `owner/image` — two path segments, where `owner` is a user or a
 image name is independent of any repository name. The migration therefore renamed single-segment
 repositories:
 
-| 5001 | Gitea |
+| scratch registry | Gitea |
 |---|---|
 | `byre` | `byre/byre` |
 | `gitea/runner:6.0.0` | `byre/runner:6.0.0` |
@@ -80,9 +82,9 @@ organisation-level action.
 ### Pulling from Gitea inside the cluster
 
 Nothing on the nodes has to change. The registry presents a Let's Encrypt certificate for
-`*.<your-domain>`, which every node already trusts (`openssl s_client -verify_return_error` returns 0 on
-all four), so `registries.yaml` needs no CA entry for it — and therefore **no `systemctl restart k3s`**.
-The existing 5001 entry stays because that registry is self-signed.
+`<your-domain>`, which every node already trusts (`openssl s_client -verify_return_error` returns 0 on
+every node), so `registries.yaml` needs no CA entry for it — and therefore **no `systemctl restart k3s`**.
+The existing entry for the scratch registry stays because that registry is self-signed.
 
 This is deliberate: a credential inside `registries.yaml` is a credential on every node's disk. Pull
 credentials belong in a `kubernetes.io/dockerconfigjson` Secret instead, which is what
@@ -104,10 +106,10 @@ holder replace what production runs, and there is no reason for a node to hold o
 
 ### Proving a pull actually went to Gitea
 
-A `Successfully pulled image` event is not proof: when the same digest is already present locally —
-5001 and Gitea hold byte-identical blobs — containerd downloads nothing, and the node may even report
-the old repository name in `imageID`. The honest check uses an image whose layers exist **only** in
-Gitea:
+A `Successfully pulled image` event is not proof: when the same digest is already present locally — the
+scratch registry and Gitea hold byte-identical blobs — containerd downloads nothing, and the node may
+even report the old repository name in `imageID`. The honest check uses an image whose layers exist
+**only** in Gitea:
 
 ```sh
 kubectl -n hermes run pullprobe --image=<your-gitea-host>:<port>/byre/pullprobe:v1 \
