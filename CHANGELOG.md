@@ -9,6 +9,27 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
 
 ## [Unreleased]
 
+### Changed
+
+- The README now opens with what byre is, a five-minute Quick start that runs on one machine, and a table
+  of where the SSH backends come from — the design argument that used to fill the file moved into
+  `docs/handbook/architecture.md` §7. No code changed.
+- `docs/architecture.md` and `docs/operations.md` moved to `docs/handbook/`, and the documentation index
+  now separates the handbook from decisions and records.
+- The maintenance rules in `CONTRIBUTING.md` point at the handbook, and so does the comment in
+  `deploy/instances-rbac.example.yaml`.
+
+### Added
+
+- `docs/handbook/backends.md`: field tables for the four provisions, the shared `ssh` block, the
+  readiness rule per shape, failure behaviour, and the `command` contract with a worked script.
+- `docs/handbook/troubleshooting.md`: each symptom with the log line that identifies it, the measured
+  reclaim clock, and what `-check-config` exit 2 does and does not mean.
+- Two facts that were previously discovered the hard way, now documented and measured: `endpoints` does
+  not survive a gateway restart (its ownership is in memory, so the round-robin starts over), and `~` in
+  `ssh.private_key` is not expanded — `-check-config` passes and the first dial fails.
+- `/readyz` does not exist; `docs/handbook/operations.md` now says so and lists the five metrics.
+
 ## [0.3.0] - 2026-11-17
 
 The configuration schema now says what a backend *does*, instead of naming the product it happens to

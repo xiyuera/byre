@@ -11,3 +11,4 @@ config.local.yaml
 *.key
 id_*
 !deploy/secret.example.yaml
+/byre

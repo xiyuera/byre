@@ -2,327 +2,355 @@
 
 **English** · [中文](README.zh-CN.md)
 
-An SSH gateway for disposable instances. A client authenticates with a public key; that key decides
-which instance it gets, and it keeps that instance for as long as the client is working — not for as
-long as one TCP connection happens to live.
+byre is the SSH gateway layer for agent sandboxes: it keys the lease on **identity** — the client's
+public key — not on a connection, so one agent keeps one instance exclusively until the lease expires.
 
-> Status: **0.3.0, pre-1.0**. Identity, lease, warm pool and adoption across restarts are verified on
-> a real cluster (`docs/acceptance/`); of the four provisioning shapes only `claims` has a cluster run
-> — `workloads`, `endpoints` and `command` are covered by unit tests with a fake client only. Single
+An agent that syncs a working tree, builds, copies the artefact back and keeps a port forward open is one
+task spread over four SSH connections. byre gives all four the same machine, without the client holding a
+control master open or remembering an identifier: the key it already authenticates with is the address.
+
+> Status: **0.3.0, pre-1.0.** Identity, lease, warm pool and adoption across restarts are verified on a
+> real cluster (`docs/acceptance/`); of the four provisioning shapes only `claims` has a cluster run. Single
 > replica, no automated end-to-end gate, and the image/manifest path is verified by server-side dry-run
 > only. See [Limits](#limits-and-things-known-to-be-wrong).
 
-> Renamed from `keypod` (see `docs/rename-to-byre.md`). Not affiliated with, endorsed by, or derived
-> from any same-named project; the name is a cowshed, and the licence grants no trademark rights.
+> Renamed from `keypod` (see `docs/rename-to-byre.md`). Not affiliated with, endorsed by, or derived from
+> any same-named project; the name is a cowshed, and the licence grants no trademark rights.
 
-## The failure this exists to prevent
-
-An agent picks up a piece of work: sync a working tree to the box, run a build, copy the artefact
-back, keep a port forward open while a test suite runs against it. That is one session with a
-beginning and an end, and it is four TCP connections:
-
-| # | what it is | when | state it needs to find |
-|---|---|---|---|
-| 1 | `exec` over the control master | t+0s | nothing; it creates the tree |
-| 2 | `scp`/`tar` sync, often a plain socket of its own | t+40s | the tree from #1, minus the files it already sent |
-| 3 | `ssh -L` for the test suite | t+90s | the built binary in the working directory |
-| 4 | any of the above again after `ControlPersist` expires | t+5min | all of it |
-
-Every one of those connections authenticates from scratch. Nothing on the wire says "I am the same
-client as the one three minutes ago" — except the key.
-
-Now allocate an instance per connection. Connection 1 lands on instance A and uploads a working tree
-of a few thousand files; the client records `{path: sha}` for each of them and will never send an
-unchanged file again. Connection 2 lands on instance B. The build fails, or worse, succeeds on an
-empty tree because `mkdir -p` was in the script. Connection 3 forwards a port into a third instance,
-where the binary does not exist. The client has no error to report: from its point of view every
-command succeeded, and the remote side simply forgot everything between two calls.
-
-That is what makes the bug hard to see. The client is not wrong about anything it observed. Its
-bookkeeping is about *a* filesystem, and the gateway quietly gave it four.
-
-The fix has to key allocation on something that outlives a connection. Before authentication an SSH
-connection carries almost nothing usable: the version banner is client-chosen text, the username is a
-client-side convention that is often empty or shared, and the destination port is the same for
-everybody. After authentication it carries one stable, verifiable thing — the public key the client
-proved possession of.
-
-## Four repairs that look obvious, and why none of them works
-
-### Sticking to the source address
-
-The cheapest idea, and it fails in both directions. Behind NAT, one address is shared by everything
-in that network, so two agents on one laptop become one client. Meanwhile a NAT may renumber its port
-mapping after an idle period or a reconnect, so the address and port that identified the client at
-t+0s identify nobody at t+5min. A proxy that has to guess "same client?" from the address is guessing
-at a value the client's network rewrites.
-
-### Keying on the SSH session
-
-There is no session to key on: a session identifier is created by the connection. The gateway
-terminates SSH, so it sees exactly the object that is created and destroyed each time — the thing we
-need to look past. Reconnects, `scp`, and every `-L` forward are new connections with new sessions, by
-protocol design.
-
-### Destroying the instance when the connection drops
-
-This is what a per-connection container backend does, and it is coherent: the instance's lifetime is
-the connection's lifetime. It also means the state has nowhere to live between connections, which is
-the whole problem. It suits an interactive shell and it does not suit a task that is a sequence of
-connections.
-
-### Requiring the client to hold one connection open (`ControlMaster`)
-
-This works, until `ControlPersist` expires — which is exactly the reconnect the design has to survive.
-It also turns correctness into a client configuration: any client that does not do it, or that opens
-a plain socket for `scp` the way the reference client does, is silently broken. Pushing a hard
-requirement onto callers is how a gateway acquires a support burden it cannot see.
-
-## What it does instead
+## What it is
 
 ```
-identity := sha256(client public key)
-lease(identity) -> instance            # one at a time, exclusive
-any connection from that identity renews the lease
-instance is reclaimed only after ttl of inactivity, plus grace
+agent ──ssh(pubkey)──▶ byre :2222 ──ssh(pool key)──▶ instance :22
+        identity           │                           a container, a VM,
+        = the lease        │                           a lab machine — anything
+                           └─ lease table in memory    that runs sshd
+                              ttl + grace, warm pool
 ```
 
-The lease table is consulted before the pool, so a reconnect cannot race with a recycle. `ttl`
-defaults to 360s, which is the reference client's 300s idle timeout plus a margin; `grace` (60s) is
-the reconnect window after a disconnect, and it is what makes `ControlPersist` expiry invisible.
-Concurrent connections from one identity share the instance — several channels on one target, which
-is what SSH is for.
+The gateway authenticates the client with a public key and nothing else. From that key it derives an
+identity, and the identity holds exactly one instance for as long as it keeps connecting. Idle time ends a
+lease: after `ttl` (360s by default) plus `grace` (60s) the instance goes back to the pool. The grace
+window is what makes a client's own idle timeout — 300s for `ssh` with `ControlPersist` — invisible; the
+reconnect lands inside it and finds the same instance.
 
-```
-client ──ssh(pubkey)──> byre:2222
-                          │ 1. auth:    publickey -> identity
-                          │ 2. lease:   identity  -> lease (memory + instance annotation)
-                          │ 3. acquire: pool first, then create via the backend
-                          └─ 4. open ssh(pool key) to the instance, splice channels
-                                 ├─ session          (pty / shell / exec)
-                                 ├─ direct-tcpip     (-L)
-                                 └─ forwarded-tcpip  (-R)
-```
+byre creates no containers itself. It asks a **backend** for an instance and gets back an `{id, addr,
+user, key}` record, so everything about *reaching* an instance over SSH is shared across all backends,
+and which backend you use is the subject of
+[Configuration](#configuration-where-do-the-ssh-backends-come-from). Two listeners, no database, no
+sidecar: SSH on `:2222`, `/healthz` and `/metrics` on `:8099`. The lease table is in memory, and the
+Kubernetes backends write the identity onto each instance as an annotation, which is what makes a restart
+survivable — the new process re-adopts live leases before it warms anything.
 
-## Three invariants, and how to check them yourself
+Three consequences worth knowing up front. A shared private key is a shared instance, so key distribution
+*is* access control and aliases in the config only change log labels. Idle is measured with the wall clock,
+so an agent that thinks longer than `ttl` + `grace` comes back to a fresh instance. And instances are not
+storage: anything that must outlive a lease goes somewhere else.
 
-Each of these is one command against a running gateway. They are the contract; if one fails, the
-design is not doing what this file says it does.
+## Why not a plain jump host
 
-### The instance does not change inside the lease
+A jump host forwards a connection to a target. Handing out an instance per connection looks like the same
+thing and fails in three places:
 
-Connect, ask the instance for its name, wait 320 seconds (longer than the reference client's 300s idle
-timeout, shorter than `ttl` + `grace`), ask again:
-
-```sh
-ssh -p 2222 -i <client-key> <user>@<gateway> hostname    # byre-9ac151bc
-sleep 320
-ssh -p 2222 -i <client-key> <user>@<gateway> hostname    # byre-9ac151bc, or it is broken
-```
-
-A different name on the second line means allocation is keyed on the connection, and everything above
-is happening to you.
-
-### Different keys never share an instance
-
-Six identities, six connections at once, six distinct names:
-
-```sh
-for k in 1 2 3 4 5 6; do ssh -p 2222 -i key$k <user>@<gateway> hostname & done; wait
-# observed: 6/6 connected, 6/6 distinct
-```
-
-An identity is the key, so this is also the check for "did I accidentally ship one key to two agents":
-they are one identity and will share, by design.
-
-### A restart does not lose leases
-
-Start the gateway with a client connected, restart the process without touching the client, then look
-for the adoption line in the log and for the same hostname:
-
-```sh
-kubectl -n <ns> rollout restart deploy/byre
-kubectl -n <ns> logs deploy/byre | grep 'adopted existing leases'   # adopted existing leases count=1
-ssh -p 2222 -i <client-key> <user>@<gateway> hostname                # same instance as before
-```
-
-If a restart re-created the instance, it would destroy exactly the state the lease was protecting —
-which turns "we rolled the gateway" into "every agent lost its working tree".
-
-The record these numbers come from, and the run that produced them, is
-`docs/acceptance/2026-11-17-m4.md`. `test/e2e/cluster-acceptance.sh` runs the first invariant against
-your own deployment (`--ttl-ok` includes the 320s wait) and checks that `-L` reaches the instance; the
-third it cannot assert — restart the gateway yourself and look for `adopted existing leases` in the log.
-
-## What this costs
-
-A key is an identity, so a shared key is a shared instance. Two agents holding the same private key
-are one client: they will contend for one instance, see each other's files, and wait for each other.
-That is the design working, and it moves access control into key distribution — aliases in the config
-only change log labels, never routing. Rotating a key is a new identity and a cold start.
-
-Idle is measured with the wall clock. An agent that stops to think for longer than `ttl` + `grace`
-comes back to a fresh instance and an empty directory, because nothing in the system knows it is
-thinking. The knob exists (`lease.ttl`); sizing it above your client's own idle timeout is an
-operational duty, not a default that fits everybody.
-
-Instances are not storage. If a file has to survive a lease, it goes somewhere that outlives the
-instance, and the client syncs it there.
-
-## Provisioning is a vocabulary
-
-A backend answers one question: how does an instance come into existence, and how do I reach it over
-SSH? The answer is one of four values of `provision`, and none of them names a product.
-
-| `provision` | how the instance appears | driver |
+| what happens | what the client sees | what actually broke |
 |---|---|---|
-| `claims` | a controller hands one over when asked; the API coordinates are configuration | kubernetes |
-| `workloads` | we create the workload from an image that runs sshd | kubernetes |
-| `endpoints` | nothing is provisioned: a fixed set of hosts that already exist | static |
-| `command` | an external program provisions and describes the instance | command |
+| connection 2 lands on instance B | every command succeeded | its uploaded tree is on A |
+| the lease expires between two commands | `cd: no such file or directory` | the instance was recycled mid-task |
+| two agents share a key | one sees the other's files | key distribution, not the gateway |
 
-Everything about *reaching* an instance is shared and sits outside the provision block: `ssh.port`,
-`ssh.user`, `ssh.private_key`, `ssh.host_key_policy`, readiness timeouts. A backend that speaks SSH is
-a backend, whatever created it.
+The middle case is the expensive one, because every individual command succeeds: the client's bookkeeping
+describes *a* filesystem, and the gateway quietly handed it three. The fix is to key allocation on
+something that outlives a connection, and after authentication SSH carries exactly one such thing — the
+public key the client proved possession of. That is the identity, and the lease hangs off it.
+
+Four repairs that look obvious — source address, session id, connection-scoped containers, requiring
+`ControlMaster` — and why each fails are in
+[`docs/handbook/architecture.md`](docs/handbook/architecture.md).
+
+## Quick start
+
+You need Go 1.23+ and at least one machine you can reach over SSH. The simplest backend is
+`provision: endpoints`: nothing is created, the gateway only decides who gets which host. For the five
+minutes below that host can be any Linux box with `sshd`, including the one you are sitting at.
+
+**1. Build.**
+
+```sh
+go build -o byre ./cmd/byre
+./byre -version          # dev (none, unknown)
+```
+
+**2. Write a config.** Two endpoints, one client identity. Replace `<remote-user>`, the hostnames and the
+key path; leave everything else alone for now.
 
 ```yaml
 listen: ":2222"
+host_key: /var/lib/byre/hostkey/id_ed25519
 
 lease:
-  ttl: 360s            # > your client's idle timeout
-  grace: 60s           # reconnect window; absorbs ControlPersist expiry
-  pool_size: 2         # warm instances kept ready
+  ttl: 360s
+  grace: 60s
 
 backends:
+  - name: lab
+    provision: endpoints
+    endpoints: ["instance-1.example.com:22", "instance-2.example.com:22"]
+    ssh:
+      port: 22
+      user: "<remote-user>"
+      private_key: /etc/byre/keys/id_key
+      host_key_policy: strict
+
+identities:
+  - fingerprint: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    backend: lab
+```
+
+The fingerprint is the client's, not the gateway's, and `host_key` is the gateway's own key — the one
+clients pin. Point `host_key` at durable storage: it is created on first start if the file is absent, and
+leaving the field empty gives an ephemeral key that changes on every restart.
+
+```sh
+ssh-keygen -lf ~/.ssh/id_ed25519.pub -E sha256
+# 256 SHA256:ihSSTfidE8FBRGaLem2sknNk2tDW5LM67WReyPggABU you@laptop (ED25519)
+```
+
+**3. Validate before starting.** This reads the file, applies defaults, builds every driver without
+touching a cluster, and exits 2 on any violation — listing all of them at once:
+
+```sh
+./byre -check-config -config config.yaml; echo "rc=$?"
+```
+
+```
+{"level":"INFO","msg":"configuration accepted","listen":":2222","host_key":"/var/lib/byre/hostkey/id_ed25519","backends":1,"identities":1,"ttl":"6m0s","grace":"1m0s","pool_size":2,"version":"dev (none, unknown)"}
+rc=0
+```
+
+**4. Start it.**
+
+```sh
+./byre -config config.yaml
+```
+
+```
+{"level":"INFO","msg":"configuration accepted","listen":":2222","host_key":"/var/lib/byre/hostkey/id_ed25519","backends":1,"identities":1,"ttl":"6m0s","grace":"1m0s","pool_size":2,"version":"dev (none, unknown)"}
+{"level":"WARN","msg":"generated a new host key and persisted it","path":"/var/lib/byre/hostkey/id_ed25519","fingerprint":"SHA256:VdUlcld0d1sqsRaX5qTtINtES2iIIFsLiYBxVmAuzC0","note":"clients that pinned a previous key must be updated"}
+{"level":"INFO","msg":"ssh front end listening","addr":"[::]:2222","identities":1}
+{"level":"INFO","msg":"health endpoint listening","addr":":8099"}
+```
+
+The `WARN` appears once, on the first start, and never again: the key is written to `host_key` and
+reused. These listings drop the `time` field, which every line carries.
+
+**5. Connect.** The username is ignored — the key decides everything — so `anything` is as good as
+anything else. Connect twice and watch the gateway's log: both lines name the same `instance`.
+
+```sh
+ssh -p 2222 -i ~/.ssh/id_ed25519 \
+    -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
+    anything@127.0.0.1 'hostname; ls'
+```
+
+```
+{"level":"INFO","msg":"session open","identity":"ihSSTfidE8FBRGaL","backend":"lab","instance":"instance-1.example.com:22"}
+{"level":"INFO","msg":"session open","identity":"ihSSTfidE8FBRGaL","backend":"lab","instance":"instance-1.example.com:22"}
+```
+
+A second identity — another key under `identities` — gets the other endpoint. A key nobody registered is
+refused during authentication: `Permission denied (publickey)`.
+
+**6. Look at the two HTTP endpoints.** They are the only observability there is:
+
+```sh
+curl -s localhost:8099/healthz                  # ok dev (none, unknown)
+curl -s localhost:8099/metrics | grep '^byre_'  # byre_up 1, byre_leases_idle 1, byre_pool_warm{backend="lab"} 0
+```
+
+There is no `/readyz`. `/healthz` answers "the process is up", never "I can hand out an instance". And
+`pool_size` is a no-op for `endpoints`, which creates nothing to pre-warm.
+
+## Configuration: where do the SSH backends come from
+
+A backend answers two questions: how does an instance come into existence, and how is it reached over SSH?
+The first is `provision`, and there are four values. None of them names a product.
+
+| `provision` | instance comes from | what byre needs | use it when |
+|---|---|---|---|
+| `endpoints` | a list of hosts that already exist | nothing — a plain TCP dial | you manage machines yourself, or want to try this out |
+| `workloads` | a Pod byre creates in Kubernetes | create and delete pods in that namespace | every lease should be a fresh container |
+| `claims` | an object byre creates through a claim API | read and write that CRD | you already run a claim-shaped controller |
+| `command` | a program you write, which byre runs | nothing — process execution | cloud VMs, Incus/LXD, a CMDB |
+
+Shared by all four, and deliberately outside the provision block: `ssh.port`, `ssh.user`,
+`ssh.private_key` (the gateway's own key, installed on the instance), `ssh.host_key_policy` (`strict` for
+long-lived hosts, `accept-new` for disposable ones) and the readiness timeout. In every shape, "the
+instance trusts the gateway's public key" is the requirement you satisfy yourself — byre cannot install it
+on an `endpoints` host, and for `workloads` it is baked into the image.
+
+The four entries below are backend fragments: they go under `backends:`, next to the `listen`, `lease` and
+`identities` from Quick start, or in `deploy/config.example.yaml`.
+
+### endpoints — hosts that already exist
+
+```yaml
+  - name: lab
+    provision: endpoints
+    endpoints: ["instance-1.example.com:22", "instance-2.example.com:22"]
+    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: strict}
+```
+
+Nothing is provisioned and nothing is destroyed: one endpoint is leased to one identity at a time,
+round-robin over the free ones, and marked free on release. There is no pool, because there is nothing to
+create ahead of demand — `pool_size` only applies to drivers that can.
+
+Two consequences. The number of endpoints is the number of concurrent identities; past that, `Acquire`
+fails with `no capacity`. And a released endpoint still holds whatever the last identity left in it, so
+cleanup is the host's problem and one identity per endpoint is the only safe default. See
+[`examples/static-endpoints/`](examples/static-endpoints/README.md).
+
+### workloads — a pod per lease
+
+```yaml
+  - name: adhoc
+    provision: workloads
+    namespace: "<namespace>"
+    provider:
+      image: "<registry>/<image>:<tag>"
+      start_command: ["/usr/sbin/sshd", "-D", "-e"]
+      ready_timeout: 180s
+    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
+```
+
+The instance is a Pod created from an image that runs `sshd` and trusts the pool key. Readiness is
+Kubernetes' own — used once it reports `PodReady` and has a `podIP` — and release deletes the pod. This is
+the least-tested shape (unit tests with a fake client); `claims` is what the recorded cluster run used.
+
+### claims — ask a controller to hand one over
+
+```yaml
   - name: pooled
     provision: claims
     namespace: "<namespace>"
     provider:
       template: "<template-name>"
       warm_pool: "<warm-pool-name>"
-      api_group: "<api-group>"          # the claim API is configuration, never hardcoded
+      api_group: "<api-group>"
       api_version: "<api-version>"
       resource: "<plural-resource>"
       object_kind: "<Kind>"
       endpoint_field: ["status", "sandbox", "serviceFQDN"]
-    ssh:
-      port: 22
-      user: "<remote-user>"
-      private_key: /etc/byre/keys/id_key
-      host_key_policy: accept-new
-
-identities:
-  - fingerprint: "SHA256:<base64-body>"   # ssh-keygen -lf key.pub -E sha256
-    backend: pooled
+      ready_timeout: 120s
+    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
 ```
 
-`claims` is an API *shape* — create an object, wait for an address in its status, delete it at the
-end — not a particular CRD. The fields `api_group`, `resource` and `object_kind` exist so that one
-binary drives any claim-shaped API, including ones nobody here has seen. The deployment this was
-written against uses `SandboxClaim` objects from `extensions.agents.x-k8s.io` with a warm pool; that
-is one example, and it is configuration in this file rather than a name in the code. A stale
-configuration is not a schema error either: `backend.type` is read only in order to say it was
-replaced by `backend.provision`.
+`claims` is an API *shape* — create an object, wait for an address in its status, delete it at the end —
+not a built-in CRD, which is why the GVK is configuration. Readiness is a **TCP connect to port 22** on the
+first address that answers, in the order given by `endpoint_field` and then `status.sandbox.podIPs`: a
+status field merely appearing is not enough, because the Service's DNS record follows the controller by
+seconds (ADR-0005). The deployment this was written against uses `SandboxClaim` from
+`extensions.agents.x-k8s.io` with a warm pool — one claim API among many, and only configuration here.
 
-The other three shapes are shown in `deploy/config.example.yaml` and in `examples/`: an image that
-runs sshd, a list of hosts that already exist, and a program that provisions whatever else your
-infrastructure has. `command` is the escape hatch with the smallest contract I could write — print one
-JSON object (`{"id","addr","user?","private_key?"}`), and optionally implement `list` so a restarted
-gateway can adopt what it left running.
+### command — your program provisions
 
-Full reference: [`docs/architecture.md`](docs/architecture.md) · decisions:
-[`docs/adr/`](docs/adr/) · running it: [`docs/operations.md`](docs/operations.md).
+```yaml
+  - name: cloud
+    provision: command
+    command:
+      acquire: ["/usr/local/bin/provision-ci-vm"]
+      release: ["/usr/local/bin/destroy-ci-vm"]
+      list: ["/usr/local/bin/list-ci-vms"]
+      timeout: 120s
+      env: ["CLOUD_PROFILE=ci"]
+    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
+```
+
+`acquire` prints exactly one JSON object on stdout —
+`{"id":"vm-17","addr":"192.0.2.17:22","user":"ci","private_key":"/path/key"}` — with `BYRE_IDENTITY` in its
+environment; `user` and `private_key` may be omitted, and then the `ssh` block is the fallback. `release`
+gets `BYRE_INSTANCE_ID` and `BYRE_INSTANCE_ADDR`. `list` is optional and prints a JSON array of the same
+objects: without it a restarted gateway cannot re-adopt this backend's instances, and whatever is left
+running stays running. Readiness is `addr` as printed — implementing the wait is your program's business.
+The full contract, with a worked example script, is in
+[`docs/handbook/backends.md`](docs/handbook/backends.md).
+
+An identity is one client key. `fingerprint` comes from `ssh-keygen -lf key.pub -E sha256`, and
+`SHA256:` plus base64 padding are normalised away, so two spellings of one key cannot become two
+identities. `aliases` are log labels only, never routing. A key that is not listed never completes
+authentication: there is no anonymous access and no per-connection default.
+
+## Deploy: Docker and Kubernetes
+
+A container image and a kustomize overlay live in the repo; neither is needed to try the gateway.
+
+```sh
+make image                                            # byre:<git describe>, non-root, read-only rootfs
+kubectl apply -k deploy/                              # ns, SA, RBAC, ConfigMap, Deployment, Service
+kubectl apply -f deploy/instances-rbac.example.yaml   # separately: that grant is in another namespace
+kubectl -n byre-system create secret generic byre-pool-key --from-file=id_key=/path/to/key
+```
+
+The split apply is not laziness. `kubectl apply -k deploy/` installs the gateway in its own namespace,
+while the instances it leases live in another, and kustomize's `namespace:` rewrites every object at once —
+so that grant has to be applied on its own. Skipping it is the most misleading failure this project has:
+`/healthz` stays green, the pool never warms, and every checkout returns 403.
+
+The gateway's host key lives on its own PVC (`deploy/hostkey-pvc.yaml`), because it is the identity clients
+pin; the pool key — byre's key *to* the instances — comes from the Secret above. Rolling the Deployment
+adopts live leases first, so a client that reconnects during a rollout keeps its instance, but the SSH
+connections themselves are cut: there is no draining. Install, rotation, RBAC and symptoms:
+[`docs/handbook/operations.md`](docs/handbook/operations.md).
+
+## How it compares
+
+| category | examples | what it solves | where it differs from byre |
+|---|---|---|---|
+| Enterprise access proxies | Teleport, HashiCorp Boundary | people reaching production machines: short-lived certificates, audit, RBAC | the unit is a person and a host that already exists; nothing allocates or recycles instances |
+| SSH reverse proxies | [sshpiper](https://github.com/tg123/sshpiper) | one entry point, routing a connection to an upstream sshd by username or plugin | routing is a static map; nothing is created or leased, and the same client may land on a different upstream next time |
+| microVM lease gateways | [spoond](https://github.com/jrimmer/spoond) | leases in front of Firecracker microVMs, with an SSH gateway, TTL and re-attach | closest in spirit: the client addresses its lease as `<lease-id>@host` or a friendly tag, a string it must remember and present, and the substrate is its own orchestrator |
+| agent-sandbox SSH examples | [Containarium SSH Sandbox](https://agent-sandbox.sigs.k8s.io/docs/use-cases/examples/containarium-ssh-sandbox/) | an agent holds an SSH key instead of cluster credentials; each session is forced into an MCP server | the session is pinned by a forced command; no identity lease, no TTL, and the sandbox is addressed by whatever name the client dials |
+
+The gap all four leave is the same: a client that comes back three minutes later is either not recognised
+at all, or recognised only because it repeats an identifier it was handed earlier. byre takes the one
+identifier SSH already verifies — the public key — and hangs the lease on it. The price is in
+[Limits](#limits-and-things-known-to-be-wrong).
 
 ## Limits and things known to be wrong
 
-- **Single replica.** One process holds the lease table, so a second replica would give one identity
-  two instances. The designs for multi-replica are written down in `docs/roadmap.md`; neither is
-  implemented.
-- **`/healthz` does not mean "I can hand out an instance".** It answers "the process is up" and prints
-  the version stamped into the binary. A gateway missing its cross-namespace grant is green, never
-  warms its pool, and refuses every checkout with a 403 — the most misleading failure this project
-  has. `docs/operations.md` leads with it.
-- **`provision: command` without `list` cannot adopt.** Instances it created outlive the process and
-  nobody reaps them. `deploy/config.example.yaml` says so in a comment; the validator does not reject
-  it, because a command backend without `list` is a legal configuration.
-- **No automated end-to-end gate.** The cluster runs in `docs/acceptance/` were executed and recorded
-  by hand, and the `kind`-based CI run is still a roadmap item. The image and `kubectl apply -k` path
-  are validated by server-side dry-run (`?dryRun=All`) only; the build environment had no container
-  runtime to run the image for real.
-- **`pool_size: 0` does not stop instance creation.** `ApplyDefaults` treats an explicit zero as an
-  absent key. Scale the Deployment to zero if you need to stop it today.
+- **Single replica.** One process holds the lease table, so a second replica would give one identity two
+  instances. The multi-replica designs are written down in `docs/roadmap.md`; neither is implemented.
+- **`/healthz` does not mean "I can hand out an instance".** It answers "the process is up" and prints the
+  version stamped into the binary. A gateway missing its cross-namespace grant is green, never warms its
+  pool, and refuses every checkout with a 403.
+- **`provision: command` without `list` cannot adopt.** Instances it created outlive the process and nobody
+  reaps them. The validator does not reject it, because it is a legal configuration.
+- **No automated end-to-end gate.** The cluster runs in `docs/acceptance/` were executed and recorded by
+  hand; the `kind`-based CI run is a roadmap item, and the image and manifest path is validated by
+  server-side dry-run only.
+- **`endpoints` does not survive a restart.** That driver keeps ownership in memory, so a restarted
+  gateway round-robins again and a client that reconnects lands on whichever endpoint is next — measured,
+  not inferred. `claims` and `workloads` do survive: the identity is written onto the object.
+- **`pool_size: 0` does not stop instance creation.** `ApplyDefaults` treats an explicit zero as an absent
+  key, and replaces an explicit `grace: 0s` with 60s the same way. Scale the Deployment to zero instead.
+- **Not in v1:** multi-replica consistency, dynamic backend balancing, in-instance state persistence,
+  multi-tenancy, a UI. Anything specific to one product belongs in an integration example.
 
-## Prior art, and why it is not used here
-
-These projects are good at what they do; none of them is a lease manager, and reusing one would have
-meant writing the missing half anyway.
-
-- **sshpiper** forwards a connection to an upstream chosen from the request — typically the username.
-  It never creates an upstream, so there is nothing to lease; and keying on the username reintroduces
-  a client-chosen, unverified identifier.
-- **ContainerSSH** starts a container for an SSH connection and removes it when the connection ends.
-  The lifecycle is the connection's, which is the model this project argues against for agent
-  workloads — and it is the right model for a shell.
-- **Teleport** authenticates people and machines to servers that already exist, and records what
-  happened. It answers "who may reach which host", not "which host does this identity get today".
-- **Routers of the kind this replaced** decide at connect time. Whatever they key on — a name in the
-  request, a port, a header — the decision is made once per connection, so the next connection is a
-  new decision. Making that consistent needs a registry that outlives the connection, which is the
-  lease table with fewer features.
-
-## This is a program, not a library
-
-`module byre` is deliberately a bare path: the project is not meant to be imported, and publishing a
-canonical module path would either leak an internal hostname or promise an API that is not kept
-stable. `go get` on this module is not supported; fork it or vendor the packages you need.
-
-## Build
-
-```sh
-make build      # bin/byre
-make test       # unit tests
-make lint       # gofmt + go vet (+ golangci-lint when installed)
-./bin/byre -check-config -config deploy/config.example.yaml
-make e2e        # end-to-end against a kind cluster (needs a container runtime)
-```
-
-Deploying: `kubectl apply -k deploy/`, **plus** `deploy/instances-rbac.example.yaml`. The grant to
-create instances in another namespace cannot live in the overlay, because kustomize's `namespace:`
-rewrites every object at once. What skipping it looks like is under Limits, above.
-
-## Where to read next
+## Documentation
 
 | document | what it answers |
 |---|---|
-| [docs/architecture.md](docs/architecture.md) | identity, lease, pool, backends, readiness — how the pieces fit |
-| [docs/operations.md](docs/operations.md) | running it: config, first install, rotation, symptoms |
-| [docs/roadmap.md](docs/roadmap.md) | what is deliberately absent from v1, in the order it would arrive |
-| [docs/release.md](docs/release.md) | when a version is cut, what the pipeline produces |
-| [docs/adr/](docs/adr/) | each decision, and the conditions under which it would be reversed |
-| [docs/acceptance/](docs/acceptance/) | what was verified on a real cluster, with commands and outputs |
-| [docs/integrations/](docs/integrations/) | how a client runtime talks to the gateway |
-| [docs/README.md](docs/README.md) | the index of all of it |
+| [handbook/architecture.md](docs/handbook/architecture.md) | identity, lease, pool, backends, readiness — how the pieces fit, and why the obvious repairs fail |
+| [handbook/backends.md](docs/handbook/backends.md) | the four provisions in detail: field tables, readiness, failure behaviour, the `command` contract |
+| [handbook/operations.md](docs/handbook/operations.md) | install, RBAC, host-key rotation, metrics, upgrading, symptoms |
+| [handbook/troubleshooting.md](docs/handbook/troubleshooting.md) | what each failure looks like from the client and from the gateway log |
+| [roadmap.md](docs/roadmap.md) · [adr/](docs/adr/) | what is absent from v1 and in what order it would arrive; the decisions, with the conditions that would reverse them |
+| [acceptance/](docs/acceptance/) · [docs/README.md](docs/README.md) | what was verified on a real cluster; the index of everything else |
 
 ## Dependencies
 
-Five direct modules; the Kubernetes client brings its own transitive set (~40), all from the same
-project. Everything the binary links, and why:
-
-| module | role | could it be avoided? |
-|---|---|---|
-| `golang.org/x/crypto/ssh` | the SSH protocol (server and client) | no — implementing SSH is the one thing this project should not do itself |
-| `k8s.io/client-go`, `k8s.io/api`, `k8s.io/apimachinery` | talk to the Kubernetes API with client certificates | no, for the `claims` and `workloads` provisions; `endpoints` and `command` need none of it at runtime |
-| `gopkg.in/yaml.v3` | parse the configuration file | yes, at the cost of JSON-only configuration |
-
-There is **no** gateway/proxy/cache component involved: no sshpiper, no Envoy, no Redis, no sidecar.
-The process is a single static binary with two listeners (SSH and health/metrics). Licences, and the
-digest of the licence file each module's terms were read from, are in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-## Non-goals for v1
-
-Multi-replica consistency, dynamic multi-backend balancing, in-instance state persistence,
-multi-tenancy, a UI, and anything specific to one product (those belong in integration examples).
+`golang.org/x/crypto/ssh` for the protocol; `k8s.io/client-go` with `api` and `apimachinery` for the
+`claims` and `workloads` backends (the other two need none of it at runtime); `gopkg.in/yaml.v3` for the
+configuration file. Five direct modules, no gateway, proxy, cache or sidecar — one static binary with two
+listeners. Licences: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
 

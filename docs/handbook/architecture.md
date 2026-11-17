@@ -113,7 +113,45 @@ for machines that already exist.
 | gateway restarts | adopt/expire on startup (section 4) |
 | config invalid | process exits before binding a port, with all violations listed |
 
-## 7. Non-goals in v1
+## 7. Why the obvious alternatives do not work
+
+The claim this design makes — allocate on identity, not on the connection — is only worth the code if
+the cheaper options fail. Four of them are obvious enough to have been tried by whoever reads this next.
+
+### Sticking to the source address
+
+An address identifies a network, not a client. Behind NAT every agent on one laptop shares it, so two
+agents become one identity; a NAT may also renumber its port mapping after an idle period, so the
+address that identified the client at t+0s identifies nobody at t+5min. A gateway that guesses "same
+client?" from the address is guessing at a value the client's network rewrites.
+
+### Keying on the SSH session
+
+There is no session to key on: a session identifier is created by the connection that carries it. The
+gateway terminates SSH, so the only session it can observe is the one it just created — exactly the
+object that is destroyed on disconnect. Reconnects, `scp` and every `-L` forward are new connections with
+new sessions, by protocol design.
+
+### Destroying the instance when the connection drops
+
+This is what a per-connection container backend does, and it is coherent: the instance's lifetime is the
+connection's lifetime. It also means the state has nowhere to live between connections, which is the
+whole problem. It suits an interactive shell; it does not suit a task that is a sequence of connections.
+
+### Requiring the client to hold one connection open (`ControlMaster`)
+
+This works until `ControlPersist` expires — which is exactly the reconnect the design has to survive. It
+also turns correctness into a client configuration: any client that does not do it, or that opens a plain
+socket for `scp` the way the reference client does, is silently broken. Pushing a hard requirement onto
+callers is how a gateway acquires a support burden it cannot see.
+
+### The one that is not cheap either
+
+Keying on the public key moves access control into key distribution: a shared key is a shared instance,
+and rotating a key is a new identity with a cold start. That is a real cost, paid deliberately, and it is
+listed in the README's limits rather than hidden here.
+
+## 8. Non-goals in v1
 
 Multi-replica coordination, dynamic backend selection, persistent state, per-identity quotas, UI.
 The annotation scheme and the identity table are shaped so that coordination can be added later without
