@@ -1,6 +1,6 @@
 # ADR-0004 — Choosing the name
 
-- Status: accepted
+- Status: **accepted, contested** — see "Correction" at the end
 - Date: 2026-11-17
 - Deciders: maintainers
 
@@ -56,3 +56,44 @@ organisational domain, and can be rewritten to a canonical hosted path if the pr
 
 `keypod` also appeared as `key_pods` — the name of a single endpoint in an unrelated SDK — which is not
 a project name and does not create ambiguity.
+
+## Correction — the collision check for `keypod` was not done to the same standard
+
+Written the same day, after an independent legal review found what this ADR had claimed did not exist.
+This section is kept rather than edited so the mistake stays legible.
+
+**What this ADR got wrong.** The table above rejects four candidates only after checking each against
+several registries, then marks `keypod` "selected" on the strength of a single shallow search. That
+asymmetry — seven filters for the alternatives, one search for the winner — is how a false negative
+happens. `keypod` is **not** free:
+
+| prior use | when | domain | note |
+|---|---|---|---|
+| `anusii/keypod` | 2023– | key-value store, GPL-3.0 | closest in meaning: "a key and a pod/box" for developers |
+| `twixxiye/keypod` | 2025– | Android music player, GPL-3.0, has releases | same name, unrelated function |
+| `isso-719/keypod` (`keypod.net`) | 2020 | Ruby web app | same name |
+| `stevepham/keypod` | 2020 | Kotlin library, published on JitPack | the name already occupies a package coordinate |
+| `KEYPOD` key safe (Extremehorizon/Northcore) | 2005– | physical key storage | different class; shows the word is a product name, not a coined term |
+| `KeyPod` smart key box (QIUI) | — | consumer hardware + app | a Chinese entity ships a product under this exact name |
+| US trademark `KEYPOD` 87404781 | 2017, abandoned 2017-11-16 | classes 009/042 | not a registration bar, but the mark has been claimed in this space before |
+
+**Consequences of the error.** Apache-2.0 §6 grants no trademark rights, so the licence never protected
+the name; a reader who finds four unrelated `keypod` projects reasonably concludes ours is a fork of one
+of them. The cost is confusion and searchability rather than litigation, and it grows with every published
+artifact (module path, image name, docs, blog posts) — which is why the decision belongs now, not later.
+
+**Decision: unchanged for now, therefore provisional.** Renaming touches the repository path, the image
+name, `docs/`, and the board tenant; doing it silently would be worse than documenting the risk. The name
+stays `keypod` until the maintainer decides between:
+
+1. **Rename** (`stallage`, `hutch`, or a new coinage) — cheapest today, and the only option that removes
+   the collision. Any candidate needs the same depth of check that the alternatives above received: GitHub
+   wide, `pkg.go.dev`, npm, JitPack, PyPI, Docker Hub, plus CNIPA/EUIPO/UKIPO for the intended class.
+2. **Keep the name, publish the disclaimer** — README states no affiliation with any same-named product or
+   trademark holder, no third-party logos, no `®`. Residual risk accepted in writing.
+3. **Keep and defer** — recorded here, re-evaluated before the first public release. This is the state
+   today, and it is a decision to carry risk, not to have resolved it.
+
+**Rule extracted.** A naming ADR must state, per candidate, *what was searched and how deep*, and it must
+apply the same depth to the winner as to the rejects. "No results found" from one query is not a collision
+check; it is a search that has not finished.
