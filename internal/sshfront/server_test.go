@@ -505,76 +505,19 @@ func TestBackendFailureRefusesSession(t *testing.T) {
 	}
 }
 
-// TestDialFailureInvalidatesLease: the lease is obtained but the instance refuses connections (a dead
-// pod, a bounced listener). The client must be disconnected **and the lease dropped** — the old
-// behaviour kept it, which handed the same unreachable instance to every reconnect for ttl+grace while
-// healthy capacity sat idle (F5, probe E4).
-func TestDialFailureInvalidatesLease(t *testing.T) {
-	h := startGatewayWith(t, "127.0.0.1:1", nil) // port 1: connection refused on any sane host
-
-	c, err := h.dial(t, h.signer)
-	if err != nil {
-		t.Fatalf("authentication should succeed: %v", err)
-	}
-	defer c.Close()
-
-	if _, err := c.NewSession(); err == nil {
-		t.Fatal("session opened against an unreachable instance")
-	}
-
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if h.manager.Lookup(h.identity) == nil {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("the lease survived a failed dial: %+v", h.manager.Lookup(h.identity))
-}
-
-// TestDeadInstanceIsReplacedOnReconnect is the end-to-end half of F5: the first connection lands on a
-// dead endpoint, and the second one must get the healthy instance instead of the same address.
-func TestDeadInstanceIsReplacedOnReconnect(t *testing.T) {
-	alive := startFakeTarget(t, "fake-1")
-	_, poolPriv := newKeyPair(t)
-	keyPath := writeKeyFile(t, poolPriv)
-	drv, err := backend.NewStatic(backend.StaticConfig{
-		Name:          "lab",
-		Endpoints:     []string{"127.0.0.1:1", alive},
-		User:          "sandbox",
-		PrivateKey:    keyPath,
-		HostKeyPolicy: "insecure",
-	})
-	if err != nil {
-		t.Fatalf("static backend: %v", err)
-	}
-	h := startGatewayWith(t, "", drv)
-
-	first, err := h.dial(t, h.signer)
-	if err != nil {
-		t.Fatalf("first dial: %v", err)
-	}
-	if sess, err := first.NewSession(); err == nil {
-		_ = sess.Close()
-		t.Fatal("the first connection reached the dead endpoint")
-	}
-	_ = first.Close()
-
-	// Give the handler time to record the failed dial and drop the lease.
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && h.manager.Lookup(h.identity) != nil {
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	second, err := h.dial(t, h.signer)
-	if err != nil {
-		t.Fatalf("second dial: %v", err)
-	}
-	defer second.Close()
-	if got := strings.TrimSpace(runCommand(t, second, "hostname")); got != "fake-1" {
-		t.Fatalf("second connection reached %q, want the healthy instance", got)
-	}
-}
+// Two tests that lived here were written against the first shape of F5 — "a failed dial invalidates the
+// lease" — when every driver was assumed to be able to answer "is your object still there". That is not
+// true of `endpoints`: it has no object to ask, so ADR-0008 keeps its lease when a dial fails. The
+// behaviour is now asserted where it belongs:
+//
+//   - TestDialFailureOnDeletedInstanceReplacesTheLease (dead_instance_test.go): a deleted object is
+//     replaced in the same connection attempt — F5's actual incident.
+//   - TestDialFailureOnLiveInstanceKeepsTheLease: an instance that exists but does not answer keeps its
+//     lease and is counted as unreachable.
+//   - TestAcquireReusesADriverWithoutLiveness (lease): a driver with no object to ask behaves as before.
+//
+// The two static-endpoint variants this file used to carry asserted the opposite of the first two and
+// would have pinned a rule the code does not implement.
 
 // TestCloseDropsLiveSessions is the F6 regression (probe E6): Close() returned only when the client
 // hung up, so a rolling update waited out the grace period and was killed by SIGKILL.

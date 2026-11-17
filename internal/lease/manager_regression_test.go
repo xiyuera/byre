@@ -49,7 +49,10 @@ func TestUnusableInstanceIsReleased(t *testing.T) {
 // annotation, or cannot be dialled, used to be skipped with `continue` and stayed in the cluster
 // forever, invisible to the lease table, the reaper and the metrics.
 func TestAdoptReleasesWhatItCannotOwn(t *testing.T) {
-	fb := &fakeBackend{name: "lab"}
+	// A driver that promises its List result is authoritative about identity (kubernetes, static), so an
+	// unannotated instance really is capacity nobody holds. For a driver that cannot promise it, ADR-0009
+	// keeps the leftover instead — that case is TestAdoptKeepsAnonymousInstancesOfADriverThatCannotJudgeThem.
+	fb := &staleBackend{&fakeBackend{name: "lab"}}
 	fb.list = []backend.Instance{
 		{
 			ID: "keep-1", Addr: "192.0.2.1:22", User: "sandbox", PrivateKey: "/k", HostKeyPolicy: "insecure",
@@ -158,7 +161,7 @@ func TestInvalidateIgnoresAStaleInstance(t *testing.T) {
 // TestAdoptDestroysStaleWarmCapacity: the unannotated instance a previous process left behind must be
 // destroyed, not merely ignored (the existing test never asserted the release happened).
 func TestAdoptDestroysStaleWarmCapacity(t *testing.T) {
-	fb := &fakeBackend{name: "lab"}
+	fb := &staleBackend{&fakeBackend{name: "lab"}}
 	fb.list = []backend.Instance{{
 		ID: "warm-1", Addr: "192.0.2.1:22", User: "sandbox", PrivateKey: "/k", HostKeyPolicy: "insecure",
 		Annotations: map[string]string{},

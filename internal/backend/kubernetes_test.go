@@ -664,6 +664,9 @@ func TestAdoptBackfillsUIDOnLegacyBinding(t *testing.T) {
 
 // TestBindingWritesObjectUID: the annotation is only useful if it is written when an instance is bound.
 func TestBindingWritesObjectUID(t *testing.T) {
+	// Readiness also probes the address (F9), and the fake's 192.0.2.7 answers nothing: this test is
+	// about the UID annotation, not about the pod being dialable.
+	withProbe(t, func(context.Context, string) error { return nil })
 	cfg := baseKubeCfg()
 	cs := fake.NewSimpleClientset()
 	readyPodReactor(cs, "192.0.2.7")
@@ -836,6 +839,8 @@ func TestProbeRejectsTruncatedBanner(t *testing.T) {
 // TestPodInstanceGetsConservativeSecurityContext covers the pod provider's defaults: an instance used to
 // run with no resources and no securityContext at all (root, default capabilities).
 func TestPodInstanceGetsConservativeSecurityContext(t *testing.T) {
+	// The pod is Ready but its address answers nothing; the probe is stubbed for the same reason as above.
+	withProbe(t, func(context.Context, string) error { return nil })
 	cfg := baseKubeCfg()
 	cs := fake.NewSimpleClientset()
 	readyPodReactor(cs, "192.0.2.7")
