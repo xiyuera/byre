@@ -18,7 +18,7 @@ the four provision shapes (`claims`, `workloads`, `endpoints`, `command`), adopt
 
 ## v0.2 — usable by someone else (M4–M5)
 
-Done: `static` backend, an end-to-end run with a real client identity, failure-path tests
+Done: the `endpoints` backend (called `static` until 0.3.0), an end-to-end run with a real client identity, failure-path tests
 (`docs/acceptance/2026-11-17-m5-hardening.md`), and a runbook written from the two defects the cluster
 exposed.
 

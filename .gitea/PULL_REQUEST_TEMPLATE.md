@@ -17,7 +17,7 @@ make lint test
 go test -race ./...
 ```
 
-- Real cluster used (backend type, pool size):
+- Real cluster used (provision, pool size):
 - Checks run (AC numbers from `docs/acceptance/`):
 
 ## Checklist

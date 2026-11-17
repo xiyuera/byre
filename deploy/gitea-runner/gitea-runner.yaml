@@ -27,6 +27,8 @@ data:
                     matchExpressions:
                       - key: kubernetes.io/hostname
                         operator: In
+                        # Replace with the node that should prefer CI builds, or delete this whole
+                        # preferredDuringScheduling block to let the scheduler choose freely.
                         values: ["__NODE_NAME__"]
           containers:
             # The name "job" is the runner's convention: this container merges into the job container.

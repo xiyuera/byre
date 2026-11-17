@@ -19,7 +19,7 @@ labels: bug
 
 **Environment**
 - byre version (`byre -version`):
-- backend type (`static` / `kubernetes` + `provider.kind`):
+- provision (`claims`|`workloads`|`endpoints`|`command`):
 - pool size, ttl, grace:
 - client (and whether it uses `ControlMaster`):
 
