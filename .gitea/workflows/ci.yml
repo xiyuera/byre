@@ -21,7 +21,7 @@ jobs:
           set -eu
           git init -q .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git -c http.sslVerify=false -c http.extraheader="Authorization: token ${GITHUB_TOKEN}" \
+          git -c http.sslVerify=false -c http.extraheader="Authorization: token ${{ github.token }}" \
             fetch -q --depth 1 origin "${GITHUB_SHA}"
           git checkout -q FETCH_HEAD
 
@@ -45,7 +45,7 @@ jobs:
           set -eu
           git init -q .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git -c http.sslVerify=false -c http.extraheader="Authorization: token ${GITHUB_TOKEN}" \
+          git -c http.sslVerify=false -c http.extraheader="Authorization: token ${{ github.token }}" \
             fetch -q --depth 1 origin "${GITHUB_SHA}"
           git checkout -q FETCH_HEAD
 
@@ -63,7 +63,7 @@ jobs:
           set -eu
           git init -q .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git -c http.sslVerify=false -c http.extraheader="Authorization: token ${GITHUB_TOKEN}" \
+          git -c http.sslVerify=false -c http.extraheader="Authorization: token ${{ github.token }}" \
             fetch -q origin
           git checkout -q "${GITHUB_SHA}"
       # A commit without a matching Signed-off-by is a contribution whose provenance nobody can answer
@@ -92,7 +92,7 @@ jobs:
           set -eu
           git init -q .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git -c http.sslVerify=false -c http.extraheader="Authorization: token ${GITHUB_TOKEN}" \
+          git -c http.sslVerify=false -c http.extraheader="Authorization: token ${{ github.token }}" \
             fetch -q --depth 1 origin "${GITHUB_SHA}"
           git checkout -q FETCH_HEAD
       # A translation that is older than the English it claims to translate is worse than no translation:
