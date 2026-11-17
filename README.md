@@ -11,6 +11,12 @@ session, and that instance is held exclusively until the lease expires.
 > Renamed from `keypod` (see `docs/rename-to-byre.md`). Not affiliated with, endorsed by, or derived from
 > any same-named project; the name is a cowshed, and the licence grants no trademark rights.
 
+## This is a program, not a library
+
+`module byre` is deliberately a bare path: the project is not meant to be imported, and publishing a
+canonical module path would either leak an internal hostname or promise an API that is not kept stable.
+`go get` on this module is not supported; fork it or vendor the packages you need.
+
 ## Why "per connection" is wrong
 
 Any SSH client opens several TCP connections during *one* session: one for `exec`, one for `scp`/`sftp`,

@@ -25,3 +25,5 @@ go test -race ./...
 - [ ] no environment specifics (hosts, namespaces, image tags, key paths, identity names)
 - [ ] no new runtime dependency (stdlib + x/crypto + k8s client only)
 - [ ] a test would fail if this change were reverted
+
+- [ ] Every commit carries `Signed-off-by:` matching its author (DCO 1.1, see CONTRIBUTING.md)

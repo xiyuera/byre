@@ -42,3 +42,27 @@ jobs:
             | tar -xz -C /usr/local/bin
       - name: Validate kustomize output
         run: make render
+
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # A commit without a matching Signed-off-by is a contribution whose provenance nobody can answer
+      # for later, which is the whole point of DCO. Base is the merge target, not main, so stacked
+      # branches are checked over their own range.
+      - name: Every commit signed off
+        run: |
+          set -eu
+          base="${{ github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}"
+          range="$base..HEAD"
+          bad=0
+          for c in $(git rev-list "$range"); do
+            author="$(git log -1 --format='%ae' "$c")"
+            if ! git log -1 --format='%B' "$c" | grep -qi "^Signed-off-by: .*<$author>"; then
+              echo "missing or mismatched Signed-off-by: $(git log -1 --format='%h %s' "$c")"
+              bad=1
+            fi
+          done
+          [ "$bad" = 0 ]

@@ -25,12 +25,12 @@ deployments/services/configmaps/serviceaccounts/roles/rolebindings -> none
 claims with a proxy origin                                            -> none
 
 # the gateway serves every identity, each on its own instance
-ops        keypod-d39fcb81
-reviewer   keypod-422bf7a7
-eng        keypod-2eec77c8
-legal      keypod-85648e9a
-research   keypod-9b25341c
-default    keypod-0a63765e
+identity-1  instance-1
+identity-2  instance-2
+identity-3  instance-3
+identity-4  instance-4
+identity-5  instance-5
+identity-6  instance-6
 connected: 6/6   distinct: 6/6
 
 # acceptance against the Service
