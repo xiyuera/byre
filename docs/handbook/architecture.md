@@ -79,9 +79,10 @@ Two properties make this work and one deliberate limitation applies:
 
 Those four are the whole vocabulary (ADR-0007). What differs between infrastructures is how an SSH
 endpoint comes into existence and how it is destroyed, not how it is reached: `ssh.user`,
-`ssh.private_key`, `ssh.port`, `ssh.host_key_policy` and the readiness timeout are shared by all four
-and live outside the provision block. No value names a product. A claim-shaped API such as the
-`SandboxClaim` object of `extensions.agents.x-k8s.io` is something an operator writes into
+`ssh.private_key`, `ssh.host_key_policy` and the readiness timeout are shared by all four and live outside
+the provision block. (`ssh.port` is accepted for compatibility and read by no driver: the port travels in
+the instance's `addr`, or in each `endpoints` entry.) No value names a product. A claim-shaped API such as
+the `SandboxClaim` object of `extensions.agents.x-k8s.io` is something an operator writes into
 `api_group`/`resource`/`object_kind`; it is not a built-in.
 
 The driver interface is deliberately small:

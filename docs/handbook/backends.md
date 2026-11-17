@@ -1,13 +1,32 @@
 # Backends
 
-A backend is one way of obtaining an instance and one way of reaching it. It has exactly two parts:
+A backend is one way of obtaining an instance and one way of reaching it. Pick the shape first, then fill
+in its fields.
+
+## Which one — decide from what you already have
+
+| what you have | `provision` | why |
+|---|---|---|
+| hosts that already run `sshd` (lab, build runners, one beefy box) | `endpoints` | nothing is created; the gateway only decides who gets which host |
+| a cluster with a claim-shaped CRD and/or a warm pool | `claims` | the controller creates and deletes; byre only asks |
+| a cluster and an image that runs `sshd`, no CRD | `workloads` | byre creates one Pod per lease and deletes it |
+| cloud VMs, Incus/LXD, a CMDB — anything behind a CLI | `command` | your program provisions and describes the instance |
+
+| `provision` | survives a gateway restart | has a warm pool | needs cluster access | tested on a real cluster |
+|---|---|---|---|---|
+| `endpoints` | no — ownership is in memory | no (`Create` not implemented) | no | yes |
+| `workloads` | yes — identity annotation on the pod | yes | yes (create/delete/patch pods) | unit tests with a fake client |
+| `claims` | yes — identity annotation on the object | yes | yes (the configured GVK) | yes (the recorded run) |
+| `command` | not yet — see `command.list` below | no | no | unit tests |
+
+## The block
 
 ```yaml
 backends:
   - name: <label used in logs and by identities[].backend>
     provision: claims | workloads | endpoints | command    # how an instance comes into existence
     # …the fields that provision needs (one table per shape, below)…
-    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
+    ssh: {user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
 ```
 
 `provision` is the only required discriminator. `type` is the pre-0.3 spelling: setting it is a
@@ -19,8 +38,13 @@ configuration error that names the replacement, rather than an unknown-field err
 |---|---|---|---|
 | `ssh.user` | yes | — | the login the gateway uses on the instance; not the client's username |
 | `ssh.private_key` | yes | — | the gateway's own key **to** the instance, readable by the gateway process |
-| `ssh.port` | no | `22` | port to dial; overridden per instance where the driver reports one with a port |
+| `ssh.port` | no | `22` | accepted and range-checked, but **no driver reads it**: the port is the one in `addr` or in each `endpoints` entry |
 | `ssh.host_key_policy` | no | `accept-new` | `strict` (needs `known_hosts`), `accept-new` (trust on first use, pinned for the process), `insecure` (no check) |
+
+`ssh.port` is the trap: it looks like the way to reach an instance on a non-standard port, and it is not.
+A host that listens on 2202 goes into `endpoints` as `"host:2202"`, or comes back from `command.acquire`
+as `"addr":"host:2202"`. `endpoints: ["192.0.2.11"]` with `ssh.port: 2202` fails `-check-config` with
+`endpoint "192.0.2.11" must be host:port`.
 
 `private_key` is a plain path and **`~` is not expanded** — `~/keys/id` passes `-check-config` and then
 fails on the first dial with `read key ~/keys/id: no such file or directory`. Use an absolute path.
@@ -161,14 +185,16 @@ your config, not in this binary.
 |---|---|---|
 | `command.acquire` | yes | argv, not a shell string — no globbing, no pipes, no `$VAR` |
 | `command.release` | no | argv; without it, release is a logged no-op |
-| `command.list` | no | argv; without it, a restart cannot adopt this backend's instances |
-| `command.timeout` | no | 120s per invocation |
-| `command.env` | no | `KEY=VALUE` added to every invocation |
+| `command.list` | no | argv; **leave it out today** — what it reports is released at startup (see below) |
+| `command.timeout` | no | 120s per invocation; bounds the program, not its children |
+| `command.env` | no | `KEY=VALUE` **appended** to the inherited environment, never replacing it |
 
 ### The contract
 
 `acquire` prints exactly one JSON object on stdout and exits 0. Nothing else on stdout — diagnostics go
-to stderr, which byre captures and puts in the error message when the exit code is non-zero.
+to stderr, which byre captures and puts in the error message when the exit code is non-zero. Extra output
+on stdout is fatal: `acquire printed 58 bytes that are not one JSON object: invalid character 'p' …`
+(`internal/backend/command.go:121-124`).
 
 ```json
 {"id":"vm-17","addr":"192.0.2.17:22","user":"ci","private_key":"/etc/keys/ci"}
@@ -178,19 +204,45 @@ to stderr, which byre captures and puts in the error message when the exit code 
 |---|---|---|
 | `id` | yes | stable, unique within the backend, appears in logs and annotations; never put identity material here |
 | `addr` | yes | `host:port` the gateway dials |
-| `user` | no | falls back to `ssh.user` |
-| `private_key` | no | falls back to `ssh.private_key` |
+| `user` | no | falls back to `ssh.user` (`command.go:104`) |
+| `private_key` | no | falls back to `ssh.private_key` (`command.go:105`) |
+
+`id` and `addr` are checked after decoding: an empty `id` or `addr` fails the acquire with
+`returned an unusable instance: Addr is empty` (`internal/backend/backend.go:35-45`). The `ssh.user` /
+`ssh.private_key` fallback still has to be configured, even when every record carries its own:
+`NewCommand` refuses a backend without them (`command.go:65-67`), because a record that omits them has
+nowhere to fall back to.
 
 Environment on each call:
 
 | variable | present for | value |
 |---|---|---|
-| `BYRE_IDENTITY` | `acquire` | the client fingerprint (base64 body) that is asking |
+| `BYRE_IDENTITY` | `acquire` | the client fingerprint (base64 body, no `SHA256:` prefix, no padding) that is asking |
 | `BYRE_INSTANCE_ID` | `release` | the `id` from the acquire that created it |
 | `BYRE_INSTANCE_ADDR` | `release` | the `addr` from that acquire |
 
-`list` prints a JSON **array** of the same objects and exits 0; entries that fail validation are skipped
-with a warning rather than failing the whole list.
+`list` gets **no** `BYRE_*` variables at all (`command.go:144`), and prints a JSON **array** of the same
+objects; entries that fail validation are skipped with a warning rather than failing the whole list
+(`command.go:148-161`). Measured, with a lister that dumps its environment to a file: the file is empty.
+
+**Failure** is a non-zero exit plus one line on stderr; that line ends up in the gateway's error
+(`run "…/acquire.sh": exit status 1 (stderr: quota exceeded for project ci)`, `command.go:87-89`). The
+client itself only ever sees `Connection to <host> closed by remote host`.
+
+**`timeout` bounds the program, not its process tree.** The deadline is enforced with
+`exec.CommandContext`, which kills the direct child (`command.go:79-81`). A script that leaves a
+background process holding stdout keeps the wait alive past the timeout — measured with `timeout: 2s`:
+a script ending in `sleep 4 & sleep 4` was waited on for 4s, while the same script with `exec sleep 6`
+was cut at 2s. If your provisioner spawns helpers, make it `exec` its real work or `wait` on its own
+children.
+
+**`list` currently destroys what it reports.** At startup the manager lists every driver, and an instance
+without a `byre.io/identity` annotation is treated as stale capacity from a previous process and
+**released** (`internal/lease/manager.go:244-250`). A `command` record has no annotation field at all
+(`command.go:93-98`), so every instance a lister reports is destroyed — measured: a lister reporting
+`vm-adopted` produced `BYRE_INSTANCE_ID=vm-adopted` in the release program within the same startup. Until
+adoption for `command` lands, do not configure `list`; instances your program creates then outlive the
+gateway, which is the lesser evil.
 
 ### A worked example (20 lines)
 
@@ -206,9 +258,9 @@ key=/etc/byre/keys/ci
 printf '{"id":"%s","addr":"%s:22","user":"ci","private_key":"%s"}\n' "$name" "$ip" "$key"
 ```
 
-`release` gets `BYRE_INSTANCE_ID` and `BYRE_INSTANCE_ADDR`; `list` prints every VM the tool considers
-managed, in the same shape. If you cannot write a reliable `list`, say so in your own runbook: orphaned
-instances are then permanently outside the gateway's accounting.
+`release` gets `BYRE_INSTANCE_ID` and `BYRE_INSTANCE_ADDR`. Do not write a `list` yet (the reason is
+above): without one, instances your program creates outlive the gateway, so your own runbook has to own
+their cleanup — nothing in byre will notice them again.
 
 ## Failure behaviour, by shape
 

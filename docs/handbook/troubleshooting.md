@@ -156,7 +156,9 @@ Deliberate rotation is in [operations.md](operations.md#rotation).
 ```
 
 - **rc=0** — the file parses, defaults apply, every driver builds. It does *not* mean the cluster will
-  accept the objects, that the instance keys exist, or that `endpoints` are reachable.
+  accept the objects, that the instance keys exist, or that `endpoints` are reachable. It does not even
+  mean the file was edited: `<placeholder>` values and the all-zero fingerprint shipped in
+  `deploy/config.example.yaml` all pass, because only the shape is validated.
 - **rc=2** — at least one violation, **all of them printed at once**, semicolon-separated inside the
   `error` field. Unknown fields, an unknown or missing `provision`, a `backend.type` left over from
   0.2.x, a duplicate fingerprint, a malformed endpoint (`must be host:port`), a missing `ssh.user` or

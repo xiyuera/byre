@@ -1,0 +1,32 @@
+# The Quick start in the README, as a file you can copy. One machine, no cluster.
+#
+#   1. ssh-keygen -t ed25519 -N '' -f ~/.ssh/byre_pool        # the gateway's key TO the instance
+#      cat ~/.ssh/byre_pool.pub >> ~/.ssh/authorized_keys     # and the instance trusts it
+#   2. ssh-keygen -t ed25519 -N '' -f ~/.ssh/byre_client      # the key your client authenticates with
+#      ssh-keygen -lf ~/.ssh/byre_client.pub -E sha256        # paste the SHA256: value below
+#   3. ./byre -check-config -config examples/local-quickstart/config.yaml
+#   4. ./byre -config examples/local-quickstart/config.yaml
+#   5. ssh -p 2222 -i ~/.ssh/byre_client -o IdentitiesOnly=yes anything@127.0.0.1 hostname
+#
+# Validated with: byre -check-config (rc=0), then started and connected twice as above.
+listen: "127.0.0.1:2222"
+
+# Created on first start if the file is absent. Empty = a new key every restart.
+host_key: /var/lib/byre/hostkey/id_ed25519
+
+lease:
+  ttl: 360s          # must exceed the client's idle timeout (300s for ssh with ControlPersist)
+  grace: 60s         # reconnect window after a disconnect
+
+backends:
+  - name: local
+    provision: endpoints
+    endpoints: ["127.0.0.1:22"]        # the port lives here; ssh.port is not read by any driver
+    ssh:
+      user: "<your-user>"              # replace; the login the gateway uses on the instance
+      private_key: /home/<you>/.ssh/byre_pool
+      host_key_policy: accept-new      # `strict` once the host key is in known_hosts
+
+identities:
+  - fingerprint: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"   # replace with your client's
+    backend: local
