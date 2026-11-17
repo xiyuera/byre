@@ -55,10 +55,20 @@ passed=3 failed=0
 
 ## Reaping in the deployed setting
 
-The reap check has a timing subtlety worth recording: a lease expires after `ttl + grace` (360s + 60s),
-but the reaper ticks every 30s, so a reconnect scheduled at exactly `ttl + grace` can legitimately land
-*inside the same tick* and still find the lease alive. The check must wait at least one extra tick —
-`ttl + grace + 60s` is a safe window. A run that reconnects at `ttl + grace + 10s` proves nothing.
+```
+t0     instance keypod-b171c9c2   idle 1
+t+500  metrics: leases_active 0  leases_idle 0  pool_warm 2
+t+500  instance keypod-4896ea62
+RESULT: PASS reaped (keypod-b171c9c2 -> keypod-4896ea62)
+```
+
+The old instance is gone, the pool did not shrink, and the same identity came back to a fresh instance —
+which is the documented outcome after an expired lease, not a regression.
+
+A timing subtlety worth recording: a lease expires after `ttl + grace` (360s + 60s), but the reaper ticks
+every 30s. A reconnect scheduled at exactly `ttl + grace` can land *inside the same tick* and still find
+the lease alive. An earlier run at `ttl + grace + 10s` reported "same instance" for that reason and
+proved nothing; the check needs at least one extra tick (`ttl + grace + 60s` is a safe window).
 
 ## Still not migrated
 
