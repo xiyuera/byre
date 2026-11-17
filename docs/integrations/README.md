@@ -24,4 +24,6 @@ a reader should be able to use keypod without knowing which clients exist.
 
 ## Current integrations
 
-_None yet — the first one lands with M4, together with its acceptance log._
+| client | note | verified against |
+|---|---|---|
+| agent runtime with incremental file sync (spawn-per-call SSH backend, `ControlMaster`, 300 s idle) | [`agent-runtime.md`](agent-runtime.md) | a deployed gateway in a real cluster, non-default identity, `docs/acceptance/2026-11-17-deploy.md` |
