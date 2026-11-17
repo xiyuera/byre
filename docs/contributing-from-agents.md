@@ -1,8 +1,11 @@
 # Contributing from an agent
 
-Every commit so far is authored by `byre contributors <noreply@example.com>`. That identity is honest
-about *what* produced a change and useless about *who*: the log cannot tell a review from an
-implementation, and a mistake cannot be routed back to the role that made it.
+The first commits in this repository are all authored by one placeholder identity, `byre contributors
+<noreply@example.com>`. That identity is honest about *what* produced a change and useless about
+*who*: the log cannot tell a review from an implementation, and a mistake cannot be routed back to
+the role that made it. Everything since carries the role account instead, which is what makes the log
+readable, and what makes a sign-off mean something: the trailer has to name that account (see
+[CONTRIBUTING](../CONTRIBUTING.md)).
 
 ## One account per role
 
@@ -20,6 +23,11 @@ for the reviewer row, confirm a row with `git log -1 --format='%an <%ae>'` on th
 
 The author comes from `$GIT_AUTHOR_NAME` / `$GIT_AUTHOR_EMAIL`; never override it with a `-c user.name=…`
 flag, which is how commits acquire `x <x@x>` — worse than the placeholder, because it looks attributable.
+
+`git commit -s` writes the `Signed-off-by:` trailer from that same identity, and the DCO gate compares
+the address in the trailer with the commit's own author address. A commit authored by the role account
+but signed by hand with another address fails like an unsigned one, so let `-s` write the trailer and
+check the range before pushing; CONTRIBUTING has the loop the gate runs.
 
 ## Credentials and git authentication
 
