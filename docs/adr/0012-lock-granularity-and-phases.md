@@ -1,4 +1,4 @@
-# ADR-0008 — The lease table is locked briefly, and a row says which phase it is in
+# ADR-0012 — The lease table is locked briefly, and a row says which phase it is in
 
 - Status: accepted
 - Date: 2026-11-17

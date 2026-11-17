@@ -477,7 +477,7 @@ func (m *Manager) Reap(ctx context.Context) (int, error) {
 		}
 		if now.Sub(e.LastSeen) >= horizon {
 			// Mark, do not delete: between the marker and the backend's answer the instance still
-			// exists, and a reconnect in that window must not be handed it (ADR-0008).
+			// exists, and a reconnect in that window must not be handed it (ADR-0012).
 			e.state = stateDraining
 			e.done = make(chan struct{})
 			draining = append(draining, e)
@@ -622,7 +622,7 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 		now := m.now()
 
 		// Decide under the lock, act outside it: Release is a backend call, and holding the table lock
-		// across backend calls is what ADR-0008 forbids.
+		// across backend calls is what ADR-0012 forbids.
 		m.mu.Lock()
 		for _, in := range ins {
 			id := in.Annotations[backend.LabelIdentity]

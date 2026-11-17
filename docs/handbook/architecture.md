@@ -51,13 +51,14 @@ Splicing is byte-level after channel setup: no protocol inspection of the payloa
   identity waits for it and joins the result, rather than starting a second creation.
 - `idle` is a state of `leased`: a lease with `refs == 0` that has not yet expired. Pool members are not
   leases; they are warm capacity that becomes one.
-- `draining` starts when `ttl` + `grace` have already elapsed, or when a dial failed. The row is kept —
+- `draining` starts when `ttl` + `grace` have already elapsed, or when the instance turned out to be gone
+  after a failed dial. The row is kept —
   marked, not deleted — until the backend has destroyed the instance: deleting it first let a reconnect
   through to an instance that was about to disappear. A connection that arrives during the teardown waits
   for it and then gets a new instance.
 - The table has one mutex, held only for map and field updates. No backend call (`Acquire`, `Bind`,
   `Release`) is made while it is held, so a slow backend costs the identity that is waiting and nobody
-  else. See ADR-0008 for the measured defect, the alternatives and the consequences.
+  else. See ADR-0012 for the measured defect, the alternatives and the consequences.
 
 ## 4. Recovery
 
