@@ -21,16 +21,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Backend types.
+// Provision is how an instance comes into existence. These names are deliberately about behaviour,
+// not about a product: nothing in this list says "kubernetes".
 const (
-	TypeKubernetes = "kubernetes"
-	TypeStatic     = "static"
-)
-
-// Provider kinds: how an instance comes into existence.
-const (
-	KindSandboxClaim = "sandbox-claim" // created from a declarative template (pooled)
-	KindPod          = "pod"           // a single pod running any image that speaks SSH
+	ProvisionClaims    = "claims"    // ask a controller to hand one over (any declarative claim API)
+	ProvisionWorkloads = "workloads" // create the workload ourselves from an image
+	ProvisionEndpoints = "endpoints" // no provisioning: a fixed set of reachable SSH endpoints
+	ProvisionCommand   = "command"   // an external program provisions and describes the instance
 )
 
 // Defaults applied before validation.
@@ -40,6 +37,7 @@ const (
 	DefaultGrace        = 60 * time.Second
 	DefaultPoolSize     = 2
 	DefaultSSHPort      = 22
+	DefaultCommandTimeout = 120 * time.Second
 	DefaultReadyTimeout = 120 * time.Second
 )
 
@@ -86,13 +84,37 @@ type Lease struct {
 
 // Backend describes one way of obtaining instances.
 type Backend struct {
-	Name       string   `yaml:"name"`
+	Name string `yaml:"name"`
+	// Provision selects the driver and is the only required discriminator:
+	// claims | workloads | endpoints | command.
+	Provision string `yaml:"provision"`
+	// Type is the pre-0.3 spelling of Provision. It exists so that a stale config fails with a sentence
+	// rather than "unknown field", and is rejected when set.
 	Type       string   `yaml:"type"`
-	Namespace  string   `yaml:"namespace"`
-	Kubeconfig string   `yaml:"kubeconfig"` // empty = in-cluster
-	Endpoints  []string `yaml:"endpoints"`  // type: static
-	Provider   Provider `yaml:"provider"`
-	SSH        SSH      `yaml:"ssh"`
+	Namespace  string   `yaml:"namespace"`  // claims, workloads
+	Kubeconfig string   `yaml:"kubeconfig"` // claims, workloads: empty = in-cluster
+	Endpoints  []string `yaml:"endpoints"`  // provision: endpoints
+	Command    Command  `yaml:"command"`    // provision: command
+	Provider   Provider `yaml:"provider"`   // provision: claims, workloads
+	SSH        SSH      `yaml:"ssh"`        // every provision kind: how the instance is reached
+}
+
+// Command provisions instances by running a program. It is the escape hatch that keeps the gateway
+// usable on infrastructure nobody wrote a driver for: cloud instances, Incus/LXD, a CMDB, a queue.
+//
+// The program prints one JSON object per acquire/list call:
+//
+//	{"id":"vm-17","addr":"192.0.2.17:22","user":"ci","private_key":"/path/key"}
+//
+// `user` and `private_key` are optional and fall back to the backend's ssh block. Without a `list`
+// command the gateway cannot adopt instances after a restart, so orphans from this backend are the
+// operator's problem - stated here rather than discovered later.
+type Command struct {
+	Acquire   []string `yaml:"acquire"`
+	Release   []string `yaml:"release"`
+	List      []string `yaml:"list"`
+	Timeout   Duration `yaml:"timeout"`
+	Env       []string `yaml:"env"` // KEY=VALUE added to every invocation
 }
 
 // Provider declares what the instance is and how it is started.
@@ -100,17 +122,21 @@ type Backend struct {
 // api_group / api_version / claim_resource exist so that no CRD is hardcoded: the same binary drives
 // any declarative claim API, and the field names are configuration.
 type Provider struct {
-	Kind          string   `yaml:"kind"`
+	// Selectors for a declarative claim API. Which CRD it is, is configuration: the binary knows the
+	// shape (create an object, wait for an address in its status), not the product.
 	Template      string   `yaml:"template"`
 	WarmPool      string   `yaml:"warm_pool"`
-	Image         string   `yaml:"image"`
-	StartCommand  []string `yaml:"start_command"`
-	ReadyTimeout  Duration `yaml:"ready_timeout"`
 	APIGroup      string   `yaml:"api_group"`
 	APIVersion    string   `yaml:"api_version"`
-	ClaimResource string   `yaml:"claim_resource"`
-	ClaimKind     string   `yaml:"claim_kind"`
+	Resource      string   `yaml:"resource"`
+	ObjectKind    string   `yaml:"object_kind"`
 	EndpointField []string `yaml:"endpoint_field"`
+
+	// Workload creation, when no controller does it for us.
+	Image        string   `yaml:"image"`
+	StartCommand []string `yaml:"start_command"`
+
+	ReadyTimeout Duration `yaml:"ready_timeout"`
 }
 
 // SSH is how the gateway reaches an instance.
@@ -174,6 +200,9 @@ func (c *Config) ApplyDefaults() {
 		if b.Provider.ReadyTimeout == 0 {
 			b.Provider.ReadyTimeout = Duration(DefaultReadyTimeout)
 		}
+		if b.Provision == ProvisionCommand && b.Command.Timeout == 0 {
+			b.Command.Timeout = Duration(DefaultCommandTimeout)
+		}
 	}
 }
 
@@ -205,27 +234,11 @@ func (c *Config) Validate() error {
 		}
 		names[b.Name] = true
 
-		switch b.Type {
-		case TypeKubernetes:
-			if strings.TrimSpace(b.Namespace) == "" {
-				fail("%s (%s): namespace is required for type %s", where, b.Name, b.Type)
-			}
-			validateProvider(where, b, fail)
-		case TypeStatic:
-			if len(b.Endpoints) == 0 {
-				fail("%s (%s): endpoints are required for type %s", where, b.Name, b.Type)
-			}
-			for _, ep := range b.Endpoints {
-				host, port, err := net.SplitHostPort(ep)
-				if err != nil || host == "" || port == "" {
-					fail("%s (%s): endpoint %q must be host:port", where, b.Name, ep)
-				}
-			}
-		case "":
-			fail("%s: type is required (%s|%s)", where, TypeKubernetes, TypeStatic)
-		default:
-			fail("%s (%s): unknown type %q (want %s|%s)", where, b.Name, b.Type, TypeKubernetes, TypeStatic)
+		if strings.TrimSpace(b.Type) != "" {
+			fail("%s (%s): backend.type was replaced by backend.provision (%s|%s|%s|%s); the value %q is not used",
+				where, b.Name, ProvisionClaims, ProvisionWorkloads, ProvisionEndpoints, ProvisionCommand, b.Type)
 		}
+		validateProvision(where, b, fail)
 
 		if strings.TrimSpace(b.SSH.User) == "" {
 			fail("%s (%s): ssh.user is required", where, b.Name)
@@ -268,29 +281,54 @@ func (c *Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-func validateProvider(where string, b Backend, fail func(string, ...any)) {
-	switch b.Provider.Kind {
-	case KindSandboxClaim:
+func validateProvision(where string, b Backend, fail func(string, ...any)) {
+	switch b.Provision {
+	case ProvisionClaims:
+		if strings.TrimSpace(b.Namespace) == "" {
+			fail("%s (%s): namespace is required for provision %s", where, b.Name, b.Provision)
+		}
 		// Claim APIs differ: some instantiate a named template, some only claim from a warm pool.
-		// Require at least one selector instead of insisting on a shape the target API may not have.
 		if strings.TrimSpace(b.Provider.Template) == "" && strings.TrimSpace(b.Provider.WarmPool) == "" {
-			fail("%s (%s): provider.template or provider.warm_pool is required for kind %s", where, b.Name, KindSandboxClaim)
+			fail("%s (%s): provider.template or provider.warm_pool is required for provision %s", where, b.Name, b.Provision)
 		}
 		if strings.TrimSpace(b.Provider.APIGroup) == "" ||
 			strings.TrimSpace(b.Provider.APIVersion) == "" ||
-			strings.TrimSpace(b.Provider.ClaimResource) == "" ||
-			strings.TrimSpace(b.Provider.ClaimKind) == "" {
-			fail("%s (%s): provider.api_group, api_version, claim_resource and claim_kind are required for kind %s (no CRD is hardcoded)",
-				where, b.Name, KindSandboxClaim)
+			strings.TrimSpace(b.Provider.Resource) == "" ||
+			strings.TrimSpace(b.Provider.ObjectKind) == "" {
+			fail("%s (%s): provider.api_group, api_version, resource and object_kind are required for provision %s (no API is built in)",
+				where, b.Name, b.Provision)
 		}
-	case KindPod:
+	case ProvisionWorkloads:
+		if strings.TrimSpace(b.Namespace) == "" {
+			fail("%s (%s): namespace is required for provision %s", where, b.Name, b.Provision)
+		}
 		if strings.TrimSpace(b.Provider.Image) == "" {
-			fail("%s (%s): provider.image is required for kind %s", where, b.Name, KindPod)
+			fail("%s (%s): provider.image is required for provision %s", where, b.Name, b.Provision)
+		}
+	case ProvisionEndpoints:
+		if len(b.Endpoints) == 0 {
+			fail("%s (%s): endpoints are required for provision %s", where, b.Name, b.Provision)
+		}
+		for _, ep := range b.Endpoints {
+			host, port, err := net.SplitHostPort(ep)
+			if err != nil || host == "" || port == "" {
+				fail("%s (%s): endpoint %q must be host:port", where, b.Name, ep)
+			}
+		}
+	case ProvisionCommand:
+		if len(b.Command.Acquire) == 0 {
+			fail("%s (%s): command.acquire is required for provision %s", where, b.Name, b.Provision)
+		}
+		if len(b.Command.List) == 0 {
+			// Not an error: a backend that cannot list simply cannot be adopted after a restart.
+			_ = b
 		}
 	case "":
-		fail("%s (%s): provider.kind is required (%s|%s)", where, b.Name, KindSandboxClaim, KindPod)
+		fail("%s (%s): provision is required (%s|%s|%s|%s)",
+			where, b.Name, ProvisionClaims, ProvisionWorkloads, ProvisionEndpoints, ProvisionCommand)
 	default:
-		fail("%s (%s): unknown provider.kind %q (want %s|%s)", where, b.Name, b.Provider.Kind, KindSandboxClaim, KindPod)
+		fail("%s (%s): unknown provision %q (want %s|%s|%s|%s)", where, b.Name, b.Provision,
+			ProvisionClaims, ProvisionWorkloads, ProvisionEndpoints, ProvisionCommand)
 	}
 }
 

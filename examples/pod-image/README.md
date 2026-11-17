@@ -1,4 +1,4 @@
-# Example: any image that speaks SSH (`provider.kind: pod`)
+# Example: any image that speaks SSH (`provision: workloads`)
 
 This is the escape hatch: byre creates a bare pod from an image you name, waits for it to accept SSH,
 and deletes it at the end of the lease. No CRD, no template, no orchestrator-specific wiring.
@@ -25,7 +25,7 @@ byre-specific: any image that runs `sshd` and trusts the pool key works.
 ```yaml
 backends:
   - name: adhoc
-    type: kubernetes
+    provision: workloads
     namespace: "<namespace>"
     provider:
       kind: pod

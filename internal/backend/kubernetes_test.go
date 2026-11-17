@@ -23,7 +23,7 @@ func baseKubeCfg() KubernetesConfig {
 	return KubernetesConfig{
 		Name:          "k8s",
 		Namespace:     "instances",
-		Provider:      ProviderSpec{Kind: KindPod, Image: "registry.example/sshd:1", ReadyTimeout: 2 * time.Second},
+		Provider:      ProviderSpec{Kind: KindWorkloads, Image: "registry.example/sshd:1", ReadyTimeout: 2 * time.Second},
 		SSHUser:       "sandbox",
 		SSHPrivateKey: "/keys/pool",
 		HostKeyPolicy: "accept-new",
@@ -42,10 +42,10 @@ func TestNewKubernetesValidation(t *testing.T) {
 		{"pod without image", func(c *KubernetesConfig) { c.Provider.Image = "" }, "provider.image is required"},
 		{"unknown kind", func(c *KubernetesConfig) { c.Provider.Kind = "vm" }, "unknown provider.kind"},
 		{"claim without selector", func(c *KubernetesConfig) {
-			c.Provider = ProviderSpec{Kind: KindSandboxClaim, APIGroup: "g", APIVersion: "v1", ClaimResource: "claims"}
+			c.Provider = ProviderSpec{Kind: KindClaims, APIGroup: "g", APIVersion: "v1", Resource: "claims"}
 		}, "provider.template or provider.warm_pool is required"},
 		{"claim without gvk", func(c *KubernetesConfig) {
-			c.Provider = ProviderSpec{Kind: KindSandboxClaim, Template: "t"}
+			c.Provider = ProviderSpec{Kind: KindClaims, Template: "t"}
 		}, "api_group, api_version, claim_resource and claim_kind"},
 	}
 	for _, tc := range tests {
@@ -176,14 +176,14 @@ func TestPodWaitsForReady(t *testing.T) {
 func claimConfig() KubernetesConfig {
 	cfg := baseKubeCfg()
 	cfg.Provider = ProviderSpec{
-		Kind:          KindSandboxClaim,
+		Kind:          KindClaims,
 		Template:      "sandbox",
 		WarmPool:      "sandbox",
 		ReadyTimeout:  2 * time.Second,
 		APIGroup:      claimGVR.Group,
 		APIVersion:    claimGVR.Version,
-		ClaimResource: claimGVR.Resource,
-		ClaimKind:     "SandboxClaim",
+		Resource: claimGVR.Resource,
+		ObjectKind:     "SandboxClaim",
 	}
 	return cfg
 }

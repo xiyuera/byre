@@ -1,14 +1,22 @@
 # byre configuration — copy, then replace every <placeholder>.
 #
-# Nothing here is specific to the project's own deployment: any SSH-capable unit can be described.
+# A backend answers one question: "how does an instance come into existence, and how do I reach it over
+# SSH?" Four answers are supported, and none of them names a product:
+#
+#   claims      a controller hands one over when asked (any declarative claim API: a warm pool, a
+#               template, a custom CRD) — which CRD is configuration, never code
+#   workloads   we create the workload ourselves from an image that runs sshd
+#   endpoints   no provisioning at all: a fixed set of hosts that already exist
+#   command     an external program provisions and describes the instance (cloud, Incus, a CMDB)
+#
+# Everything below the provision block — ssh user, key, port, host-key policy — is shared by all four.
 # Validate before applying:  byre -config config.yaml -check-config
 
 listen: ":2222"
 
 # SSH host key clients pin. Point this at durable storage: the gateway creates the key on first start
-# if the file is absent, and reuses it afterwards. With the bundled manifests that is the byre-hostkey
-# PVC; to supply your own key, mount a Secret here instead. Leaving it empty gives an ephemeral key,
-# which is only acceptable for tests (every restart changes the fingerprint).
+# if the file is absent, and reuses it afterwards. Leaving it empty gives an ephemeral key, which is only
+# acceptable for tests (every restart changes the fingerprint).
 host_key: /var/lib/byre/hostkey/id_ed25519
 
 lease:
@@ -16,41 +24,41 @@ lease:
   ttl: 360s
   # Reconnect window after a disconnect; absorbs ControlMaster/ControlPersist expiry.
   grace: 60s
-  # Warm instances kept ready. Each idle instance costs one pod-worth of memory.
+  # Warm instances kept ready. Each idle instance costs one pod-worth of memory, or whatever the
+  # provisioner's idle cost is.
   pool_size: 2
 
 backends:
-  # ---------------------------------------------------------------- pooled, declarative instances
-  - name: claims
-    type: kubernetes
+  # ---------------------------------------------------------------- 1. a controller hands one over
+  - name: pooled
+    provision: claims
     namespace: "<namespace>"
-    kubeconfig: ""                 # empty = in-cluster service account
+    kubeconfig: ""                  # empty = in-cluster service account
     provider:
-      kind: sandbox-claim           # sandbox-claim | pod
-      template: "<sandbox-template>"
-      warm_pool: "<warm-pool>"      # optional
-      ready_timeout: 120s
-      # No CRD is hardcoded: name the claim API explicitly. The endpoint field is the status path that
-      # carries the SSH address; it is normalised to host:port.
-      api_group: "<crd-group>"
-      api_version: "<crd-version>"
-      claim_resource: "<plural-resource>"
-      claim_kind: "<Kind>"           # e.g. SandboxClaim — sent verbatim, never guessed
+      # Selectors. At least one of template/warm_pool is required, because claim APIs differ: some
+      # instantiate a named template, some only claim from a pool.
+      template: "<template-name>"
+      warm_pool: "<warm-pool-name>"  # optional
+      # The API coordinates. Nothing is built in: the same binary drives any claim-shaped API.
+      api_group: "<api-group>"
+      api_version: "<api-version>"
+      resource: "<plural-resource>"
+      object_kind: "<Kind>"           # sent verbatim, never guessed from the resource name
       endpoint_field: ["status", "sandbox", "serviceFQDN"]
+      ready_timeout: 120s
     ssh:
       port: 22
       user: "<remote-user>"
       private_key: /etc/byre/keys/id_key
-      host_key_policy: accept-new
+      host_key_policy: accept-new     # instances are disposable; their identity is not ours to pin
 
-  # ---------------------------------------------------------------- any image that runs sshd
+  # ---------------------------------------------------------------- 2. any image that runs sshd
   # - name: adhoc
-  #   type: kubernetes
+  #   provision: workloads
   #   namespace: "<namespace>"
   #   provider:
-  #     kind: pod
   #     image: "<registry>/<image>:<tag>"
-  #     start_command: ["/usr/sbin/sshd", "-D", "-e"]
+  #     start_command: ["/usr/sbin/sshd", "-D", "-e"]   # optional override of the entrypoint
   #     ready_timeout: 180s
   #   ssh:
   #     port: 22
@@ -58,9 +66,11 @@ backends:
   #     private_key: /etc/byre/keys/id_key
   #     host_key_policy: accept-new
 
-  # ---------------------------------------------------------------- long-lived hosts, no orchestration
+  # ---------------------------------------------------------------- 3. hosts that already exist
+  # No provisioning, no adoption: these are shared or long-lived machines, and the lease only decides
+  # who gets which one. Host keys are stable here, so `strict` is the right policy.
   # - name: lab
-  #   type: static
+  #   provision: endpoints
   #   endpoints: ["192.0.2.11:22", "192.0.2.12:22"]
   #   ssh:
   #     port: 22
@@ -68,10 +78,30 @@ backends:
   #     private_key: /etc/byre/keys/id_key
   #     host_key_policy: strict
 
+  # ---------------------------------------------------------------- 4. anything else, via a program
+  # The provisioner prints one JSON object; `user`/`private_key` may be omitted and fall back to the
+  # ssh block below. Without `list`, instances cannot be adopted after a restart — stated here rather
+  # than discovered at the first restart.
+  # - name: cloud
+  #   provision: command
+  #   command:
+  #     # BYRE_IDENTITY (the client fingerprint) is in the environment.
+  #     acquire: ["/usr/local/bin/provision-ci-vm"]
+  #     # BYRE_INSTANCE_ID and BYRE_INSTANCE_ADDR are in the environment.
+  #     release: ["/usr/local/bin/destroy-ci-vm"]
+  #     list:    ["/usr/local/bin/list-ci-vms"]      # optional: [{id,addr,user?,private_key?}, ...]
+  #     timeout: 120s
+  #     env: ["CLOUD_PROFILE=ci"]
+  #   ssh:
+  #     port: 22
+  #     user: "<remote-user>"
+  #     private_key: /etc/byre/keys/id_key
+  #     host_key_policy: accept-new
+
 identities:
   # Fingerprints of the client public keys allowed in. Print one with:
   #   ssh-keygen -lf id_ed25519.pub -E sha256
   # Two spellings of the same key are the same identity ("SHA256:" and padding are normalised away).
   - fingerprint: "SHA256:<base64-body>"
-    backend: claims
+    backend: pooled
     aliases: ["<label-for-logs>"]

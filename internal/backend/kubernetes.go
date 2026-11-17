@@ -25,8 +25,8 @@ import (
 
 // Provider kinds.
 const (
-	KindPod          = "pod"
-	KindSandboxClaim = "sandbox-claim"
+	KindWorkloads = "workloads"
+	KindClaims    = "claims"
 )
 
 // Labels applied to everything this driver creates, so a restarted gateway can find its own objects
@@ -42,21 +42,21 @@ const (
 // Nothing here is vendor-specific: which Kubernetes object to create is configuration, not code.
 type ProviderSpec struct {
 	Kind         string
-	Template     string   // sandbox-claim: name of the template to instantiate
-	WarmPool     string   // sandbox-claim: optional warm pool to claim against
-	Image        string   // pod: any image that speaks SSH
-	StartCommand []string // pod: optional override of the image entrypoint
+	Template     string   // claims: name of the template to instantiate
+	WarmPool     string   // claims: optional warm pool to claim against
+	Image        string   // workloads: any image that speaks SSH
+	StartCommand []string // workloads: optional override of the image entrypoint
 	ReadyTimeout time.Duration
 
-	// sandbox-claim: the CRD coordinates. Required for that kind, because guessing a group or a
-	// resource name would tie the binary to one installation.
-	APIGroup      string
-	APIVersion    string
-	ClaimResource string
-	ClaimKind     string
+	// claims: the API coordinates. Required for that kind, because guessing a group or a resource
+	// name would tie the binary to one installation. There is no default: no API is built in.
+	APIGroup   string
+	APIVersion string
+	Resource   string
+	ObjectKind string
 
-	// SandboxClaim status field that carries the SSH endpoint ("host:port" or bare host).
-	// Defaults to status.sandbox.serviceFQDN.
+	// claims: status field carrying the SSH endpoint ("host:port" or bare host).
+	// Defaults to status.sandbox.serviceFQDN, which is the shape this project was developed against.
 	EndpointField []string
 }
 
@@ -102,22 +102,22 @@ func NewKubernetes(cfg KubernetesConfig) (*Kubernetes, error) {
 	}
 
 	switch cfg.Provider.Kind {
-	case KindPod:
+	case KindWorkloads:
 		if cfg.Provider.Image == "" {
-			return nil, fmt.Errorf("kubernetes backend %q: provider.image is required for kind %s", cfg.Name, KindPod)
+			return nil, fmt.Errorf("kubernetes backend %q: provider.image is required for kind %s", cfg.Name, KindWorkloads)
 		}
-	case KindSandboxClaim:
+	case KindClaims:
 		if cfg.Provider.Template == "" && cfg.Provider.WarmPool == "" {
-			return nil, fmt.Errorf("kubernetes backend %q: provider.template or provider.warm_pool is required for kind %s", cfg.Name, KindSandboxClaim)
+			return nil, fmt.Errorf("kubernetes backend %q: provider.template or provider.warm_pool is required for kind %s", cfg.Name, KindClaims)
 		}
-		if cfg.Provider.APIGroup == "" || cfg.Provider.APIVersion == "" || cfg.Provider.ClaimResource == "" || cfg.Provider.ClaimKind == "" {
-			return nil, fmt.Errorf("kubernetes backend %q: provider.api_group, api_version, claim_resource and claim_kind are required for kind %s", cfg.Name, KindSandboxClaim)
+		if cfg.Provider.APIGroup == "" || cfg.Provider.APIVersion == "" || cfg.Provider.Resource == "" || cfg.Provider.ObjectKind == "" {
+			return nil, fmt.Errorf("kubernetes backend %q: provider.api_group, api_version, claim_resource and claim_kind are required for kind %s", cfg.Name, KindClaims)
 		}
 		if len(cfg.Provider.EndpointField) == 0 {
 			cfg.Provider.EndpointField = []string{"status", "sandbox", "serviceFQDN"}
 		}
 	default:
-		return nil, fmt.Errorf("kubernetes backend %q: unknown provider.kind %q (want %s|%s)", cfg.Name, cfg.Provider.Kind, KindPod, KindSandboxClaim)
+		return nil, fmt.Errorf("kubernetes backend %q: unknown provider.kind %q (want %s|%s)", cfg.Name, cfg.Provider.Kind, KindWorkloads, KindClaims)
 	}
 
 	log := cfg.Logger
@@ -155,9 +155,9 @@ func (k *Kubernetes) Name() string { return k.cfg.Name }
 // Create provisions one instance without binding it to an identity (warm capacity).
 func (k *Kubernetes) Create(ctx context.Context) (Instance, error) {
 	switch k.cfg.Provider.Kind {
-	case KindPod:
+	case KindWorkloads:
 		return k.createPod(ctx)
-	case KindSandboxClaim:
+	case KindClaims:
 		return k.createClaim(ctx)
 	default:
 		return Instance{}, fmt.Errorf("unsupported provider kind %q", k.cfg.Provider.Kind)
@@ -208,9 +208,9 @@ func (k *Kubernetes) annotate(ctx context.Context, id string, ann map[string]str
 		return err
 	}
 	switch k.cfg.Provider.Kind {
-	case KindPod:
+	case KindWorkloads:
 		_, err = k.client.CoreV1().Pods(k.cfg.Namespace).Patch(ctx, id, types.MergePatchType, patch, metav1.PatchOptions{})
-	case KindSandboxClaim:
+	case KindClaims:
 		_, err = k.dyn.Resource(k.gvr()).Namespace(k.cfg.Namespace).Patch(ctx, id, types.MergePatchType, patch, metav1.PatchOptions{})
 	default:
 		err = fmt.Errorf("unsupported provider kind %q", k.cfg.Provider.Kind)
@@ -222,10 +222,10 @@ func (k *Kubernetes) annotate(ctx context.Context, id string, ann map[string]str
 func (k *Kubernetes) Release(ctx context.Context, in Instance) error {
 	var err error
 	switch k.cfg.Provider.Kind {
-	case KindPod:
+	case KindWorkloads:
 		zero := int64(0)
 		err = k.client.CoreV1().Pods(k.cfg.Namespace).Delete(ctx, in.ID, metav1.DeleteOptions{GracePeriodSeconds: &zero})
-	case KindSandboxClaim:
+	case KindClaims:
 		err = k.dyn.Resource(k.gvr()).Namespace(k.cfg.Namespace).Delete(ctx, in.ID, metav1.DeleteOptions{})
 	}
 	if apierrors.IsNotFound(err) {
@@ -240,7 +240,7 @@ func (k *Kubernetes) Release(ctx context.Context, in Instance) error {
 // List returns instances this driver created (by label), so a restarted process can adopt them.
 func (k *Kubernetes) List(ctx context.Context) ([]Instance, error) {
 	switch k.cfg.Provider.Kind {
-	case KindPod:
+	case KindWorkloads:
 		pods, err := k.client.CoreV1().Pods(k.cfg.Namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: LabelManaged + "=byre",
 		})
@@ -252,12 +252,12 @@ func (k *Kubernetes) List(ctx context.Context) ([]Instance, error) {
 			out = append(out, k.instanceFromPod(&pods.Items[i]))
 		}
 		return out, nil
-	case KindSandboxClaim:
+	case KindClaims:
 		list, err := k.dyn.Resource(k.gvr()).Namespace(k.cfg.Namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: LabelManaged + "=byre",
 		})
 		if err != nil {
-			return nil, fmt.Errorf("list %s: %w", k.cfg.Provider.ClaimResource, err)
+			return nil, fmt.Errorf("list %s: %w", k.cfg.Provider.Resource, err)
 		}
 		out := make([]Instance, 0, len(list.Items))
 		for i := range list.Items {
@@ -359,7 +359,7 @@ func (k *Kubernetes) gvr() schema.GroupVersionResource {
 	return schema.GroupVersionResource{
 		Group:    k.cfg.Provider.APIGroup,
 		Version:  k.cfg.Provider.APIVersion,
-		Resource: k.cfg.Provider.ClaimResource,
+		Resource: k.cfg.Provider.Resource,
 	}
 }
 
@@ -387,7 +387,7 @@ func (k *Kubernetes) createClaim(ctx context.Context) (Instance, error) {
 
 	created, err := k.dyn.Resource(k.gvr()).Namespace(k.cfg.Namespace).Create(ctx, obj, metav1.CreateOptions{})
 	if err != nil {
-		return Instance{}, fmt.Errorf("create %s: %w", k.cfg.Provider.ClaimResource, err)
+		return Instance{}, fmt.Errorf("create %s: %w", k.cfg.Provider.Resource, err)
 	}
 
 	addr, err := k.waitForClaim(ctx, created.GetName())
@@ -434,7 +434,7 @@ func (k *Kubernetes) waitForClaim(ctx context.Context, name string) (string, err
 		})
 	if err != nil {
 		return "", fmt.Errorf("wait for %s %s (endpoint field %s): %w",
-			k.cfg.Provider.ClaimResource, name, strings.Join(k.cfg.Provider.EndpointField, "."), err)
+			k.cfg.Provider.Resource, name, strings.Join(k.cfg.Provider.EndpointField, "."), err)
 	}
 	return addr, nil
 }
@@ -475,7 +475,7 @@ func withDefaultPort(addr string) string {
 // claimKind returns the Kind to send. It is configured, not derived: "sandboxclaims" minus the plural
 // "s" is "sandboxclaim", and the API server accepts only "SandboxClaim" — guessing here fails on the
 // first real cluster.
-func (k *Kubernetes) claimKind() string { return k.cfg.Provider.ClaimKind }
+func (k *Kubernetes) claimKind() string { return k.cfg.Provider.ObjectKind }
 
 // ---------------------------------------------------------------- helpers
 
