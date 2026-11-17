@@ -200,8 +200,13 @@ the only thing the release can be rebuilt from (`docs/tag-map.md` records what t
 cost). Rewriting it would leave `v0.2.0` naming nothing.
 
 `76489ee` is `v0.3.1`, landed at 18:08 on 2026-11-17 as an ordinary commit with one
-parent, `9ed7076`, and no trailer, so its push run fails `dco` for the same reason the
-squash below does. The reason it is not rewritten is the one above: the release assets of
+parent, `9ed7076`, and no trailer. Its own push run never executed `dco`: run 155 was
+cancelled by the next push with all four jobs at `steps=0`, which Gitea reports as
+`failure` at the commit-status layer with the description `Canceled after 0s`. Reading only
+that layer would say the gate had run and rejected it; the gate never ran. The missing
+trailer is what makes it an exception, not a red run — unlike `9352915` below, whose run
+243 did execute `dco` and failed on `missing or mismatched Signed-off-by`. The reason it is
+not rewritten is the one above: the release assets of
 `v0.3.1` were built from the tag, and moving the tag onto a rewritten commit would
 republish a release whose contents changed while its name did not.
 
