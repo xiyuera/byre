@@ -20,21 +20,27 @@ A direct push fails for everyone. This is deliberate — a rule the privileged
 account can skip is a habit, not a rule.
 
 ```
-<role>/<slug>  →  PR  →  four checks green  →  one approval  →  merge
+<account>/<slug>  →  PR  →  four checks green  →  one approval  →  merge
 ```
 
 ### Branches
 
 `main` is the only long-lived branch. Work branches are named for who and what:
+the first segment is the account doing the work. Accounts on this forge are
+named `hermes-<role>`, and the branch drops the `hermes-` prefix — which is what
+every branch that exists today already does:
 
-```
-eng/lease-row-phase      ops/registry-two-tiers      reviewer/pr-checklist
-```
+| account | branch prefix | example |
+|---|---|---|
+| `hermes-eng` | `eng/` | `eng/lease-row-phase` |
+| `hermes-ops` | `ops/` | `ops/registry-two-tiers` |
+| `hermes-reviewer` | `reviewer/` | `reviewer/pr-checklist` |
+| `hermes-legal` | `legal/` | `legal/licence-audit` |
+| `hermes-research` | `research/` | `research/competitor-scan` |
 
-The first segment is the account doing the work, so it has to be one that
-exists; `docs/...` reads like a role but there is no `docs` account, and a branch
-that names a category instead of an actor makes the review trail shorter than it
-looks.
+The point of the prefix is that `git branch -r` answers "who is working on
+what" without a lookup — so it has to be an account that can push, not a
+category like `docs/` that reads like a role but cannot own a commit.
 
 `dev` is not a branch here. If a second integration branch is ever needed it
 gets the same protection on the day it is created — an unprotected `dev` would
@@ -66,9 +72,17 @@ introduces and requires the trailer to match the author. Two consequences:
 
 ### Who reviews
 
-One approval from an account other than the author. `hermes-reviewer` is the
-reviewer role; `hermes-eng`, `hermes-ops` and the owner can approve when the
-reviewer wrote the change.
+The forge requires one approval, from any account with write access that is not
+the author. That is all the machine checks — it has no notion of who is a
+reviewer. The convention on top of that:
+
+* `hermes-reviewer` reviews changes that touch behaviour; its approval is the
+  one that matters.
+* `hermes-eng`, `hermes-ops` and the owner may approve when `hermes-reviewer`
+  is the one who wrote the change.
+
+(The approvals whitelist is off: Gitea 1.27 accepts `enable_approvals_whitelist`
+but stores an empty username list, which would mean *nobody* can approve.)
 
 The reviewer answers three questions in a comment, not "looks good":
 
@@ -85,14 +99,24 @@ A tag is created from a commit already on `main`. Pushing a `v*` tag is itself
 what triggers the release workflow (`on: push: tags`), so "wait until the release
 job passes, then tag" is not executable — nothing runs before the tag exists. The
 workable order is: merge → push the tag → watch the job → if it fails, fix
-forward and move the tag (`git tag -f`) rather than leaving a half-published
-asset set behind. A tag is never a route to get code onto `main`.
+forward and move the tag rather than leaving a half-published asset set behind.
+
+Moving a tag takes two commands, because `git tag -f` only rewrites the local
+ref — the remote keeps pointing at the old commit and the workflow does not run
+again:
+
+```sh
+git tag -f v0.3.2 <new-commit>
+git push --force origin v0.3.2      # the local move alone changes nothing remotely
+```
+
+A tag is never a route to get code onto `main`.
 
 Release assets must be rebuildable from the tag they name. If history is ever
-rewritten — it happened once, to remove internal addresses — every published
-`build-info.txt` that names a commit is invalidated, and the fixed point
-becomes the **tag**, not the commit hash. Record the old-to-new tag map under
-`docs/`; do not edit published assets in place.
+rewritten, every published `build-info.txt` that names a commit is invalidated
+and the fixed point becomes the **tag**, not the commit hash — see
+`docs/tag-map.md` for what that looked like here, and do not edit published
+assets in place.
 
 ### The two operations that cannot go through a PR
 

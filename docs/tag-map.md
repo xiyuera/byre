@@ -7,8 +7,8 @@ changes every commit hash, so any record written before it — a release note, a
 that no longer exists.
 
 **The stable identifier is the tag name, not the hash.** This file records what
-each tag points at after the rewrite, and what the one externally published
-release referred to before it.
+each tag points at after the rewrite, and what the published releases referred
+to before it.
 
 ## What each tag points at now
 
@@ -22,28 +22,25 @@ release referred to before it.
 | `v0.3.1` | `8167e8e35848d3692d982d955b744602d28aad15` | `76489ee738eac8aed3af3f90257d2fd5b98fcbbd` |
 | `main` | — | `d4b1ff4a7337bfb8d0d2672117889446197cf1dd` |
 
-## The one hash that was published and no longer exists
+## Published hashes that no longer exist
 
-`v0.3.0`'s release assets were built before the rewrite, so its
-`build-info.txt` records:
+**Two** releases were built before the rewrite. Both `build-info.txt` files name
+a commit that is not in the repository any more — `git cat-file -e` returns 128
+for each:
 
-```
-commit=1aecc0a0f206f656494251ee11d6502f2c1de90a
-reproduce=git clone <repository> && cd byre && git checkout 1aecc0a0f2...
-```
+| release | records | status | equivalent content |
+|---|---|---|---|
+| `v0.2.0` | `commit=d5b87cca0d7ac773b0a8edaef27f15acbb0faedc` | gone (rc 128) | `v0.2.0^{commit}` = `0ee8c66a055ae16a88dcb7e8c01f53e415b7e4fb` |
+| `v0.3.0` | `commit=1aecc0a0f206f656494251ee11d6502f2c1de90a` | gone (rc 128) | `v0.3.0^{commit}` = `c1727d39a3d72c0ef2582008a41eaa8e3e081ea3` |
 
-`1aecc0a0f206...` is not in the repository any more (`git cat-file -e` returns
-128). The equivalent content is `v0.3.0^{commit}` = `c1727d39a3d72c0ef2582008a41eaa8e3e081ea3`.
-The published binaries are functionally identical — the rewrite only replaced
-address strings — but that `reproduce=` line cannot be followed verbatim.
+The published binaries of both are functionally identical to what the tags point
+at today — the rewrite only replaced address strings — but neither `reproduce=`
+line can be followed verbatim: `git checkout <recorded-commit>` fails.
 
 `v0.3.1` onwards is built from the rewritten history and its `build-info.txt`
-names a commit that exists, so this file is only needed for the transition.
+names a commit that exists, so this table only covers the transition.
 
-## Verifying
-
-```sh
-git rev-parse v0.3.0^{commit}          # the commit this file claims
-git cat-file -e 1aecc0a0^{commit}      # 128 = correctly gone
-git merge-base --is-ancestor v0.3.0^{commit} main && echo "tag is on main"
-```
+To check a release not listed here: download its `build-info.txt`, read the
+`commit=` line, and run `git cat-file -e <that-commit>`. A non-zero exit means
+the asset predates the rewrite and its `reproduce=` line cannot be followed
+verbatim; the tag is still the correct pointer to the same content.
