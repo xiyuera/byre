@@ -81,7 +81,10 @@ jobs:
           # Re-running a tag must replace the assets, not fail on "already exists" and not leave a
           # second copy of every file.
           if curl -fsS -H "${auth}" "${api}/releases/tags/${GITHUB_REF_NAME}" -o /tmp/rel.json; then
-            id=$(sed -n 's/.*"id":\([0-9]*\).*/\1/p' /tmp/rel.json | head -1)
+            # `.*` is greedy: on a one-line JSON it matches the LAST "id", which for a
+            # release response is an asset id or the author's user id — not the release's.
+            # Anchor on the release's own shape ("id":N, immediately followed by "tag_name").
+            id=$(sed -n 's/.*"id":\([0-9][0-9]*\),"tag_name".*/\1/p' /tmp/rel.json | head -1)
             echo "release ${GITHUB_REF_NAME} exists (id=${id}); replacing its assets"
             for a in $(curl -fsS -H "${auth}" "${api}/releases/${id}/assets" \
                         | grep -o '"id":[0-9]*' | cut -d: -f2); do
@@ -91,7 +94,8 @@ jobs:
             rel=$(curl -fsS -X POST -H "${auth}" -H 'Content-Type: application/json' \
               -d "{\"tag_name\":\"${GITHUB_REF_NAME}\",\"name\":\"${GITHUB_REF_NAME}\",\"body\":\"See CHANGELOG.md\",\"prerelease\":false}" \
               "${api}/releases")
-            id=$(printf '%s' "${rel}" | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)
+            # Same greedy-match trap as above; anchor on "id":N,"tag_name".
+            id=$(printf '%s' "${rel}" | sed -n 's/.*"id":\([0-9][0-9]*\),"tag_name".*/\1/p')
           fi
           [ -n "${id}" ] || { echo "could not determine the release id" >&2; exit 1; }
           # The release body is replaced by hand with the changelog section; assets are what the
@@ -101,3 +105,11 @@ jobs:
               -F "attachment=@${f}" "${api}/releases/${id}/assets?name=$(basename "${f}")" >/dev/null
             echo "uploaded $(basename "${f}")"
           done
+          # The upload loop above cannot tell whether the assets landed on THIS release:
+          # a wrong id makes every curl succeed against somebody else's release. Count them.
+          uploaded=$(curl -fsS -H "${auth}" "${api}/releases/${id}/assets" | grep -o '"id":[0-9]*' | wc -l)
+          want=$(ls -1 dist | wc -l)
+          [ "${uploaded}" = "${want}" ] || {
+            echo "release ${id} holds ${uploaded} assets, expected ${want} — the id was wrong" >&2
+            exit 1
+          }
