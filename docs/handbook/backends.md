@@ -32,6 +32,21 @@ backends:
 `provision` is the only required discriminator. `type` is the pre-0.3 spelling: setting it is a
 configuration error that names the replacement, rather than an unknown-field error.
 
+## The file: the fields outside any backend
+
+The provision blocks below do not stand alone; they sit next to four top-level keys. Everything a file
+can say, in one place:
+
+| field | required | default | meaning |
+|---|---|---|---|
+| `listen` | no | `:2222` | SSH listener address; `-listen` overrides it for one run |
+| `host_key` | no | empty — generated on first start | path to the gateway's own host key, the one clients pin; left empty, a restart changes the key and every client with `strict` checking fails |
+| `lease.ttl` | no | `360s` | idle time before an instance is reclaimed; must exceed the client's own idle timeout |
+| `lease.grace` | no | `60s` | the reconnect window after a disconnect, inside which the same identity still gets its instance |
+| `lease.pool_size` | no | `2` | warm instances, for drivers that implement `Create` only; an explicit `0` is read as "absent" and becomes 2, so there is no zero-sized pool |
+| `backends[]` | yes | — | one or more provision blocks — `name`, `provision`, the shape's fields, `ssh` |
+| `identities[]` | yes | — | who may acquire: `fingerprint` (required, normalised), `backend` (required, must name a block above), `aliases` (optional, log labels only, never routing) |
+
 ## The `ssh` block: shared by all four
 
 | field | required | default | meaning |

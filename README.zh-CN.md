@@ -363,9 +363,10 @@ namespace，kustomize 的 `namespace:` 又会一次性改写所有对象——�
 | [examples/](examples/) | 每种形态一份可跑配置，另有 `examples/local-quickstart/`——把上面的快速开始落成可复制的文件 |
 | [acceptance/](docs/acceptance/) · [docs/README.md](docs/README.md) | 真实集群上验证了什么；以及全部文档的索引 |
 
-只有英文的文档（中文还没来得及翻，`scripts/check-i18n.sh` 会把它们列出来而不是静默跳过）：
-`docs/handbook/{architecture,backends,operations,troubleshooting}.md`、`docs/release.md`、`docs/adr/*`、
-`docs/acceptance/*`、以及 `examples/{static-endpoints,pod-image,kubernetes-sandbox}/README.md`。
+其中一部分只有英文，写出来比让读者自己撞上要好：四份 handbook、`docs/release.md`、`docs/i18n.md`、
+`docs/integrations/README.md`、`deploy/gitea-runner/README.md`、`docs/adr/*` 与 `docs/acceptance/*`，
+以及 `examples/` 下三种形态的示例。`scripts/check-i18n.sh` 把它追踪的页面打印成 `UNTRANSLATED`
+而不是跳过；其余的是按 [`docs/i18n.md`](docs/i18n.md) 的规则有意只留英文，不是漏了。
 
 ## 依赖
 
