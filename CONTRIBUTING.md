@@ -375,22 +375,25 @@ being pushed, so on `main` it checks the push itself.
 
 ### Merging
 
-A merge commit is a new commit, so it is checked like any other. That is what the merge button gets
-wrong: the commit it writes is authored by whoever clicked it and carries no `Signed-off-by`, so the
-run for `main` fails even when every commit on the branch was signed. On 2026-11-17, seventeen of
-the eighteen merge commits in `main` failed for exactly this reason.
+A merge commit is a new commit, so it is checked like any other. The commit the forge's merge button
+writes is authored by whoever clicked it and carries no `Signed-off-by`, so the run for `main` fails
+even when every commit on the branch was signed. On 2026-11-17, seventeen of the eighteen merge
+commits in `main` failed for exactly this reason.
 
-Land a branch with a merge that signs itself:
+`main` is protected and a push to it is refused, so this page cannot ask anyone to merge locally and
+push the result: the merge strategy chosen on the pull request is what decides whether the run for
+`main` passes.
 
-```sh
-git switch main
-git merge --no-ff --signoff <branch>
-git push
-```
+- **Rebase then fast-forward** adds no commit of its own: the branch commits arrive with their
+  authors and their trailers, and the range the run checks is signed commits only. Use this one.
+- **Squash** writes one new commit, authored by whoever squashes it, so it passes the gate when that
+  commit's message carries a sign-off naming the same author; a squashed message that only carries
+  the contributors' trailers does not.
+- **A plain merge** writes the unsigned merge commit described above and turns `dco` red on `main`.
 
-Merging through the forge works only if the message carries a `Signed-off-by:` line naming the
-author the forge is about to write as the commit's author; the default
-`Merge pull request #N from <branch>` names nobody and signs nothing.
+A merge commit that carries its own sign-off would pass, but making one means writing to `main`
+directly, which the branch protection forbids — that is an operations action, not a part of a normal
+contribution.
 
 ### Before the policy
 
