@@ -1,6 +1,6 @@
 name: ci
 
-# Needs a runner registered with this Gitea instance (act_runner). Until one exists, run
+# Needs a runner registered with this Gitea instance (label k8s-go, job-pods mode). Until one exists, run
 # `make lint test && go test -race ./...` locally — that is exactly what this workflow does.
 
 on:
@@ -10,14 +10,11 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: k8s-go
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.23"
+      # builtin:checkout runs git inside the job - no Node, no action download. The job image already
+      # carries Go and gcc, so no setup-go either (that action needs Node and a tool-cache volume).
+      - uses: builtin:checkout
 
       - name: Format and vet
         run: make fmt vet
@@ -32,21 +29,20 @@ jobs:
         run: make build
 
   manifests:
-    runs-on: ubuntu-latest
+    runs-on: k8s-go
     steps:
-      - uses: actions/checkout@v4
+      - uses: builtin:checkout
 
-      - name: Install kustomize
-        run: |
-          curl -sSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz" \
-            | tar -xz -C /usr/local/bin
+      # kustomize ships inside the job image: the cluster has no route to github.com releases.
+      - name: kustomize is available
+        run: kustomize version
       - name: Validate kustomize output
         run: make render
 
   dco:
-    runs-on: ubuntu-latest
+    runs-on: k8s-go
     steps:
-      - uses: actions/checkout@v4
+      - uses: builtin:checkout
         with:
           fetch-depth: 0
       # A commit without a matching Signed-off-by is a contribution whose provenance nobody can answer
@@ -68,9 +64,9 @@ jobs:
           [ "$bad" = 0 ]
 
   i18n:
-    runs-on: ubuntu-latest
+    runs-on: k8s-go
     steps:
-      - uses: actions/checkout@v4
+      - uses: builtin:checkout
       # A translation that is older than the English it claims to translate is worse than no translation:
       # a reader trusts it. Missing translations are only listed, because "not yet" is a plan, not a lie.
       - name: Translations are not stale
