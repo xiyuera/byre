@@ -6,6 +6,10 @@ metadata:
     app.kubernetes.io/name: byre
 spec:
   replicas: 1 # single replica by design (docs/roadmap.md: multi-replica is v0.3)
+  # Shutdown is quick now (the front end drops live sessions on SIGTERM) and this grace period is the
+  # ceiling, not the expected duration. The default 30s was the time the process spent *not* shutting
+  # down, so every rolling update waited it out.
+  terminationGracePeriodSeconds: 20
   selector:
     matchLabels:
       app.kubernetes.io/name: byre
