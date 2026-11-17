@@ -174,13 +174,43 @@ before the protection existed. They are not rewritten now because rewriting
 `main` again would invalidate another batch of published hashes for no benefit
 (`docs/tag-map.md` records what that cost the first time).
 
-One commit after the policy is in the same position. `9352915`, the squash of
-pull request #26 on 2026-11-18, is authored and committed by `hermes-ops`, and
-its message carries `Co-authored-by` and no `Signed-off-by`, so its push run
-fails `dco`. The squash was pressed by `hermes-ops`, the account that wrote the
-branch, at 01:22:28 — the same second the reviewing account's rebase request
-returned HTTP 500. The content is the head that was approved: `9352915^{tree}`
-and `f3360da^{tree}` are equal, so nothing in the change is in question.
+More than one commit after the policy is in the same position, and not all of them are
+merge commits. Counted over everything reachable from `main` — the same all-reachable
+basis the counts above use — 39 commits between the policy commit and `9352915` carry no
+`Signed-off-by`: 16 merge commits and 23 ordinary ones. On the first-parent line, which is
+what `git log --first-parent` shows, 20 carry none: 13 merge commits and 7 ordinary ones.
+
+There is no window in which the policy existed and the check did not: the `dco` job
+entered `ci.yml` in `94d5b52`, the same commit that wrote the policy, so every commit in
+those counts landed with the job already in the file. The counts say nothing about why any
+single one of them was let through; that is a per-commit API lookup, not a fact this file
+can assert.
+
+What gets a paragraph here is narrower than "every unsigned commit", because the only
+reason to write one is that rewriting the commit would cost something that already exists
+outside the repository. A tag does exactly that: the release built from the commit records
+a hash, so a rewrite invalidates both the hash and the record. Three commits after the
+policy are named by a tag — `0ee8c66` (`v0.2.0`), `76489ee` (`v0.3.1`) and `9352915`
+(`v0.3.3`) — and each has a paragraph below. The other 36 are counted here rather than
+narrated: 16 merge commits and 20 ordinary ones, none of them named by a tag.
+
+`0ee8c66` is `v0.2.0`, the first release built after the policy. Its `build-info.txt` names
+`d5b87cc`, a commit the 2026-11-17 rewrite removed, which leaves the tag and `0ee8c66` as
+the only thing the release can be rebuilt from (`docs/tag-map.md` records what that rewrite
+cost). Rewriting it would leave `v0.2.0` naming nothing.
+
+`76489ee` is `v0.3.1`, landed at 18:08 on 2026-11-17 as an ordinary commit with one
+parent, `9ed7076`, and no trailer, so its push run fails `dco` for the same reason the
+squash below does. The reason it is not rewritten is the one above: the release assets of
+`v0.3.1` were built from the tag, and moving the tag onto a rewritten commit would
+republish a release whose contents changed while its name did not.
+
+The last of the three, `9352915`, is the squash of pull request #26 on 2026-11-18. It is
+authored and committed by `hermes-ops`, and its message carries `Co-authored-by` and no
+`Signed-off-by`, so its push run fails `dco`. The squash was pressed by `hermes-ops`, the
+account that wrote the branch, at 01:22:28 — the same second the reviewing account's
+rebase request returned HTTP 500. The content is the head that was approved:
+`9352915^{tree}` and `f3360da^{tree}` are equal, so nothing in the change is in question.
 
 Three facts decide what to do with it. Rewriting `main` would invalidate another
 batch of published hashes, which is the cost the paragraph above already refused
@@ -190,6 +220,27 @@ on this repository, so the account that squashed cannot rewrite what it squashed
 And leaving it costs nothing at run time — a push run bases `dco` on the previous
 tip, so the next push to `main` is checked from `9352915` onwards and turns the
 tip green without this commit changing. So it stays, registered here.
+
+Every number in this section comes from the range that ends at `9352915`, so it stays
+reproducible after `main` moves:
+
+```sh
+pol=$(git log -S 'Developer Certificate of Origin' --format=%H -- CONTRIBUTING.md | tail -1)
+count_unsigned() { git rev-list "$@" | while read c; do
+  git log -1 --format=%B "$c" | grep -qi '^Signed-off-by:' || echo x; done | wc -l; }
+
+count_unsigned "$pol..9352915"                        # 39
+count_unsigned --merges "$pol..9352915"               # 16
+count_unsigned --no-merges "$pol..9352915"            # 23
+count_unsigned --first-parent "$pol..9352915"         # 20  (13 merge + 7 ordinary)
+
+# the three commits the paragraphs above are about: unsigned, after the policy, named by a tag
+git tag | while read t; do
+  c=$(git rev-list -n1 "$t")
+  git merge-base --is-ancestor "$c" "$pol" && continue
+  git log -1 --format=%B "$c" | grep -qi '^Signed-off-by:' || echo "$t $c"
+done                                                  # v0.2.0 / v0.3.1 / v0.3.3
+```
 
 ### After merging
 
@@ -435,7 +486,10 @@ git rev-list --count "origin/main..HEAD"
 This counts the branch's own commits — what a pull-request run checks when its base is the branch
 point.
 
-The policy starts at that commit; a commit that lands after it without a sign-off is an exception
-rather than a case the policy never covered. Each exception gets a paragraph in
-[`What main's history already looks like`](#what-mains-history-already-looks-like) saying what
-landed, how it happened and why it is not rewritten.
+The policy starts at that commit; a commit that lands after it without a sign-off is an
+exception rather than a case the policy never covered, and what this file does with one is
+decided by whether a tag names it. Every such commit that a tag names gets a paragraph in
+[`What main's history already looks like`](#what-mains-history-already-looks-like) saying
+what landed, how it happened and why it is not rewritten — three of them exist as this is
+written, and a fourth would need the fourth paragraph. The ones no tag names are counted in
+that section, with the command that reproduces the count, and are not narrated one by one.
