@@ -36,7 +36,7 @@ The maintainer accepted both. What that means in practice, and what follows from
 
 ## What deliberately did NOT change
 
-Runtime identifiers stay as they are for now: namespace `keypod-system`, the Deployment/Service names, the
+Runtime identifiers stay as they are for now: namespace `<old-namespace>`, the Deployment/Service names, the
 image name, the binary (`cmd/keypod`, `bin/keypod`), the annotation keys `keypod.io/*`, the four profiles'
 `ssh_host`, and the board tenant.
 
@@ -50,7 +50,7 @@ handing out instances to several agents. The rule from this project's own histor
    deployed **alongside** the running gateway, on a second port.
 2. Point one non-`default` profile at it and verify a full session (identity, lease, `-L`, scp).
 3. Move the remaining profiles one at a time; the old gateway serves whoever is left.
-4. Retire `keypod-system` and the old image tags; keep the old repository archived.
+4. Retire `<old-namespace>` and the old image tags; keep the old repository archived.
 5. Only then rename the board tenant and the annotation keys — those need a data migration because live
    objects carry the old annotation.
 

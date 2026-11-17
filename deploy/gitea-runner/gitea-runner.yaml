@@ -115,11 +115,11 @@ spec:
           type: RuntimeDefault
       containers:
         - name: runner
-          # Pinned by digest: a moved tag plus IfNotPresent keeps running the old binary (docs/operations.md).
-          image: <internal-registry-host>:<port>/gitea/runner@sha256:b058623fefa8cbf635a3852554bb1e3493aa753fd98a9b87f00b3b3774f2d23d
+          # Pin by digest in production: a moved tag plus IfNotPresent keeps running the old binary.
+          image: "<registry>/gitea/runner:<tag-or-digest>"   # pin by digest in production
           env:
             - name: GITEA_INSTANCE_URL
-              value: https://<your-gitea-host>:<port>
+              value: "<your-gitea-url>"
             # The instance uses a private CA; this certificate is the trust anchor for the runner's own
             # API calls and for the job pods it creates.
             - name: SSL_CERT_FILE
@@ -135,7 +135,7 @@ spec:
             # No docker:// label on purpose: this runner has no daemon. The job image comes from the
             # private registry because the nodes have no Docker Hub route.
             - name: GITEA_RUNNER_LABELS
-              value: k8s-go:kubernetes://<internal-registry-host>:<port>/library/ci-go:1.23
+              value: "k8s-go:kubernetes://<registry>/<job-image>:<tag>"
             - name: GITEA_RUNNER_REGISTRATION_TOKEN
               valueFrom:
                 secretKeyRef:
