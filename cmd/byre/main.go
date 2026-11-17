@@ -144,8 +144,13 @@ func main() {
 		logger.Error("ssh front end", "error", err)
 		os.Exit(1)
 	}
+	// Serve must not be cancelled by the same signal that starts the shutdown sequence: the delay below is
+	// the window in which the Service stops routing here, and a listener that closes at the first SIGTERM
+	// has no window at all (measured before this fix: port refused at 1.0s of a 2s delay). The listener is
+	// closed by the closeSessions step, after the delay has been waited.
+	serveCtx, stopServing := context.WithCancel(context.Background())
 	go func() {
-		if err := front.Serve(ctx); err != nil {
+		if err := front.Serve(serveCtx); err != nil {
 			logger.Error("ssh front end stopped", "error", err)
 			stop()
 		}
@@ -194,7 +199,10 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = health.Shutdown(shutdownCtx)
-	}, func() { _ = front.Close() })
+	}, func() {
+		stopServing()
+		_ = front.Close()
+	})
 }
 
 // shutdownSequence is everything that happens after the termination signal, in the order that matters:
