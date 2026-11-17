@@ -165,8 +165,8 @@ func main() {
 func buildBackends(cfg *config.Config, logger *slog.Logger) (map[string]backend.Backend, error) {
 	out := make(map[string]backend.Backend, len(cfg.Backends))
 	for _, b := range cfg.Backends {
-		switch b.Type {
-		case config.TypeStatic:
+		switch b.Provision {
+		case config.ProvisionEndpoints:
 			drv, err := backend.NewStatic(backend.StaticConfig{
 				Name:          b.Name,
 				Endpoints:     b.Endpoints,
@@ -178,13 +178,13 @@ func buildBackends(cfg *config.Config, logger *slog.Logger) (map[string]backend.
 				return nil, err
 			}
 			out[b.Name] = drv
-		case config.TypeKubernetes:
+		case config.ProvisionClaims, config.ProvisionWorkloads:
 			drv, err := backend.NewKubernetes(backend.KubernetesConfig{
 				Name:       b.Name,
 				Namespace:  b.Namespace,
 				Kubeconfig: b.Kubeconfig,
 				Provider: backend.ProviderSpec{
-					Kind:          b.Provider.Kind,
+					Kind:          b.Provision,
 					Template:      b.Provider.Template,
 					WarmPool:      b.Provider.WarmPool,
 					Image:         b.Provider.Image,
@@ -192,8 +192,8 @@ func buildBackends(cfg *config.Config, logger *slog.Logger) (map[string]backend.
 					ReadyTimeout:  b.Provider.ReadyTimeout.Std(),
 					APIGroup:      b.Provider.APIGroup,
 					APIVersion:    b.Provider.APIVersion,
-					ClaimResource: b.Provider.ClaimResource,
-					ClaimKind:     b.Provider.ClaimKind,
+					Resource:      b.Provider.Resource,
+					ObjectKind:    b.Provider.ObjectKind,
 					EndpointField: b.Provider.EndpointField,
 				},
 				SSHUser:       b.SSH.User,
@@ -205,8 +205,25 @@ func buildBackends(cfg *config.Config, logger *slog.Logger) (map[string]backend.
 				return nil, err
 			}
 			out[b.Name] = drv
+		case config.ProvisionCommand:
+			drv, err := backend.NewCommand(backend.CommandConfig{
+				Name:          b.Name,
+				Acquire:       b.Command.Acquire,
+				Release:       b.Command.Release,
+				List:          b.Command.List,
+				Env:           b.Command.Env,
+				Timeout:       b.Command.Timeout.Std(),
+				User:          b.SSH.User,
+				PrivateKey:    b.SSH.PrivateKey,
+				HostKeyPolicy: b.SSH.HostKeyPolicy,
+				Logger:        logger,
+			})
+			if err != nil {
+				return nil, err
+			}
+			out[b.Name] = drv
 		default:
-			return nil, fmt.Errorf("backend %q: unknown type %q", b.Name, b.Type)
+			return nil, fmt.Errorf("backend %q: unknown provision %q", b.Name, b.Provision)
 		}
 	}
 	return out, nil

@@ -55,17 +55,17 @@ address elsewhere, change the path — no code change is needed.
 ```yaml
 backends:
   - name: claims
-    type: kubernetes
+    provision: claims
     namespace: "<namespace>"
     provider:
-      kind: sandbox-claim
+      
       template: sandbox
       warm_pool: sandbox
       ready_timeout: 120s
       api_group: "<crd-group>"          # e.g. your.sandbox.api
       api_version: "<crd-version>"
-      claim_resource: "<plural-resource>"
-      claim_kind: "<Kind>"
+      resource: "<plural-resource>"
+      object_kind: "<Kind>"
       endpoint_field: ["status", "sandbox", "serviceFQDN"]
     ssh:
       port: 22

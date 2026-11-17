@@ -16,11 +16,11 @@ func baseConfig() *Config {
 		Lease:  Lease{TTL: Duration(360 * time.Second), Grace: Duration(60 * time.Second), PoolSize: 2},
 		Backends: []Backend{{
 			Name:      "claims",
-			Type:      TypeKubernetes,
+			Provision: ProvisionClaims,
 			Namespace: "sandbox-system",
 			Provider: Provider{
-				Kind: KindSandboxClaim, Template: "sandbox",
-				APIGroup: "example.io", APIVersion: "v1", ClaimResource: "sandboxclaims", ClaimKind: "SandboxClaim",
+				Template: "sandbox",
+				APIGroup: "example.io", APIVersion: "v1", Resource: "sandboxclaims", ObjectKind: "SandboxClaim",
 			},
 			SSH: SSH{Port: 22, User: "sandbox", PrivateKey: "/keys/pool", HostKeyPolicy: "accept-new"},
 		}},
@@ -38,7 +38,7 @@ func TestValidateAcceptsMinimalConfig(t *testing.T) {
 
 func TestValidateFillsDefaults(t *testing.T) {
 	c := &Config{
-		Backends:   []Backend{{Name: "b", Type: TypeStatic, Endpoints: []string{"192.0.2.1:22"}, SSH: SSH{User: "u", PrivateKey: "/k"}}},
+		Backends:   []Backend{{Name: "b", Provision: ProvisionEndpoints, Endpoints: []string{"192.0.2.1:22"}, SSH: SSH{User: "u", PrivateKey: "/k"}}},
 		Identities: []Identity{{Fingerprint: goodFP, Backend: "b"}},
 	}
 	c.ApplyDefaults()
@@ -64,16 +64,19 @@ func TestValidateRejects(t *testing.T) {
 	}{
 		{"no backends", func(c *Config) { c.Backends = nil }, "at least one backend"},
 		{"no identities", func(c *Config) { c.Identities = nil }, "at least one identity"},
-		{"unknown type", func(c *Config) { c.Backends[0].Type = "docker" }, "unknown type"},
+		{"legacy type field", func(c *Config) { c.Backends[0].Type = "static" }, "was replaced by backend.provision"},
 		{"missing namespace", func(c *Config) { c.Backends[0].Namespace = "" }, "namespace is required"},
 		{"no selector", func(c *Config) {
 			c.Backends[0].Provider.Template = ""
 			c.Backends[0].Provider.WarmPool = ""
 		}, "provider.template or provider.warm_pool is required"},
-		{"missing gvk", func(c *Config) { c.Backends[0].Provider.APIGroup = "" }, "api_group, api_version, claim_resource and claim_kind"},
+			{"missing gvk", func(c *Config) { c.Backends[0].Provider.APIGroup = "" }, "api_group, api_version, resource and object_kind"},
 		{"missing endpoint field is fine", func(c *Config) { c.Backends[0].Provider.EndpointField = nil }, ""},
-		{"unknown kind", func(c *Config) { c.Backends[0].Provider.Kind = "vm" }, "unknown provider.kind"},
-		{"missing image", func(c *Config) { c.Backends[0].Provider = Provider{Kind: KindPod} }, "provider.image is required"},
+			{"missing image", func(c *Config) {
+				c.Backends[0] = Backend{Name: "w", Provision: ProvisionWorkloads, Namespace: "ns",
+					SSH: SSH{Port: 22, User: "u", PrivateKey: "/k", HostKeyPolicy: "strict"}}
+				c.Identities[0].Backend = "w"
+			}, "provider.image is required"},
 		{"missing ssh user", func(c *Config) { c.Backends[0].SSH.User = "" }, "ssh.user is required"},
 		{"missing key", func(c *Config) { c.Backends[0].SSH.PrivateKey = "" }, "ssh.private_key is required"},
 		{"bad policy", func(c *Config) { c.Backends[0].SSH.HostKeyPolicy = "yolo" }, "unknown ssh.host_key_policy"},
@@ -83,11 +86,11 @@ func TestValidateRejects(t *testing.T) {
 			c.Identities = append(c.Identities, Identity{Fingerprint: goodFP, Backend: "claims"})
 		}, "duplicate fingerprint"},
 		{"static without endpoints", func(c *Config) {
-			c.Backends[0] = Backend{Name: "s", Type: TypeStatic, SSH: SSH{Port: 22, User: "u", PrivateKey: "/k", HostKeyPolicy: "strict"}}
+			c.Backends[0] = Backend{Name: "s", Provision: ProvisionEndpoints, SSH: SSH{Port: 22, User: "u", PrivateKey: "/k", HostKeyPolicy: "strict"}}
 			c.Identities[0].Backend = "s"
 		}, "endpoints are required"},
 		{"static bad endpoint", func(c *Config) {
-			c.Backends[0] = Backend{Name: "s", Type: TypeStatic, Endpoints: []string{"192.0.2.1"}, SSH: SSH{Port: 22, User: "u", PrivateKey: "/k", HostKeyPolicy: "strict"}}
+			c.Backends[0] = Backend{Name: "s", Provision: ProvisionEndpoints, Endpoints: []string{"192.0.2.1"}, SSH: SSH{Port: 22, User: "u", PrivateKey: "/k", HostKeyPolicy: "strict"}}
 			c.Identities[0].Backend = "s"
 		}, "must be host:port"},
 	}
@@ -160,16 +163,15 @@ lease:
   pool_size: 2
 backends:
   - name: claims
-    type: kubernetes
+    provision: claims
     namespace: sandbox-system
     provider:
-      kind: sandbox-claim
       template: sandbox
       warm_pool: sandbox
       api_group: example.io
       api_version: v1
-      claim_resource: sandboxclaims
-      claim_kind: SandboxClaim
+      resource: sandboxclaims
+      object_kind: SandboxClaim
     ssh:
       port: 22
       user: sandbox
