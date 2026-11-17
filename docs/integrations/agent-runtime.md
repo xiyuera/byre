@@ -46,15 +46,14 @@ lease:
 
 backends:
   - name: claims
-    type: kubernetes
+    provision: claims
     namespace: "<namespace>"
     provider:
-      kind: sandbox-claim
       warm_pool: "<warm-pool>"
-      api_group: "<crd-group>"
+      api_group: "<crd-group>"        # the claim API is configuration; nothing is built in
       api_version: "<crd-version>"
-      claim_resource: "<plural-resource>"
-      claim_kind: "<Kind>"
+      resource: "<plural-resource>"
+      object_kind: "<Kind>"
       endpoint_field: ["status", "sandbox", "serviceFQDN"]
     ssh: { port: 22, user: "<remote-user>", private_key: "<pool-key>", host_key_policy: insecure }
 
@@ -63,6 +62,10 @@ identities:
     backend: claims
     aliases: ["<label for logs>"]
 ```
+
+The `provider` block is the only cluster-specific part of that file: it tells the gateway which
+claim-shaped API to talk to, and the coordinates are yours to fill in. Nothing here names a product,
+and a client note that needed one would have failed the rule in `docs/integrations/README.md`.
 
 Client side: point its SSH backend at the gateway's host and port and give it the key whose fingerprint
 is listed. Do **not** keep the client's own key in the gateway's backend config — the two keys play

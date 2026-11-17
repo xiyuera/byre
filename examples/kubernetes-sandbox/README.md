@@ -58,7 +58,6 @@ backends:
     provision: claims
     namespace: "<namespace>"
     provider:
-      
       template: sandbox
       warm_pool: sandbox
       ready_timeout: 120s

@@ -50,7 +50,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	backends, err := buildBackends(cfg, logger)
+	backends, err := buildBackends(cfg, logger, *checkConfig)
 	if err != nil {
 		logger.Error("configuration rejected", "error", err)
 		os.Exit(2)
@@ -161,8 +161,10 @@ func main() {
 	_ = front.Close()
 }
 
-// buildBackends instantiates one driver per configured backend.
-func buildBackends(cfg *config.Config, logger *slog.Logger) (map[string]backend.Backend, error) {
+// buildBackends instantiates one driver per configured backend. dryRun skips cluster clients so that
+// -check-config works on a machine that has no credentials; the configuration is still what is being
+// checked, not the cluster.
+func buildBackends(cfg *config.Config, logger *slog.Logger, dryRun bool) (map[string]backend.Backend, error) {
 	out := make(map[string]backend.Backend, len(cfg.Backends))
 	for _, b := range cfg.Backends {
 		switch b.Provision {
@@ -200,6 +202,7 @@ func buildBackends(cfg *config.Config, logger *slog.Logger) (map[string]backend.
 				SSHPrivateKey: b.SSH.PrivateKey,
 				HostKeyPolicy: b.SSH.HostKeyPolicy,
 				Logger:        logger,
+				DryRun:        dryRun,
 			})
 			if err != nil {
 				return nil, err

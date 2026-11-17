@@ -40,13 +40,13 @@ func TestNewKubernetesValidation(t *testing.T) {
 		{"no namespace", func(c *KubernetesConfig) { c.Namespace = "" }, "namespace is required"},
 		{"no user", func(c *KubernetesConfig) { c.SSHUser = "" }, "ssh user and private key"},
 		{"pod without image", func(c *KubernetesConfig) { c.Provider.Image = "" }, "provider.image is required"},
-		{"unknown kind", func(c *KubernetesConfig) { c.Provider.Kind = "vm" }, "unknown provider.kind"},
+		{"unknown kind", func(c *KubernetesConfig) { c.Provider.Kind = "vm" }, "unknown provision"},
 		{"claim without selector", func(c *KubernetesConfig) {
 			c.Provider = ProviderSpec{Kind: KindClaims, APIGroup: "g", APIVersion: "v1", Resource: "claims"}
 		}, "provider.template or provider.warm_pool is required"},
 		{"claim without gvk", func(c *KubernetesConfig) {
 			c.Provider = ProviderSpec{Kind: KindClaims, Template: "t"}
-		}, "api_group, api_version, claim_resource and claim_kind"},
+		}, "api_group, api_version, resource and object_kind"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -57,6 +57,27 @@ func TestNewKubernetesValidation(t *testing.T) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestNewKubernetesDryRun is the path `-check-config` takes: validate, then stop. It has to work on a
+// workstation with no cluster credentials, and it still has to reject an incomplete provider block.
+func TestNewKubernetesDryRun(t *testing.T) {
+	cfg := claimConfig()
+	cfg.DryRun = true
+	drv, err := NewKubernetes(cfg)
+	if err != nil {
+		t.Fatalf("NewKubernetes(dry run): %v", err)
+	}
+	if drv.client != nil || drv.dyn != nil {
+		t.Fatalf("dry run built cluster clients: client=%v dynamic=%v", drv.client, drv.dyn)
+	}
+
+	cfg = claimConfig()
+	cfg.DryRun = true
+	cfg.Provider.APIGroup = ""
+	if _, err := NewKubernetes(cfg); err == nil || !strings.Contains(err.Error(), "api_group") {
+		t.Fatalf("dry run accepted a claim without api_group: err = %v", err)
 	}
 }
 
@@ -176,14 +197,14 @@ func TestPodWaitsForReady(t *testing.T) {
 func claimConfig() KubernetesConfig {
 	cfg := baseKubeCfg()
 	cfg.Provider = ProviderSpec{
-		Kind:          KindClaims,
-		Template:      "sandbox",
-		WarmPool:      "sandbox",
-		ReadyTimeout:  2 * time.Second,
-		APIGroup:      claimGVR.Group,
-		APIVersion:    claimGVR.Version,
-		Resource: claimGVR.Resource,
-		ObjectKind:     "SandboxClaim",
+		Kind:         KindClaims,
+		Template:     "sandbox",
+		WarmPool:     "sandbox",
+		ReadyTimeout: 2 * time.Second,
+		APIGroup:     claimGVR.Group,
+		APIVersion:   claimGVR.Version,
+		Resource:     claimGVR.Resource,
+		ObjectKind:   "SandboxClaim",
 	}
 	return cfg
 }

@@ -23,7 +23,7 @@ go test -race ./...
 ## Adding a backend driver
 
 1. Implement `internal/backend.Backend` (`Acquire`, `Release`, `List`, `Adopt`).
-2. Extend `internal/backend/config.go` validation with the new `type`/`provider.kind` and its required
+2. Extend `internal/config/config.go` validation with the new `provision` value and its required
    fields — unknown values must keep failing.
 3. Add unit tests with a fake API client (no live cluster in unit tests).
 4. Add an `examples/<driver>/` directory with a minimal, placeholder-filled manifest.
@@ -45,7 +45,7 @@ Body: why, then what changed, then how it was verified. Reference the ADR when o
 ## Reporting a bug
 
 Include: byre version (`byre -version`), the relevant log lines (identity prefixes are fine,
-full keys never are), the backend type, and whether the client uses `ControlMaster`.
+full keys never are), the provision value, and whether the client uses `ControlMaster`.
 
 ## Security
 

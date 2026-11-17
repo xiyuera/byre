@@ -71,8 +71,12 @@ warms, and every checkout returns 403 — which reads as "the backend is down". 
 gateway is alive but cannot hand out instances:
 
 ```sh
-kubectl -n <instances-ns> auth can-i patch sandboxclaims --as system:serviceaccount:<gateway-ns>:byre
+kubectl -n <instances-ns> auth can-i patch <plural-resource> --as system:serviceaccount:<gateway-ns>:byre
 ```
+
+`<plural-resource>` is the `resource` from the backend's `provider` block, and the API group is whatever
+that block names — the gateway hardcodes neither. The deployment this project was written on uses
+`sandboxclaims` from `extensions.agents.x-k8s.io`; that is one claim API among many, not a requirement.
 
 **If `pool_size > 0`,** the gateway will start creating instances immediately. **There is currently no way to
 scale the pool to zero through config** — `ApplyDefaults` treats an explicit `0` the same as an absent key and
@@ -87,8 +91,13 @@ byre -config /etc/byre/config.yaml -check-config
 ```
 
 Exits non-zero and lists *every* violation (not the first one) when the file is wrong: unknown fields,
-unknown backend type or provider kind, duplicate fingerprints, malformed endpoints, missing required
-values.
+an unknown or missing `provision` value, fields that this provision requires but the file omits,
+duplicate fingerprints, malformed endpoints, missing required values.
+
+It checks the configuration, not the cluster: under `-check-config` the Kubernetes drivers are
+validated and built without API clients, so this runs on a workstation with no credentials. Whether
+the cluster would accept the objects is a separate question — that one is answered by the
+`auth can-i` check above and by the first acquire.
 
 ## Health
 
@@ -109,9 +118,10 @@ Suggested probes: liveness `/healthz` with `periodSeconds: 10`, readiness `/heal
 | `lease.pool_size` | `2` | warm instances; each one costs one pod-worth of memory when idle |
 | `provider.ready_timeout` | `120s` | raise for slow images (cold layer pulls) |
 | `ssh.host_key_policy` | `accept-new` | `strict` requires known_hosts; `insecure` is for throwaway instances only |
-| `provider.api_group/api_version/claim_resource` | — | required for `sandbox-claim`: the claim API is configuration, never hardcoded |
-| `provider.endpoint_field` | `status.sandbox.serviceFQDN` | where the claim exposes its SSH address; a bare host gets `:22` |
-| `provider.image` | — | `pod` kind: any image that runs sshd and trusts the pool key |
+| `provider.api_group/api_version/resource/object_kind` | — | required for `provision: claims`: the claim API is configuration, never hardcoded |
+| `provider.endpoint_field` | `status.sandbox.serviceFQDN` | where a claim-shaped API exposes its SSH address; a bare host gets `:22`. Only a default — set it to your API's path |
+| `provider.image` | — | `provision: workloads`: any image that runs sshd and trusts the pool key |
+| `command.acquire/release/list` | — | `provision: command`: the program that creates, destroys and (optionally) lists instances |
 
 Warm capacity is reported as `byre_pool_warm{backend=...}`. A pool that never reaches `pool_size`
 means `Create` is failing (image pull, quota, missing template) — check the gateway log for

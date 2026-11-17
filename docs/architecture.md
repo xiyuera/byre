@@ -70,11 +70,19 @@ Two properties make this work and one deliberate limitation applies:
 
 ## 5. Backends
 
-| type | provider.kind | obtain | release |
+| `provision` | driver | obtain | release |
 |---|---|---|---|
-| `kubernetes` | `sandbox-claim` | create a claim from `provider.template` and/or `provider.warm_pool` using the configured GVK, then wait until one of the advertised addresses (`endpoint_field`, then `podIPs`) accepts a TCP connection | delete the claim |
-| `kubernetes` | `pod` | create one pod from `provider.image` (+ `start_command`) and wait for readiness | delete the pod |
-| `static` | — | pick an endpoint from `endpoints` (round-robin, skip if leased) | mark free |
+| `claims` | kubernetes | create an object from `provider.template` and/or `provider.warm_pool` using the configured GVK, then wait until one of the advertised addresses (`endpoint_field`, then `podIPs`) accepts a TCP connection | delete the object |
+| `workloads` | kubernetes | create one pod from `provider.image` (+ `start_command`) and wait for readiness | delete the pod |
+| `endpoints` | static | pick an endpoint from `endpoints` (round-robin, skip if leased) | mark free |
+| `command` | command | run `command.acquire`; the program prints one JSON object describing the instance | run `command.release` |
+
+Those four are the whole vocabulary (ADR-0007). What differs between infrastructures is how an SSH
+endpoint comes into existence and how it is destroyed, not how it is reached: `ssh.user`,
+`ssh.private_key`, `ssh.port`, `ssh.host_key_policy` and the readiness timeout are shared by all four
+and live outside the provision block. No value names a product. A claim-shaped API such as the
+`SandboxClaim` object of `extensions.agents.x-k8s.io` is something an operator writes into
+`api_group`/`resource`/`object_kind`; it is not a built-in.
 
 The driver interface is deliberately small:
 
@@ -92,8 +100,8 @@ upward.
 
 A driver that can create capacity ahead of demand also implements `lease.Pooler` (`Create(ctx)`); the
 lease manager keeps `pool_size` warm instances for it and refills after each checkout. A driver without
-`Create` (the `static` one) simply has no pool — acquire stays on demand, which is the honest model for
-machines that already exist.
+`Create` (the `endpoints` one) simply has no pool — acquire stays on demand, which is the honest model
+for machines that already exist.
 
 ## 6. Failure behaviour
 
