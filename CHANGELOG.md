@@ -28,6 +28,14 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
 
 ### Fixed
 
+- **Release assets go to the release that was just created, not to an older one.**
+  `release.yml` derived the release id with a greedy `sed` on the JSON response, which matched the
+  *last* `"id"` rather than the release's own: on `POST /releases` that was `author.id` (so the
+  v0.3.1 assets landed on the v0.2.0 release), and on a re-run it was the last asset id (so they
+  pointed at no release at all). Every upload returned 200, so the job reported success. The pattern
+  now anchors on `"id":N,"tag_name"`, which occurs exactly once in a release response, and the
+  workflow compares the asset count after uploading instead of trusting per-request status codes.
+
 - **A slow backend call no longer freezes the gateway.** `Acquire` held the lease table's mutex across
   `drv.Acquire`/`Bind`; a 500ms creation for one identity blocked `Lookup`, `KeepAlive`, `ReleaseConn`,
   `Stats` and every other identity's `Acquire` for the same span (measured: 379ms). Backend calls now run
