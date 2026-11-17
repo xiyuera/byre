@@ -60,6 +60,20 @@ podman push --digestfile /tmp/digest <registry>/keypod:<tag>
 kubectl -n keypod-system set image deploy/keypod keypod=<registry>/keypod@<digest>
 ```
 
+### The grant that is not in the overlay
+
+`kubectl apply -k deploy/` installs the gateway **in its own namespace**. Creating and deleting the
+instances it leases happens in a *different* namespace, and kustomize's `namespace:` rewrites every
+object at once, so that grant is a separate apply (`deploy/instances-rbac.example.yaml`).
+
+Skipping it produces the most misleading failure this project has: `/healthz` is green, the pool never
+warms, and every checkout returns 403 — which reads as "the backend is down". Check it first when the
+gateway is alive but cannot hand out instances:
+
+```sh
+kubectl -n <instances-ns> auth can-i patch sandboxclaims --as system:serviceaccount:<gateway-ns>:keypod
+```
+
 **If `pool_size > 0`,** the gateway will start creating instances immediately. Set `pool_size: 0` in the
 ConfigMap for a first smoke test if you do not want warm capacity yet.
 

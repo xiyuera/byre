@@ -1,0 +1,52 @@
+# The gateway lives in its own namespace but creates and deletes instances in a DIFFERENT one.
+# kustomize's `namespace:` applies to every object in the overlay, so this grant cannot live in the
+# release overlay: apply it against the instance namespace instead.
+#
+#   INSTANCES_NS=hermes GATEWAY_NS=keypod-system
+#   sed -e "s/__INSTANCES_NS__/$INSTANCES_NS/g" -e "s/__GATEWAY_NS__/$GATEWAY_NS/g" \
+#       deploy/instances-rbac.example.yaml | kubectl apply -f -
+#
+# Without it the gateway starts, reports healthy, and fails every checkout with 403 — the failure
+# looks like a backend outage, not a permissions problem.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: keypod-instances
+  namespace: __INSTANCES_NS__
+  labels:
+    app.kubernetes.io/name: keypod
+    app.kubernetes.io/component: instances
+rules:
+  # Warm pool + lease churn: create on miss, delete on reap, patch to bind an identity.
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxclaims"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+  # Readiness is decided by dialing the instance, so its status is informational only.
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["get", "list", "watch", "patch"]
+  # Alternative provider: plain pods instead of declarative claims.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+  # Endpoint candidates come from the Service when it exists and from pod IPs when it does not.
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: keypod-instances
+  namespace: __INSTANCES_NS__
+  labels:
+    app.kubernetes.io/name: keypod
+    app.kubernetes.io/component: instances
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: keypod-instances
+subjects:
+  - kind: ServiceAccount
+    name: keypod
+    namespace: __GATEWAY_NS__

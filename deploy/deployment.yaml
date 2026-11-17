@@ -24,7 +24,7 @@ spec:
         runAsGroup: 65532
         # Secret/ConfigMap volumes are root-owned with a restrictive mode; fsGroup makes the projected
         # files readable by the non-root user, which otherwise fails with "permission denied" on the key.
-        fsGroup: 65532
+        fsGroup: 10001  # must match USER in the image, or the 0400 Secret mount is unreadable
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
