@@ -43,13 +43,24 @@ Extract the old trees from the pre-rewrite bundle and diff every file against th
 tag, after replacing anything address-shaped with a placeholder:
 
 ```sh
-git clone --mirror <pre-rewrite.bundle> /tmp/old.git
+# The pre-rewrite bundle is an operator's backup of the old history; it is NOT in
+# this repository and is not distributed with it. Whoever holds it can rerun this;
+# anyone else can only re-verify the half that needs no old objects (the tag
+# pointers in the table above, and that the recorded hashes no longer resolve).
+git clone --mirror /path/to/pre-rewrite.bundle /tmp/old.git
+
 mask() {
   sed -E 's#(https?://)[^/ "]+#\1<HOST>#g
           s#[0-9]{1,3}(\.[0-9]{1,3}){3}#<IP>#g
           s#[0-9]{1,3}(\.[0-9]{1,3}){2}\.#<IP-PREFIX>.#g
-          s#[A-Za-z0-9._-]*<domain>[A-Za-z0-9._-]*#<DOMAIN>#g'
+          s#the-domain-that-was-scrubbed#<DOMAIN>#g'
 }
+# NOTE the last line: 'the-domain-that-was-scrubbed' is a literal placeholder you
+# must substitute with the domain the rewrite removed. It is not written out here
+# because that string is exactly what the rewrite was performed to delete — a
+# placeholder inside a `<...>` would never match anything, since sed gives `<` and
+# `>` no special meaning.
+
 # for each released tag: git archive the old commit and the tag, then
 # for every file: diff <(mask < old/$f) <(mask < new/$f)
 ```

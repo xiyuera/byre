@@ -42,6 +42,10 @@ The owner has no `xiyuera/` prefix: the account that pushes is not always the
 account that owns, and a branch pushes as whoever runs it. This PR is the
 example — owned by `xiyuera`, pushed from `ops/git-merge-gate`.
 
+Account names, credential files, token scopes and the per-role commit identity
+are all in [docs/contributing-from-agents.md](docs/contributing-from-agents.md);
+this file covers the branch and the merge, that one covers who is behind them.
+
 The point of the prefix is that `git branch -r` answers "who is working on
 what" without a lookup — so it has to be an account that can push, not a
 category like `docs/` that reads like a role but cannot own a commit.
@@ -58,11 +62,16 @@ just be a second `main` with less review.
 
 ### The four required checks
 
+The names below are the job names. The branch protection compares **exact
+strings**, and each job publishes two contexts — `ci / test (pull_request)` and
+`ci / test (push)` — so the protection must list the `(pull_request)` variants or
+the pull request will wait for a check that never arrives.
+
 | check | what it means |
 |---|---|
 | `ci / test` | `make fmt vet`, `go test ./...`, `go test -race ./...` (the whole module, not a subset), `make build` |
 | `ci / manifests` | `make render` — the kustomize tree renders, and the job's earlier `kustomize version` step is what makes that meaningful: `make render` prints `skipped` and exits **0** when kustomize is absent, so run `kustomize version` yourself before trusting a local green. It does **not** schema-validate the output |
-| `ci / dco` | every commit in the push range carries a matching `Signed-off-by` |
+| `ci / dco` | every commit the change **adds** carries a matching `Signed-off-by` — `base..HEAD` on a pull request, `before..sha` on a push |
 | `ci / i18n` | the translation manifest matches the files it indexes |
 
 A red check is information, not an obstacle: read the job log before rerunning.
@@ -80,6 +89,13 @@ introduces and requires the trailer to match the author. Two consequences:
   rebase keeps the commits, their authors and their trailers intact.
 * Rewriting a commit can drop the trailer. If you amend, re-add it.
 
+**This gate fires after the merge, not before it.** On a pull request the job only
+sees the branch's commits — the merge commit does not exist yet, the forge
+creates it when the button is pressed. It then fails `dco` on the push run to
+`main`, by which time the code is already `main`'s. Branch protection only gates
+the four `(pull_request)` contexts, so "use rebase" keeps `main`'s history signed;
+it does not stop anyone pressing merge.
+
 ### Who reviews
 
 The forge requires one approval, from any account with write access that is not
@@ -91,13 +107,20 @@ reviewer. The convention on top of that:
 * `hermes-eng`, `hermes-ops` and the owner may approve when `hermes-reviewer`
   is the one who wrote the change.
 
-(The approvals whitelist is **not enabled** on this repository — `GET
-/api/v1/repos/byre/byre/branch_protections/main` on the running instance
-(`/api/v1/version` → `28.4.0`) reports `enable_approvals_whitelist: false`. It was
-tried and could not be made to hold a username list, which would have left
-nobody able to approve; rather than publish a rule that depends on a forge
-behaviour we could not verify, the whitelist stays off and this paragraph is the
-convention.)
+Any account with write access can check that part:
+
+```sh
+curl -sS -H "Authorization: token $TOKEN" \
+  "$HOST/api/v1/repos/byre/byre/branches/main" | grep -o '"required_approvals":[0-9]*'
+# required_approvals:1     and separately: user_can_push:false
+```
+
+What the forge does **not** enforce is *who* reviews — the approvals whitelist is
+off. That switch lives in `/branch_protections/main`, which needs an owner or
+admin token (`write:repository` gets 403 `user should be an owner or have admin
+permission of the repository`). A reviewer therefore cannot read it, which is
+exactly why the role division below is written as convention and nothing in this
+file depends on it.
 
 The reviewer answers three questions in a comment, not "looks good":
 
@@ -146,6 +169,16 @@ lifted for the duration, and the protection restored immediately after.
 In both cases the evidence to leave behind is a push that *fails* — proof the
 protection is back on.
 
+### What `main`'s history already looks like
+
+18 merge commits are reachable from `main` and 17 of them carry no
+`Signed-off-by`. They are not an argument against the rule above; they are what
+the rule was added because of. The `dco` job was already in `ci.yml` when two of
+them (`6f54b7a`, `9ed7076`) landed at 17:40 and 17:41 — merged with the button,
+before the protection existed. They are not rewritten now because rewriting
+`main` again would invalidate another batch of published hashes for no benefit
+(`docs/tag-map.md` records what that cost the first time).
+
 ### After merging
 
 Delete the branch. Fifteen merged branches were still on the forge when this was
@@ -173,7 +206,9 @@ make lint          # uses golangci-lint when installed
 go test -race ./...
 ```
 
-`make lint` is a **local** gate, not a machine one — CI runs `fmt vet`, `test`,
+`make fmt` rewrites files in place (`gofmt -l -w .`) and exits 0 whether or not it
+changed anything — it formats, it does not check. `make lint` is a **local** gate,
+not a machine one — CI runs `fmt vet`, `test`,
 `-race ./...`, `build`, `render`, `dco` and `i18n`, and golangci-lint is not among
 them. A clean CI does not mean lint is clean.
 
