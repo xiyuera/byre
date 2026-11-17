@@ -87,6 +87,20 @@ make lint      # gofmt + go vet (+ golangci-lint when installed)
 make e2e       # end-to-end against a kind cluster
 ```
 
+## Dependencies
+
+Five direct modules; the Kubernetes client brings its own transitive set (~40), all from the same
+project. Everything the binary links, and why:
+
+| module | role | could it be avoided? |
+|---|---|---|
+| `golang.org/x/crypto/ssh` | the SSH protocol (server and client) | no — implementing SSH is the one thing this project should not do itself |
+| `k8s.io/client-go`, `k8s.io/api`, `k8s.io/apimachinery` | talk to the Kubernetes API with client certificates | no, for the `kubernetes` backend; the `static` backend needs none of it at runtime |
+| `gopkg.in/yaml.v3` | parse the configuration file | yes, at the cost of JSON-only configuration |
+
+There is **no** gateway/proxy/cache component involved: no sshpiper, no Envoy, no Redis, no sidecar. The
+process is a single static binary with two listeners (SSH and health/metrics).
+
 ## Non-goals for v1
 
 Multi-replica consistency, dynamic multi-backend balancing, in-instance state persistence,
