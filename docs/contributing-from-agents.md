@@ -62,9 +62,15 @@ jq -n --rawfile body issue.md --arg title "$title" '{title:$title, body:$body}' 
 
 ## Branches and review
 
-Branch per task, named for the role: `review/<slug>`, `ops/<slug>`, `eng/<slug>`. Never commit to `main`
-and never force-push it. Messages follow CONTRIBUTING (`<area>: <imperative summary>`), then
-`git push -u origin HEAD`.
+Branch naming, the required checks, the review rule and the merge strategy live in
+one place: [CONTRIBUTING.md](../CONTRIBUTING.md#branches). Do not restate them here.
+
+This file used to say `review/<slug>` while CONTRIBUTING said `reviewer/<slug>`. Two
+copies of a rule that has no machine gate behind it is how a rule stops existing —
+the divergence was found by a reviewer, not by either document.
+
+Never commit to `main` and never force-push it. Messages follow CONTRIBUTING
+(`<area>: <imperative summary>`), then `git push -u origin HEAD`.
 
 `<prefix>-reviewer` opens issues and pull requests and reviews them; it does not merge and does not push
 to `main`. A review agent that can merge is a review agent whose approval means nothing. Reviewer comments

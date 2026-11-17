@@ -29,6 +29,8 @@ how the four provisioning shapes differ. This page is the map for everything pas
 | [acceptance/](acceptance/) | what was verified on a real cluster, with the commands and the outputs |
 | [roadmap.md](roadmap.md) | what is deliberately absent from v1, in the order it would arrive |
 | [release.md](release.md) | when to cut a version, what the pipeline produces |
+| [tag-map.md](tag-map.md) | what each tag points at after the history rewrite, and the two published commit hashes that no longer exist |
+| [contributing-from-agents.md](contributing-from-agents.md) | the account-per-role model, credential handling and token discipline for agent contributors |
 | [integrations/](integrations/) | how a host runtime (agent platform, CI) talks to the gateway |
 | [rename-to-byre.md](rename-to-byre.md) | the name history, the collisions, and the cutover that is still pending |
 | [i18n.md](i18n.md) | which pages are translated, and how the checker decides a translation is stale |

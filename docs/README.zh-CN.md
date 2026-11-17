@@ -29,6 +29,8 @@
 | [acceptance/](acceptance/) | 真实集群上的验收记录（命令 + 输出） |
 | [roadmap.md](roadmap.md) | v1 明确不做什么，以及它们按什么顺序到来 |
 | [release.md](release.md) | 什么时候发版、流水线产出什么 |
+| [tag-map.md](tag-map.md) | 历史重写后每个 tag 指向哪里，以及两个不再存在的已发布 commit hash |
+| [contributing-from-agents.md](contributing-from-agents.md) | agent 贡献者的一角色一账号模型、凭据处理与 token 纪律 |
 | [integrations/](integrations/) | 宿主运行时（agent 平台、CI）如何对接网关 |
 | [rename-to-byre.md](rename-to-byre.md) | 改名历史、碰撞证据，以及尚未执行的迁移 |
 | [i18n.md](i18n.md) | 哪些页面有翻译，以及检查器凭什么判定一个翻译过期 |

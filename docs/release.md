@@ -38,6 +38,10 @@ did: publishing to a second host is a manual mirroring act, not part of a releas
 
 The assets are an input, not a result: `build-info.txt` holds everything needed to rebuild the bytes.
 
+If the `commit=` line names a commit that is no longer in the repository, the
+history was rewritten after that release: see [tag-map.md](tag-map.md) for the
+current tag pointers and how far the old and new trees were compared.
+
 ```sh
 git clone <repository> && cd byre
 git checkout <the commit= value from build-info.txt>

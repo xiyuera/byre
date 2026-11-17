@@ -27,8 +27,7 @@ account can skip is a habit, not a rule.
 
 `main` is the only long-lived branch. Work branches are named for who and what:
 the first segment is the account doing the work. Accounts on this forge are
-named `hermes-<role>`, and the branch drops the `hermes-` prefix — which is what
-every branch that exists today already does:
+named `hermes-<role>`, and the branch drops the `hermes-` prefix:
 
 | account | branch prefix | example |
 |---|---|---|
@@ -37,10 +36,21 @@ every branch that exists today already does:
 | `hermes-reviewer` | `reviewer/` | `reviewer/pr-checklist` |
 | `hermes-legal` | `legal/` | `legal/licence-audit` |
 | `hermes-research` | `research/` | `research/competitor-scan` |
+| `xiyuera` (owner) | `ops/` or the role the work belongs to | `ops/git-merge-gate` |
+
+The owner has no `xiyuera/` prefix: the account that pushes is not always the
+account that owns, and a branch pushes as whoever runs it. This PR is the
+example — owned by `xiyuera`, pushed from `ops/git-merge-gate`.
 
 The point of the prefix is that `git branch -r` answers "who is working on
 what" without a lookup — so it has to be an account that can push, not a
 category like `docs/` that reads like a role but cannot own a commit.
+
+This is a convention, not a gate: nothing stops you pushing `test/whatever`.
+When this was written, 20 of 21 work branches followed it — `eng/` 14, `ops/` 6 —
+and the one that did not was `test/ci-probe`, a branch pushed to exercise the
+runner. It should have been `ops/ci-probe`; it was not worth a force-push to
+rename, and it is the only exception you will find.
 
 `dev` is not a branch here. If a second integration branch is ever needed it
 gets the same protection on the day it is created — an unprotected `dev` would
@@ -51,7 +61,7 @@ just be a second `main` with less review.
 | check | what it means |
 |---|---|
 | `ci / test` | `make fmt vet`, `go test ./...`, `go test -race ./...` (the whole module, not a subset), `make build` |
-| `ci / manifests` | `make render` — the kustomize tree renders. It does **not** schema-validate the output |
+| `ci / manifests` | `make render` — the kustomize tree renders, and the job's earlier `kustomize version` step is what makes that meaningful: `make render` prints `skipped` and exits **0** when kustomize is absent, so run `kustomize version` yourself before trusting a local green. It does **not** schema-validate the output |
 | `ci / dco` | every commit in the push range carries a matching `Signed-off-by` |
 | `ci / i18n` | the translation manifest matches the files it indexes |
 
@@ -81,8 +91,13 @@ reviewer. The convention on top of that:
 * `hermes-eng`, `hermes-ops` and the owner may approve when `hermes-reviewer`
   is the one who wrote the change.
 
-(The approvals whitelist is off: Gitea 1.27 accepts `enable_approvals_whitelist`
-but stores an empty username list, which would mean *nobody* can approve.)
+(The approvals whitelist is **not enabled** on this repository — `GET
+/api/v1/repos/byre/byre/branch_protections/main` on the running instance
+(`/api/v1/version` → `28.4.0`) reports `enable_approvals_whitelist: false`. It was
+tried and could not be made to hold a username list, which would have left
+nobody able to approve; rather than publish a rule that depends on a forge
+behaviour we could not verify, the whitelist stays off and this paragraph is the
+convention.)
 
 The reviewer answers three questions in a comment, not "looks good":
 
@@ -157,6 +172,10 @@ make fmt vet test
 make lint          # uses golangci-lint when installed
 go test -race ./...
 ```
+
+`make lint` is a **local** gate, not a machine one — CI runs `fmt vet`, `test`,
+`-race ./...`, `build`, `render`, `dco` and `i18n`, and golangci-lint is not among
+them. A clean CI does not mean lint is clean.
 
 ## Adding a backend driver
 

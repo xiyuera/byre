@@ -11,6 +11,15 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
 
 ### Added
 
+- **The contribution rules are in the repository, and `main` enforces them.** `CONTRIBUTING.md`
+  now says how a change reaches `main` — branch naming, the four required checks, the
+  `Signed-off-by` trailer and why a merge commit or a squash defeats it, who reviews, how a tag
+  relates to `main`, and the two operations that cannot go through a pull request. The forge side
+  is `enable_push: false` / `enable_force_push: false` with one required approval, which rejects a
+  direct push from every account including the owner's. `docs/tag-map.md` records what each tag
+  points at after the history rewrite and the two published `commit=` hashes that no longer
+  resolve.
+
 - **`make image-push` records the digest it pushed.** It goes through `scripts/publish-image.sh`, which
   writes `dist/images.txt` (`IMAGE_REF` / `IMAGE_TAG` / `IMAGE_DIGEST` / `PUSHED_AT`) and appends
   `IMAGE_DIGEST=` to `dist/build-info.txt`. `make image-verify` (`scripts/assert-image-digest.sh`) exits

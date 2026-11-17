@@ -1,5 +1,5 @@
 {
   "./README.zh-CN.md": {"source": "./README.md", "digest": "a178db4754620b1a6553133971ffdfc83bb4d9a8dd33f9900b933cd33fdb498b"},
-  "./docs/README.zh-CN.md": {"source": "./docs/README.md", "digest": "0c5fe79ef522d1f8a7189e1251d79bd56cc7ca762cf9157694840427a56d8a1d"},
+  "./docs/README.zh-CN.md": {"source": "./docs/README.md", "digest": "23f93f63421318356519ea39f988e956f76ae61b5426d88c1083b1eef3b92e50"},
   "./examples/local-quickstart/README.zh-CN.md": {"source": "./examples/local-quickstart/README.md", "digest": "6b78ab360cab97d41742dfd926ae7a1f3461f49369645cc08185aba2fa21bd79"}
 }
