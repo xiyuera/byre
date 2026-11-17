@@ -5,6 +5,10 @@
 
 listen: ":2222"
 
+# SSH host key clients pin. Mount it from a Secret; without it the gateway generates an ephemeral key
+# and every restart changes the fingerprint (breaking strict clients).
+host_key: /etc/keypod/hostkey/id_ed25519
+
 lease:
   # Must exceed the client's idle timeout (the reference client idles out at 300s).
   ttl: 360s

@@ -62,6 +62,7 @@ func main() {
 	}
 	logger.Info("configuration accepted",
 		"listen", cfg.Listen,
+		"host_key", cfg.HostKey,
 		"backends", len(backends),
 		"identities", len(identities),
 		"ttl", cfg.Lease.TTL.String(),
@@ -106,10 +107,11 @@ func main() {
 	}
 
 	front, err := sshfront.New(sshfront.Config{
-		Listen:     cfg.Listen,
-		Identities: identities,
-		Leases:     mgr,
-		Logger:     logger,
+		Listen:      cfg.Listen,
+		HostKeyPath: cfg.HostKey,
+		Identities:  identities,
+		Leases:      mgr,
+		Logger:      logger,
 	})
 	if err != nil {
 		logger.Error("ssh front end", "error", err)

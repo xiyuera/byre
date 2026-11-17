@@ -68,7 +68,10 @@ func (d Duration) String() string { return time.Duration(d).String() }
 
 // Config is the root document.
 type Config struct {
-	Listen     string     `yaml:"listen"`
+	Listen string `yaml:"listen"`
+	// HostKey is the SSH host key clients pin. Without it a restart silently changes the fingerprint and
+	// every client with strict checking fails; generating one on the fly is fine only for tests.
+	HostKey    string     `yaml:"host_key"`
 	Lease      Lease      `yaml:"lease"`
 	Backends   []Backend  `yaml:"backends"`
 	Identities []Identity `yaml:"identities"`
