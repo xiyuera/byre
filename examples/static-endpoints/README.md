@@ -6,7 +6,7 @@ create or destroy anything here — it leases the endpoint to one identity at a 
 ```yaml
 backends:
   - name: lab
-    type: static
+    provision: endpoints
     endpoints:
       - "192.0.2.11:22"
       - "192.0.2.12:22"
@@ -25,7 +25,7 @@ backends:
 
 ## Behaviour differences
 
-| aspect | `sandbox-claim` / `pod` | `static` |
+| aspect | `claims` / `workloads` | `endpoints` |
 |---|---|---|
 | creation | gateway creates the workload | pre-existing |
 | release | object deleted | endpoint marked free |

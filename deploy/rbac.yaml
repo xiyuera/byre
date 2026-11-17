@@ -7,7 +7,7 @@ metadata:
   labels:
     app.kubernetes.io/name: byre
 rules:
-  # declarative sandbox claims (provider.kind: sandbox-claim)
+  # declarative claim APIs (provision: claims)
   - apiGroups: ["extensions.agents.x-k8s.io"]
     resources: ["sandboxclaims"]
     # patch is required: a pooled instance is bound to its identity by patching annotations.
@@ -15,7 +15,7 @@ rules:
   - apiGroups: ["extensions.agents.x-k8s.io"]
     resources: ["sandboxes"]
     verbs: ["get", "list", "watch", "patch"]
-  # bare pods (provider.kind: pod)
+  # bare pods (provision: workloads)
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch", "create", "delete"]

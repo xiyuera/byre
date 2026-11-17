@@ -28,7 +28,6 @@ backends:
     provision: workloads
     namespace: "<namespace>"
     provider:
-      kind: pod
       image: "<registry>/<sshd-image>:<tag>"
       start_command: ["/usr/sbin/sshd", "-D", "-e"]   # optional; image CMD is used when omitted
       ready_timeout: 180s                            # cold image pulls are slow
@@ -45,5 +44,5 @@ backends:
 - `ready_timeout` covers image pull, not just boot; a cold multi-hundred-MB image regularly needs >120s.
 - No volume is attached: instances are disposable by design. Clients that need state must move it in and
   out themselves (that is exactly what the reference client's file sync does).
-- Prefer `sandbox-claim` when you have a pooled CRD: warm capacity is the difference between a 300 ms and
+- Prefer `claims` when you have a pooled CRD: warm capacity is the difference between a 300 ms and
   a 30 s first connection.
