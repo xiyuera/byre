@@ -1,22 +1,59 @@
 SHELL      := /bin/sh
 BIN        := bin/byre
 PKG        := ./...
-VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-COMMIT     ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
-BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+COMMIT_FULL ?= $(shell git rev-parse HEAD 2>/dev/null || echo none)
+# The stamped date is the commit time, in UTC, read once. It is a property of the commit, not of the
+# clock on the machine that builds it: two builds of one commit have to produce identical bytes.
+# `date -u` here meant every build differed, and the release job read it once per architecture, so the
+# two binaries of a single tag were stamped two seconds apart and could never match a rebuild.
+BUILD_DATE  ?= $(shell TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
 
-LDFLAGS := -s -w \
-	-X byre/internal/version.Version=$(VERSION) \
-	-X byre/internal/version.Commit=$(COMMIT) \
-	-X byre/internal/version.BuildDate=$(BUILD_DATE)
+# One line on purpose: the same string is written into build-info.txt and has to be copy-pasteable.
+LDFLAGS := -s -w -X byre/internal/version.Version=$(VERSION) -X byre/internal/version.Commit=$(COMMIT) -X byre/internal/version.BuildDate=$(BUILD_DATE)
 
-.PHONY: all build test test-race lint fmt vet tidy clean e2e check-config render image image-push help
+# Release matrix. All architectures are built in one invocation so they share one BUILD_DATE. The job
+# image is recorded because two toolchains build the same source into different bytes: without it a
+# reader cannot tell a rebuild that differs because of the compiler from one that differs because of
+# the flags.
+DIST_ARCHES     ?= arm64 amd64
+CI_IMAGE        ?= unset
+CI_IMAGE_DIGEST ?= unset
+
+.PHONY: all build dist test test-race lint fmt vet tidy clean e2e check-config render image image-push help
 
 all: build
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN) ./cmd/byre
 	@echo "built $(BIN) ($(VERSION))"
+
+# Everything a release ships, from the same inputs: two static binaries, build-info.txt and SHA256SUMS.
+# The workflow calls this instead of writing its own build loop, so "what the pipeline does" and "what
+# a person reproduces locally" cannot drift apart.
+dist:
+	@rm -rf dist && mkdir -p dist
+	@for arch in $(DIST_ARCHES); do \
+		echo "build dist/byre-$(VERSION)-linux-$$arch"; \
+		GOOS=linux GOARCH=$$arch CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' \
+			-o dist/byre-$(VERSION)-linux-$$arch ./cmd/byre || exit 1; \
+	done
+	@set -e; { \
+		echo "version=$(VERSION)"; \
+		echo "commit=$(COMMIT_FULL)"; \
+		echo "commit_short=$(COMMIT)"; \
+		echo "tag=$(VERSION)"; \
+		echo "BuildDate=$(BUILD_DATE)"; \
+		echo "go_toolchain=$$(go version)"; \
+		echo "GOOS=linux"; \
+		for a in $(DIST_ARCHES); do echo "asset=byre-$(VERSION)-linux-$$a GOOS=linux GOARCH=$$a"; done; \
+		echo "ldflags=$(LDFLAGS)"; \
+		echo "ci_image=$(CI_IMAGE)"; \
+		echo "ci_image_digest=$(CI_IMAGE_DIGEST)"; \
+		echo "reproduce=git clone <repository> && cd byre && git checkout $(COMMIT_FULL) && make dist VERSION=$(VERSION) COMMIT=$(COMMIT) BUILD_DATE=$(BUILD_DATE)"; \
+	} > dist/build-info.txt
+	@cd dist && sha256sum byre-* build-info.txt > SHA256SUMS && cat SHA256SUMS
 
 test:
 	go test $(PKG)
