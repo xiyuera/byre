@@ -51,6 +51,15 @@ CGO_ENABLED=0 GOOS=linux go build -trimpath -o bin/keypod ./cmd/keypod
 podman build -f Dockerfile.prebuilt -t <registry>/keypod:<tag> .   # docker works the same way
 ```
 
+Pin the image by **digest**, not by tag: with `imagePullPolicy: IfNotPresent` a re-pushed tag keeps the
+node's cached layers, so the Deployment reports the new tag while the running process is still the old
+build (`/healthz` shows the truth — it prints the version stamped into the binary).
+
+```sh
+podman push --digestfile /tmp/digest <registry>/keypod:<tag>
+kubectl -n keypod-system set image deploy/keypod keypod=<registry>/keypod@<digest>
+```
+
 **If `pool_size > 0`,** the gateway will start creating instances immediately. Set `pool_size: 0` in the
 ConfigMap for a first smoke test if you do not want warm capacity yet.
 
