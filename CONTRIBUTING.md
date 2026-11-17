@@ -206,6 +206,35 @@ make lint          # uses golangci-lint when installed
 go test -race ./...
 ```
 
+### If `ci / test` fails on a *download*
+
+The job's `GOPROXY` comes from the repository secret `GOPROXY` (the value is not
+in this file because a working proxy is usually an internal host). Unset, Go falls
+back to `proxy.golang.org`, which in this cluster intermittently returns `EOF`
+part-way through the larger `k8s.io/*` zips:
+
+```
+internal/backend/kubernetes.go:15:2: k8s.io/api@v0.31.4:
+  Get "https://proxy.golang.org/k8s.io/api/@v/v0.31.4.zip": EOF
+```
+
+That is a network failure, not your change — the same commit has passed and failed
+on consecutive runs. Check the secret is present before reading the code:
+
+```sh
+curl -sS -H "Authorization: token $TOKEN" \
+  "$HOST/api/v1/repos/byre/byre/actions/secrets" | grep -o '"name":"GOPROXY"'
+```
+
+Set it to a proxy reachable from the cluster, comma-separated in Go's fallback
+order, ending in `direct`:
+
+```sh
+curl -sS -X PUT -H "Authorization: token $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"data":"<proxy-a>,<proxy-b>,direct"}' \
+  "$HOST/api/v1/repos/byre/byre/actions/secrets/GOPROXY"
+```
+
 `make fmt` rewrites files in place (`gofmt -l -w .`) and exits 0 whether or not it
 changed anything — it formats, it does not check. `make lint` is a **local** gate,
 not a machine one — CI runs `fmt vet`, `test`,

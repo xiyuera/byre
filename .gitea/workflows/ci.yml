@@ -17,6 +17,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Go modules come from wherever GOPROXY points. Unset (the default) means
+# proxy.golang.org, which in this cluster fails with `EOF` partway through the
+# k8s.io zips - the test job then fails on a download, not on the code. The value
+# is a secret rather than a literal because a working proxy is usually an internal
+# host, and this repository does not carry internal addresses.
+env:
+  GOPROXY: ${{ secrets.GOPROXY }}
+
 jobs:
   test:
     runs-on: k8s-go
