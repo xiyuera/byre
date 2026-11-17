@@ -70,6 +70,18 @@ every 30s. A reconnect scheduled at exactly `ttl + grace` can land *inside the s
 the lease alive. An earlier run at `ttl + grace + 10s` reported "same instance" for that reason and
 proved nothing; the check needs at least one extra tick (`ttl + grace + 60s` is a safe window).
 
+## A defect the migration exposed: an ephemeral host key
+
+The first profile to move failed with `Host key verification failed` immediately after a gateway pod
+restart: the front end generated its host key at startup, so every restart changed the fingerprint and
+any client with strict checking refused to connect. Fixed by making the host key configuration
+(`host_key:`), mounted from a Secret; the fingerprint is now stable across restarts and matches the
+Secret (`SHA256:qjcWj7no…`). Clients that already cached an ephemeral fingerprint must drop it once
+(`ssh-keygen -R '[<host>]:<port>'`).
+
+This is exactly the class of problem a migration finds and a unit test cannot: nothing in the code was
+wrong, the *deployment* was missing a piece.
+
 ## Still not migrated
 
 The default identity stays on its previous path, by rule, until this migration has run without incident;
