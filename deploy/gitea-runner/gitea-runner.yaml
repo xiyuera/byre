@@ -1,0 +1,117 @@
+# act_runner in job-pods mode: one pod per job, no Docker daemon, no privileged container.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitea-runner
+  namespace: gitea-runner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gitea-runner
+  namespace: gitea-runner
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gitea-runner
+  namespace: gitea-runner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: gitea-runner
+subjects:
+  - kind: ServiceAccount
+    name: gitea-runner
+    namespace: gitea-runner
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitea-runner-data
+  namespace: gitea-runner
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea-runner
+  namespace: gitea-runner
+  labels:
+    app.kubernetes.io/name: gitea-runner
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gitea-runner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gitea-runner
+    spec:
+      serviceAccountName: gitea-runner
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: runner
+          image: gitea/act_runner:0.2.12
+          env:
+            - name: GITEA_INSTANCE_URL
+              value: https://<your-gitea-host>:<port>
+            # The instance certificate is not in the image's trust store; mount it and point Go at it.
+            - name: SSL_CERT_FILE
+              value: /etc/ssl/custom/ca.crt
+            - name: GITEA_RUNNER_NAME
+              value: k3s-jobpods
+            # no docker:// label on purpose: this runner has no daemon
+            - name: GITEA_RUNNER_LABELS
+              value: kubernetes://golang:1.23
+            - name: GITEA_RUNNER_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: runner-token
+                  key: token
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: ca
+              mountPath: /etc/ssl/custom
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {memory: 256Mi}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: gitea-runner-data
+        - name: ca
+          configMap:
+            name: instance-ca
