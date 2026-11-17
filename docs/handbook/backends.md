@@ -77,7 +77,7 @@ to `host:22`.
   - name: lab
     provision: endpoints
     endpoints: ["instance-1.example.com:22", "instance-2.example.com:22"]
-    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: strict}
+    ssh: {user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: strict}
 ```
 
 | field | required | notes |
@@ -111,7 +111,7 @@ are long-lived.
       image: "<registry>/<image>:<tag>"
       start_command: ["/usr/sbin/sshd", "-D", "-e"]
       ready_timeout: 180s
-    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
+    ssh: {user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
 ```
 
 | field | required | default | notes |
@@ -145,7 +145,7 @@ annotation is what makes adoption work).
       object_kind: "<Kind>"
       endpoint_field: ["status", "sandbox", "serviceFQDN"]
       ready_timeout: 120s
-    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
+    ssh: {user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
 ```
 
 | field | required | notes |
@@ -178,7 +178,7 @@ your config, not in this binary.
       list: ["/usr/local/bin/list-ci-vms"]
       timeout: 120s
       env: ["CLOUD_PROFILE=ci"]
-    ssh: {port: 22, user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
+    ssh: {user: "<remote-user>", private_key: /etc/byre/keys/id_key, host_key_policy: accept-new}
 ```
 
 | field | required | notes |
