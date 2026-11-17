@@ -611,9 +611,13 @@ func sshBannerProbe(ctx context.Context, addr string) error {
 	// them, and accepting arbitrary leading lines would let a chatty non-SSH peer pass the probe. The
 	// first line must therefore be the banner.
 	line, err := bufio.NewReader(io.LimitReader(conn, 255)).ReadString('\n')
-	if err != nil && line == "" {
+	if err != nil {
+		// EOF, a read deadline or the 255-byte cap before the CRLF means the peer stopped
+		// mid-banner. Accepting a truncated line would report ready for exactly the half-started
+		// process this probe exists to catch: a peer that manages "SSH-2.0-" and then hangs or dies
+		// looks like a healthy one until the first real session fails.
 		metrics.IncHandshakeFail()
-		return fmt.Errorf("%s: tcp connected but no ssh banner: %w", addr, err)
+		return fmt.Errorf("%s: tcp connected but no complete ssh banner: %w", addr, err)
 	}
 	line = strings.TrimRight(line, "\r\n")
 	if !strings.HasPrefix(line, "SSH-2.") {

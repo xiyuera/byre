@@ -460,6 +460,26 @@ func fakeSSHDPeer(t *testing.T, banner string) string {
 	return ln.Addr().String()
 }
 
+// fakeSSHDPeerThenClose writes payload and closes the connection straight away. It is how a
+// half-started sshd behaves: a few banner bytes and then nothing at all.
+func fakeSSHDPeerThenClose(t *testing.T, payload string) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_, _ = c.Write([]byte(payload))
+		_ = c.Close()
+	}()
+	return ln.Addr().String()
+}
+
 func testPod(name, uid, identity, annotatedUID string) *corev1.Pod {
 	ann := map[string]string{LabelInstance: name}
 	if identity != "" {
@@ -705,6 +725,45 @@ func TestClaimIsReadyWhenSSHBannerArrives(t *testing.T) {
 	}
 	if in.Addr != addr {
 		t.Fatalf("addr = %q, want %q", in.Addr, addr)
+	}
+}
+
+// A missing instance and a broken one are different failures. Only the second is a handshake
+// failure: if an unreachable address bumped the counter, the number would measure "the pool is
+// cold" rather than "an instance is answering without speaking SSH", and the two need different
+// responses.
+func TestProbeDialFailureIsNotAHandshakeFailure(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close() // nothing listens on this port any more, so the dial is refused
+
+	before := metrics.HandshakeFailTotal()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := sshBannerProbe(ctx, addr); err == nil {
+		t.Fatal("a probe of a closed port reported ready")
+	}
+	if got := metrics.HandshakeFailTotal() - before; got != 0 {
+		t.Fatalf("dial failure counted as %d handshake failures; an unreachable address is not a broken peer", got)
+	}
+}
+
+// A peer that sends part of a banner and then stops is the shape of a hung sshd: the version prefix
+// can even be right. Accepting any bytes would report it ready, so the probe must insist on the CRLF
+// that terminates the line.
+func TestProbeRejectsTruncatedBanner(t *testing.T) {
+	addr := fakeSSHDPeerThenClose(t, "SSH-2.0-byre-test") // no CRLF, then EOF
+
+	before := metrics.HandshakeFailTotal()
+	err := sshBannerProbe(context.Background(), addr)
+	if err == nil {
+		t.Fatal("a peer that sent a truncated banner (no CRLF) was judged ready")
+	}
+	if got := metrics.HandshakeFailTotal() - before; got != 1 {
+		t.Fatalf("handshake failures counted = %d, want 1", got)
 	}
 }
 
