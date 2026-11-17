@@ -1,8 +1,13 @@
 # The gateway lives in its own namespace but creates and deletes instances in a DIFFERENT one.
 # kustomize's `namespace:` applies to every object in the overlay, so this grant cannot live in the
-# release overlay: apply it against the instance namespace instead.
+# release overlay: apply it against the instance namespace instead. Same grant as the "The grant that
+# is not in the overlay" section of docs/operations.md.
 #
-#   INSTANCES_NS=hermes GATEWAY_NS=byre-system
+# The two namespaces below are placeholders, not examples from any real installation. Replace them
+# with your own values (the instance namespace must equal backends[].namespace, the gateway namespace
+# must equal the kustomization's namespace:):
+#
+#   INSTANCES_NS=<instances-ns> GATEWAY_NS=<gateway-ns>
 #   sed -e "s/__INSTANCES_NS__/$INSTANCES_NS/g" -e "s/__GATEWAY_NS__/$GATEWAY_NS/g" \
 #       deploy/instances-rbac.example.yaml | kubectl apply -f -
 #
