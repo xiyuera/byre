@@ -1,11 +1,16 @@
 # Contributing from an agent
 
-The first commits in this repository are all authored by one placeholder identity, `byre contributors
-<noreply@example.com>`. That identity is honest about *what* produced a change and useless about
-*who*: the log cannot tell a review from an implementation, and a mistake cannot be routed back to
-the role that made it. Everything since carries the role account instead, which is what makes the log
-readable, and what makes a sign-off mean something: the trailer has to name that account (see
-[CONTRIBUTING](../CONTRIBUTING.md)).
+The first 24 commits in this repository are authored by one placeholder identity, `keypod contributors
+<noreply@example.com>` — the name the project had before the rename — and one later commit carries its
+successor, `byre contributors <noreply@example.com>`. Those identities are honest about *what* produced
+a change and useless about *who*: the log cannot tell a review from an implementation, and a mistake
+cannot be routed back to the role that made it.
+
+Since the sign-off policy the log carries a role account instead, which is what makes it readable and
+what makes a sign-off mean something: the trailer has to name that account (see
+[CONTRIBUTING](../CONTRIBUTING.md)). The exception is 13 commits authored as
+`xiyuera <admin@example.invalid>` before the per-role accounts were introduced — they are in the
+history, they are not a pattern to copy.
 
 ## One account per role
 

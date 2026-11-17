@@ -353,6 +353,9 @@ done
 [ "$bad" = 0 ]
 ```
 
+Rewriting a commit can drop the trailer: `git commit --amend` keeps the message, but a rebase that
+rewords it does not, so re-check `git log -1 --format=%B` after either.
+
 A commit passes when its message carries a `Signed-off-by:` line naming the address that same commit
 was authored with. `-s` writes that line from the author identity, so what this mostly catches is not
 a forgotten flag but an identity that answers to nobody: `x <x@x>`, the shared placeholder account
@@ -384,6 +387,10 @@ for `main` checks it like any other commit.
   the contributors' trailers does not.
 - **A plain merge** writes the unsigned merge commit described above and turns `dco` red on `main`.
 
+Branch protection only gates the four `(pull_request)` contexts — `ci / test`, `ci / dco`, `ci / i18n`,
+`ci / manifests`. So "rebase, don't merge" keeps `main`'s history signed; it does not stop anyone from
+pressing the merge button. What catches that is the push run for `main`, after the fact.
+
 A merge commit that carries its own sign-off would pass, but making one means writing to `main`
 directly, which the branch protection forbids — that is an operations action, not a part of a normal
 contribution.
@@ -391,19 +398,23 @@ contribution.
 ### Before the policy
 
 Sign-off became policy in the commit that added the licence and NOTICE files (find it with
-`git log -S 'Developer Certificate of Origin' -- CONTRIBUTING.md`). The commits before it were
-authored under a shared placeholder identity and stay unsigned. A sign-off is a statement
-the author makes, so it cannot be made on their behalf now, and re-signing them would rewrite every
-hash below that point — the published tags, the release assets and the anchors in earlier
-verification records all refer to the old ones. A build from before the policy is recognisable from
-the `commit` recorded in its `build-info.txt`.
+`git log -S 'Developer Certificate of Origin' -- CONTRIBUTING.md`). The 31 commits before it are all
+unsigned. Most were authored under a shared placeholder identity — `keypod contributors`, the name the
+project had before the rename, plus one later `byre contributors`; the other seven predate the naming
+rule and carry early role accounts. A sign-off is a statement the author makes, so it cannot be made
+on their behalf now, and re-signing them would rewrite every hash below that point — the published
+tags, the release assets and the anchors in earlier verification records all refer to the old ones. A
+build from before the policy is recognisable from the `commit` recorded in its `build-info.txt`.
 
-Those commits are only harmless while a run does not reach them. A branch that merges `main` into it
-pulls the unsigned history into the range and fails, so rebase onto the merge target instead, and
-check what a pull request will see before pushing:
+That history matters at run time, not just for tidiness. The counts and the reason they are not being
+rewritten are in [`What main's history already looks like`](#what-mains-history-already-looks-like)
+above; what follows from them here is that a branch which merges `main` into it pulls the unsigned
+history into the range and fails. Rebase onto the merge target instead, and check what a pull request
+will see before pushing:
 
 ```sh
-git rev-list --count "$(git merge-base HEAD origin/main)"..HEAD
+git rev-list --count "origin/main..HEAD"
 ```
 
-Put any other range in place of `$base..HEAD` in the check above to see what the gate says about it.
+`origin/main..HEAD` rather than a `merge-base` range on purpose: once the branch has merged `main`,
+the merge base moves and the count understates what the run actually checks.
