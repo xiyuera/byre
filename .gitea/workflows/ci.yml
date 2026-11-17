@@ -66,3 +66,12 @@ jobs:
             fi
           done
           [ "$bad" = 0 ]
+
+  i18n:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A translation that is older than the English it claims to translate is worse than no translation:
+      # a reader trusts it. Missing translations are only listed, because "not yet" is a plan, not a lie.
+      - name: Translations are not stale
+        run: ./scripts/check-i18n.sh

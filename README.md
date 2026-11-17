@@ -1,5 +1,7 @@
 # byre
 
+**English** · [中文](README.zh-CN.md)
+
 **A lease-based SSH gateway.** A client presents a public key; it gets one instance for the whole
 session, and that instance is held exclusively until the lease expires.
 
@@ -8,7 +10,7 @@ session, and that instance is held exclusively until the lease expires.
 > non-default client identity (see `docs/acceptance/`). Still single-replica and without an automated
 > e2e gate; hardening is M5.
 
-> Renamed from `byre` (see `docs/rename-to-byre.md`). Not affiliated with, endorsed by, or derived from
+> Renamed from `keypod` (see `docs/rename-to-byre.md`). Not affiliated with, endorsed by, or derived from
 > any same-named project; the name is a cowshed, and the licence grants no trademark rights.
 
 ## This is a program, not a library
