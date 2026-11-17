@@ -9,6 +9,21 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-17
+
+First release that is safe to publish. Two things make it breaking for existing installations, both
+documented in `docs/rename-to-byre.md`:
+
+### Changed (breaking)
+- The project, module, binary, manifests, namespace and annotation prefix are **byre** (`byre.io/*`).
+  An existing `keypod` deployment keeps running untouched; moving it is the cutover in the rename document.
+- The gateway's own ServiceAccount now lives beside the cross-namespace Role the manifests always needed.
+
+### Added
+- `NOTICE`, `THIRD_PARTY_NOTICES.md`, DCO, `CHANGELOG.md`, `docs/release.md`, `docs/README.md`, release pipeline.
+- `docs/adr/0006`: the product owns host key persistence (PVC, generated on first start).
+
+
 ### Added
 - `NOTICE` and `THIRD_PARTY_NOTICES.md` with the licence of every Go module and the digest of the licence
   file it was read from (Apache-2.0 §4(d) requires the `yaml.v2`/`yaml.v3` attribution to travel).
