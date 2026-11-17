@@ -7,7 +7,7 @@ Not on a calendar. A version exists when a user-visible thing changed:
 | change | bump | example |
 |---|---|---|
 | a bug a user could hit | patch | host key changed on every restart |
-| a new config field, flag, backend kind, or behaviour | minor | `provider.claim_kind` |
+| a new config field, provision shape, flag or behaviour | minor | `provision: workloads` |
 | a breaking change to the config file, annotations or metrics | major (or `v0.x` minor while pre-1.0) | — |
 
 Two patches in one hour is normal if two bugs are found in one hour — the problem the first releases had

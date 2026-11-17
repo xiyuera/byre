@@ -5,14 +5,15 @@ Ordered by value, not by effort. Nothing here is promised for a version.
 ## Done (M0–M4)
 
 Skeleton and ADRs, SSH front end (session/exec/`-L`/`-R`), lease manager with `ttl`/`grace`, warm pool,
-`static` and `kubernetes` (pod + declarative claim) drivers, adoption after restart, `/healthz` and
-`/metrics`, and a real-cluster acceptance run with a non-default client identity.
+the four provision shapes (`claims`, `workloads`, `endpoints`, `command`), adoption after restart,
+`/healthz` and `/metrics`, and a real-cluster acceptance run with a non-default client identity.
 
 ## v0.1 — the lease works (M1–M3)
 
 - SSH front end: publickey auth, session/exec, `-L`, `-R`, sftp passthrough.
 - Lease manager with `ttl`/`grace`/renewal and the identity table.
-- Kubernetes backend: `sandbox-claim` and `pod` kinds; warm pool refill.
+- Kubernetes backends: `claims` (a controller hands one over) and `workloads` (we create the pod);
+  warm pool refill.
 - Startup adoption of live instances; `/metrics` with real counters.
 
 ## v0.2 — usable by someone else (M4–M5)
@@ -40,11 +41,15 @@ Both need one shared property: *the client must be able to find the replica that
 Options: a headless Service with client-side hashing on the fingerprint, or a consistent-hash ring in
 DNS. This is the part that will need the most design.
 
-## v0.4 — more drivers
+## v0.4 — more infrastructure
 
 - `docker` (local sockets, development).
-- `remote-kubernetes` (a second cluster as a capacity extension).
-- A driver for machines behind a jump host (the gateway dials through, identity preserved).
+- A second Kubernetes cluster as capacity extension, and machines behind a jump host (the gateway dials
+  through, identity preserved).
+
+Both of those are `provision: command` material today — a program that creates the instance and prints
+its address — which is the point of the escape hatch: new infrastructure should not require a new driver
+unless it also needs a new *shape*.
 
 ## Deliberately not planned
 

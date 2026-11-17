@@ -1,6 +1,6 @@
 # ADR-0003 — Backends are declared in configuration, not compiled in
 
-- Status: accepted
+- Status: accepted; the schema in this record was superseded by ADR-0007
 - Date: 2026-11-17
 - Deciders: maintainers
 
@@ -38,6 +38,11 @@ backends:
       ready_timeout: 120s
     ssh: { port, user, private_key, host_key_policy }
 ```
+
+This is the schema as decided in this record. ADR-0007 later replaced `type` + `provider.kind` with a
+single `provision` axis and renamed two of the claim fields; the decision in *this* record — that a
+backend is declared in configuration and nothing environment-specific lives in the source — still
+stands.
 
 Design rules that follow from this:
 
