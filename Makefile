@@ -10,7 +10,7 @@ LDFLAGS := -s -w \
 	-X keypod/internal/version.Commit=$(COMMIT) \
 	-X keypod/internal/version.BuildDate=$(BUILD_DATE)
 
-.PHONY: all build test test-race lint fmt vet tidy clean e2e check-config image image-push help
+.PHONY: all build test test-race lint fmt vet tidy clean e2e check-config render image image-push help
 
 all: build
 
@@ -50,6 +50,15 @@ e2e:
 IMAGE          ?= keypod:$(VERSION)
 # Override with your own registry: make image-push IMAGE_REGISTRY=registry.example.com/team
 IMAGE_REGISTRY ?= localhost:5000
+
+# Renders deploy/ with the same engine `kubectl apply -k` uses. Catches a broken kustomization before
+# a cluster sees it; skipped with a warning when kustomize is not installed.
+render:
+	@if command -v kustomize >/dev/null 2>&1; then \
+		kustomize build deploy/ >/dev/null && echo "deploy/ renders"; \
+	else \
+		echo "kustomize not installed - skipped (kubectl kustomize deploy/ would do the same)"; \
+	fi
 
 image:
 	docker build \
