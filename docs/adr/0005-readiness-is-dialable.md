@@ -54,3 +54,20 @@ lets a failure surface (the lease then drops to idle and is reclaimed).
 | DNS lookup as the readiness signal | fake-IP resolvers make non-existent names resolve; measured, not hypothetical |
 | sleep a fixed 5 s after the object appears | guesses the controller's latency; too short on cold starts, wasteful on warm ones |
 | retry the dial in the SSH client instead | moves the wait into every connection, and hides a broken instance behind session timeouts |
+
+## Amendment — 2026-11-17 (v0.1.3): a TCP connect is necessary but not sufficient
+
+A port that accepts connections is not an SSH server. On the deployed cluster the probe reported ready
+for an instance whose sshd had not finished starting: the socket was open (systemd socket activation), the
+banner never came, and every real session died with `connection reset` — a failure the probe described as
+success.
+
+The probe is now a **banner read**: connect, read the first line, require it to start with `SSH-2.`. Only
+the first line is considered (RFC 4253 allows pre-banner lines, but nothing in this deployment emits them
+and accepting arbitrary leading lines lets a chatty non-SSH peer pass). A dial error and a broken peer are
+counted separately: `byre_handshake_fail_total` covers the second, which used to be invisible.
+
+Everything else in this ADR is unchanged: candidates and their order, the 250 ms poll, the
+`ready_timeout`, and "destroy the instance if nothing answers". The probe stays in the backend
+(`sshBannerProbe` in `internal/backend/kubernetes.go`), and its tests use a real socket — a stub would
+have reproduced the bug the old probe had.

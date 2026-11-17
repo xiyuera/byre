@@ -54,7 +54,10 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
           readinessProbe:
-            httpGet: { path: /healthz, port: health }
+            # /readyz answers "can this process provision", /healthz only "is it alive" (ADR-0011).
+            # With pool_size > 0 and a backend that cannot create instances, this stays red and the
+            # rollout does not go green — which is the point.
+            httpGet: { path: /readyz, port: health }
             periodSeconds: 5
             failureThreshold: 3
           resources:

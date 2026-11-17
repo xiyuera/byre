@@ -13,12 +13,14 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"syscall"
 	"time"
 
 	"byre/internal/backend"
 	"byre/internal/config"
 	"byre/internal/lease"
+	"byre/internal/metrics"
 	"byre/internal/sshfront"
 	"byre/internal/version"
 )
@@ -62,6 +64,7 @@ func main() {
 		logger.Error("configuration rejected", "error", err)
 		os.Exit(2)
 	}
+	poolSize := cfg.Lease.PoolSizeValue()
 	logger.Info("configuration accepted",
 		"listen", cfg.Listen,
 		"host_key", cfg.HostKey,
@@ -69,10 +72,15 @@ func main() {
 		"identities", len(identities),
 		"ttl", cfg.Lease.TTL.String(),
 		"grace", cfg.Lease.Grace.String(),
-		"pool_size", cfg.Lease.PoolSize,
+		"pool_size", poolSize,
 		"version", version.String(),
 	)
 	if *checkConfig {
+		// Warnings are printed and do not fail the check: an ephemeral host key is legal (ADR-0006),
+		// it is just wrong for a deployment, and silence is how it reached one.
+		for _, w := range cfg.Warnings() {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+		}
 		return
 	}
 
@@ -85,7 +93,7 @@ func main() {
 	mgr.SetLogger(logger)
 	for name, drv := range backends {
 		if p, ok := drv.(lease.Pooler); ok {
-			mgr.SetPool(name, cfg.Lease.PoolSize, p)
+			mgr.SetPool(name, poolSize, p)
 		}
 	}
 
@@ -100,7 +108,7 @@ func main() {
 	}
 
 	go mgr.RunReaper(ctx, 30*time.Second)
-	if cfg.Lease.PoolSize > 0 {
+	if poolSize > 0 {
 		go mgr.RunWarmer(ctx, 15*time.Second)
 		// Warming is best effort: a cold cluster must not stop the gateway from accepting sessions.
 		go func() {
@@ -136,6 +144,19 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintf(w, "ok %s\n", version.String())
+	})
+	// /healthz answers "the process is alive"; it stays 200 while the gateway cannot provision anything,
+	// which is exactly the failure an operator needs to see. /readyz is the one that goes red: a gateway
+	// with warm capacity configured but no way to create instances must not receive traffic.
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fs := mgr.FillState()
+		if !fs.CanProvision() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintf(w, "not ready: pool target %v, warm %v, last error %v\n", fs.Targets, fs.Warm, fs.LastErr)
+			return
+		}
+		fmt.Fprintf(w, "ready: pool target %v, warm %v\n", fs.Targets, fs.Warm)
 	})
 	mux.Handle("/metrics", metricsHandler(mgr, backends, front))
 	health := &http.Server{Addr: ":8099", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
@@ -180,24 +201,83 @@ type unreachableCounter interface {
 // connection, and the only trace was a log line nobody was tailing.
 func writeMetrics(w io.Writer, mgr *lease.Manager, backends map[string]backend.Backend, front unreachableCounter) {
 	active, idle := mgr.Stats()
+	fs := mgr.FillState()
 	names := make([]string, 0, len(backends))
 	for name := range backends {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
-	fmt.Fprintf(w, "# HELP byre_up Whether the process is running.\n# TYPE byre_up gauge\nbyre_up 1\n")
+	fmt.Fprint(w, "# HELP byre_up Whether the process is running.\n# TYPE byre_up gauge\nbyre_up 1\n")
+	fmt.Fprintf(w, "# HELP byre_build_info Build metadata of this binary.\n# TYPE byre_build_info gauge\n"+
+		"byre_build_info{version=%q,commit=%q,build_date=%q} 1\n",
+		version.Version, version.Commit, version.BuildDate)
+
 	fmt.Fprintf(w, "# HELP byre_leases_active Leases with at least one open connection.\n# TYPE byre_leases_active gauge\nbyre_leases_active %d\n", active)
 	fmt.Fprintf(w, "# HELP byre_leases_idle Leases without connections, waiting to be reaped.\n# TYPE byre_leases_idle gauge\nbyre_leases_idle %d\n", idle)
 	fmt.Fprintf(w, "# HELP byre_leases_adopted Leases recovered from existing instances at startup.\n# TYPE byre_leases_adopted counter\nbyre_leases_adopted %d\n", mgr.AdoptedTotal())
+	fmt.Fprintf(w, "# HELP byre_leases_adopted_pending Adopted leases no connection has picked up yet; add it to leases_active when comparing across a restart.\n# TYPE byre_leases_adopted_pending gauge\nbyre_leases_adopted_pending %d\n", mgr.AdoptedPending())
+	fmt.Fprintf(w, "# HELP byre_oldest_idle_lease_age_seconds Age of the oldest lease without a connection.\n# TYPE byre_oldest_idle_lease_age_seconds gauge\nbyre_oldest_idle_lease_age_seconds %g\n", mgr.OldestIdleAge().Seconds())
 	fmt.Fprintf(w, "# HELP byre_lease_dead_instance_total Leases dropped because the instance behind them no longer exists.\n# TYPE byre_lease_dead_instance_total counter\nbyre_lease_dead_instance_total %d\n", mgr.DeadInstancesTotal())
 	fmt.Fprintf(w, "# HELP byre_lease_liveness_errors_total Existence checks that could not answer; those leases were kept.\n# TYPE byre_lease_liveness_errors_total counter\nbyre_lease_liveness_errors_total %d\n", mgr.LivenessErrorsTotal())
 	if front != nil {
 		fmt.Fprintf(w, "# HELP byre_lease_unreachable_total Dial failures against instances that still exist.\n# TYPE byre_lease_unreachable_total counter\nbyre_lease_unreachable_total %d\n", front.UnreachableTotal())
 	}
+
+	fmt.Fprint(w, "# HELP byre_pool_target Warm instances this backend is trying to hold; 0 means no pool.\n# TYPE byre_pool_target gauge\n")
 	for _, name := range names {
-		fmt.Fprintf(w, "byre_pool_warm{backend=%q} %d\n", name, mgr.WarmSize(name))
+		fmt.Fprintf(w, "byre_pool_target{backend=%q} %d\n", name, fs.Targets[name])
 	}
+	fmt.Fprint(w, "# HELP byre_pool_warm Idle instances held for a backend.\n# TYPE byre_pool_warm gauge\n")
+	for _, name := range names {
+		fmt.Fprintf(w, "byre_pool_warm{backend=%q} %d\n", name, fs.Warm[name])
+	}
+	fmt.Fprint(w, "# HELP byre_pool_inflight Instance creations in progress.\n# TYPE byre_pool_inflight gauge\n")
+	for _, name := range names {
+		fmt.Fprintf(w, "byre_pool_inflight{backend=%q} %d\n", name, fs.Inflight[name])
+	}
+
+	fill := metrics.FillDurations()
+	fmt.Fprint(w, "# HELP byre_pool_fill_seconds Duration of one pool fill, including failed creations.\n# TYPE byre_pool_fill_seconds histogram\n")
+	for _, b := range fill.Buckets {
+		fmt.Fprintf(w, "byre_pool_fill_seconds_bucket{le=%q} %d\n", formatFloat(b.LE), b.Count)
+	}
+	fmt.Fprintf(w, "byre_pool_fill_seconds_sum %g\nbyre_pool_fill_seconds_count %d\n", fill.Sum, fill.Count)
+
+	fmt.Fprintf(w, "# HELP byre_pool_fill_errors_total Instance creations that failed during a fill.\n# TYPE byre_pool_fill_errors_total counter\nbyre_pool_fill_errors_total %d\n", metrics.PoolFillErrorsTotal())
+	fmt.Fprintf(w, "# HELP byre_handshake_fail_total Readiness probes where the port answered but SSH did not.\n# TYPE byre_handshake_fail_total counter\nbyre_handshake_fail_total %d\n", metrics.HandshakeFailTotal())
+	fmt.Fprintf(w, "# HELP byre_release_errors_total Release attempts that failed (one release may count several times).\n# TYPE byre_release_errors_total counter\nbyre_release_errors_total %d\n", metrics.ReleaseErrorsTotal())
+
+	fmt.Fprint(w, "# HELP byre_acquire_total Acquisitions by backend and outcome: reuse, pool, created or error.\n# TYPE byre_acquire_total counter\n")
+	for _, t := range metrics.AcquireTotals() {
+		fmt.Fprintf(w, "byre_acquire_total{backend=%q,result=%q} %d\n", t.Backend, t.Result, t.Count)
+	}
+
+	if rss, ok := residentMemory(); ok {
+		fmt.Fprintf(w, "# HELP byre_process_resident_memory_bytes Resident set size, from /proc/self/statm.\n# TYPE byre_process_resident_memory_bytes gauge\nbyre_process_resident_memory_bytes %d\n", rss)
+	}
+}
+
+// formatFloat renders a bucket bound the way Prometheus expects: +Inf, not +Infinity.
+func formatFloat(f float64) string {
+	if f > 1e300 {
+		return "+Inf"
+	}
+	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
+// residentMemory reads the RSS from /proc. The memory limit in the manifests is judged by this number and
+// by nothing else, so it has to be exported rather than inferred from a container runtime.
+func residentMemory() (int64, bool) {
+	b, err := os.ReadFile("/proc/self/statm")
+	if err != nil {
+		return 0, false
+	}
+	var size, resident int64
+	if _, err := fmt.Sscanf(string(b), "%d %d", &size, &resident); err != nil {
+		return 0, false
+	}
+	return resident * int64(os.Getpagesize()), true
 }
 
 // buildBackends instantiates one driver per configured backend. dryRun skips cluster clients so that
@@ -236,6 +316,7 @@ func buildBackends(cfg *config.Config, logger *slog.Logger, dryRun bool) (map[st
 					Resource:      b.Provider.Resource,
 					ObjectKind:    b.Provider.ObjectKind,
 					EndpointField: b.Provider.EndpointField,
+					AllowRoot:     b.Provider.RunAsRoot,
 				},
 				SSHUser:       b.SSH.User,
 				SSHPrivateKey: b.SSH.PrivateKey,

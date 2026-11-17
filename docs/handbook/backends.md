@@ -70,16 +70,19 @@ controller's template must do it, and for `command` your program must do it befo
 
 ## Readiness: one rule, two implementations
 
-Readiness answers "may I hand this to a client yet", and the answer is always "an address accepted a
-TCP connection". Never "a status field exists" — a claim's `status.sandbox.serviceFQDN` is written by
-the controller seconds before the Service's DNS record resolves, and on a fake-IP network a DNS lookup
-succeeds for names that do not exist (ADR-0005).
+Readiness answers "may I hand this to a client yet", and for a `claims` backend the answer is always "an
+address answered with a complete SSH banner". Never "a status field exists" — a claim's
+`status.sandbox.serviceFQDN` is written by the controller seconds before the Service's DNS record resolves,
+and on a fake-IP network a DNS lookup succeeds for names that do not exist (ADR-0005). Never merely "the
+port accepted a connection" either: a socket-activated sshd accepts before it can speak, and a peer that
+sends part of a banner and stops is exactly the half-started process the probe exists to catch (ADR-0005
+amendment).
 
 | provision | readiness | interval | timeout |
 |---|---|---|---|
 | `endpoints` | none — the endpoint is used as printed | — | — |
 | `workloads` | pod has a `podIP` **and** `PodReady`, phase not `Failed` | 250 ms | `provider.ready_timeout` (120s) |
-| `claims` | TCP connect to `:22` on the first address that answers | 250 ms | `provider.ready_timeout` (120s) |
+| `claims` | complete SSH banner (`SSH-2.` line, CRLF-terminated) on the first address that answers | 250 ms | `provider.ready_timeout` (120s) |
 | `command` | none — `addr` is used as printed | — | `command.timeout` applies to the program |
 
 For `claims`, the candidates are tried in this order: the path in `provider.endpoint_field` (default

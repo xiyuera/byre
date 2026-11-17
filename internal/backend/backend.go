@@ -17,6 +17,12 @@ type Instance struct {
 	// It ends up in logs and in annotations, so it must not contain identity material.
 	ID string
 
+	// UID is the identity of the *object*, not of its name. Names are reused: a pod called
+	// byre-a1b2c3 that is deleted and recreated is a different instance with different state, and a
+	// lease that remembers only the name would hand the new object to a client that expects the old
+	// one. Backends that have no such identity (a static host list) leave it empty.
+	UID string
+
 	// Addr is host:port the gateway dials.
 	Addr string
 
