@@ -25,6 +25,24 @@ The image is a static binary on Alpine; nothing else is installed. The container
 drops all capabilities and keeps a read-only root filesystem, with `$HOME` on an emptyDir because
 `accept-new` host keys are appended to `$HOME/.ssh/known_hosts`.
 
+The gateway's **own** SSH host key lives on the `keypod-hostkey` PVC (`host_key:
+/var/lib/keypod/hostkey/id_ed25519`). On first start the file does not exist and the gateway creates it,
+logging the fingerprint (`generated a new host key and persisted it`). Distribute that fingerprint to
+clients; from then on restarts keep the same identity.
+
+To supply your own key instead, mount a Secret at that path — an existing file is never rewritten.
+
+Rotation (deliberate):
+
+```sh
+kubectl -n keypod-system scale deploy/keypod --replicas=0
+kubectl -n keypod-system exec <debug-pod> -- rm /var/lib/keypod/hostkey/id_ed25519   # or replace the file
+kubectl -n keypod-system scale deploy/keypod --replicas=1
+kubectl -n keypod-system logs deploy/keypod | grep fingerprint                       # publish the new one
+# on every client:
+ssh-keygen -R '[<gateway-host>]:<port>'
+```
+
 If the build host cannot reach a base-image registry, build the binary first and use the prebuilt
 variant, which pulls nothing (`FROM scratch`):
 

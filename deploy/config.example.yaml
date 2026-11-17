@@ -5,9 +5,11 @@
 
 listen: ":2222"
 
-# SSH host key clients pin. Mount it from a Secret; without it the gateway generates an ephemeral key
-# and every restart changes the fingerprint (breaking strict clients).
-host_key: /etc/keypod/hostkey/id_ed25519
+# SSH host key clients pin. Point this at durable storage: the gateway creates the key on first start
+# if the file is absent, and reuses it afterwards. With the bundled manifests that is the keypod-hostkey
+# PVC; to supply your own key, mount a Secret here instead. Leaving it empty gives an ephemeral key,
+# which is only acceptable for tests (every restart changes the fingerprint).
+host_key: /var/lib/keypod/hostkey/id_ed25519
 
 lease:
   # Must exceed the client's idle timeout (the reference client idles out at 300s).

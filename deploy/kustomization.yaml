@@ -11,6 +11,7 @@ resources:
   - namespace.yaml
   - serviceaccount.yaml
   - rbac.yaml
+  - hostkey-pvc.yaml
   - deployment.yaml
   - service.yaml
 

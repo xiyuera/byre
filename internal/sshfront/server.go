@@ -11,11 +11,13 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -303,21 +305,59 @@ func DialInstance(ctx context.Context, in backend.Instance) (*ssh.Client, error)
 	return ssh.NewClient(c, chans, reqs), nil
 }
 
+// loadOrCreateHostKey returns the key clients pin.
+//
+// Three cases, each deliberate:
+//   - path == "":            ephemeral key, generated in memory. Fine for tests, wrong for a deployment:
+//     the fingerprint changes on every restart, so strict clients stop connecting.
+//   - path exists:           load it; the fingerprint is stable across restarts, as clients expect.
+//   - path missing:          generate and persist it, so a first install works without a manual step.
+//     The path must be on durable storage (a volume); on an emptyDir this degrades to the first case.
 func loadOrCreateHostKey(path string) (ssh.Signer, error) {
 	if path == "" {
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
 			return nil, fmt.Errorf("generate host key: %w", err)
 		}
+		slog.Warn("no host_key configured: using an ephemeral host key; clients cannot pin this gateway")
 		return ssh.NewSignerFromKey(priv)
 	}
+
 	b, err := os.ReadFile(path)
-	if err != nil {
+	switch {
+	case err == nil:
+		signer, perr := ssh.ParsePrivateKey(b)
+		if perr != nil {
+			return nil, fmt.Errorf("parse host key %s: %w", path, perr)
+		}
+		return signer, nil
+	case !errors.Is(err, os.ErrNotExist):
 		return nil, fmt.Errorf("read host key %s: %w", path, err)
 	}
-	signer, err := ssh.ParsePrivateKey(b)
+
+	// First start on this volume: create the key and write it down before using it.
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("parse host key %s: %w", path, err)
+		return nil, fmt.Errorf("generate host key: %w", err)
 	}
+	block, err := ssh.MarshalPrivateKey(priv, "keypod-host")
+	if err != nil {
+		return nil, fmt.Errorf("marshal host key: %w", err)
+	}
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("create host key directory %s: %w", dir, err)
+		}
+	}
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
+		return nil, fmt.Errorf("persist host key %s: %w", path, err)
+	}
+	signer, err := ssh.ParsePrivateKey(pem.EncodeToMemory(block))
+	if err != nil {
+		return nil, fmt.Errorf("parse freshly written host key: %w", err)
+	}
+	slog.Warn("generated a new host key and persisted it",
+		"path", path, "fingerprint", ssh.FingerprintSHA256(signer.PublicKey()),
+		"note", "clients that pinned a previous key must be updated")
 	return signer, nil
 }

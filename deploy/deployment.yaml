@@ -69,8 +69,7 @@ spec:
             - name: home
               mountPath: /home/keypod
             - name: host-key
-              mountPath: /etc/keypod/hostkey
-              readOnly: true
+              mountPath: /var/lib/keypod/hostkey
       volumes:
         - name: config
           configMap:
@@ -82,6 +81,5 @@ spec:
         - name: home
           emptyDir: {}
         - name: host-key
-          secret:
-            secretName: keypod-host-key
-            defaultMode: 0400
+          persistentVolumeClaim:
+            claimName: keypod-hostkey

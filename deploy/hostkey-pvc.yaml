@@ -1,0 +1,13 @@
+# The gateway's SSH host key lives here. It must outlive the process, or every restart changes the
+# fingerprint and strict clients stop connecting. ReadWriteOnce is enough: v1 runs a single replica.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: keypod-hostkey
+  labels:
+    app.kubernetes.io/name: keypod
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Mi
