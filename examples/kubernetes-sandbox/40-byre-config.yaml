@@ -1,0 +1,38 @@
+# Gateway config for the kubernetes starter kit.
+#
+# `provision: claims` means: instances come from a CRD, not from a CLI. The provider block
+# names the CRD and where to read the address from; byre does not ship knowledge of any
+# particular controller.
+listen: ":2222"
+
+host_key: /var/lib/byre/hostkey/id_ed25519
+
+lease:
+  ttl: 10m
+  grace: 30s
+
+backends:
+  - name: sandbox
+    provision: claims
+    namespace: byre
+    provider:
+      warm_pool: byre-sandbox
+      api_group: extensions.agents.x-k8s.io
+      api_version: v1beta1
+      resource: sandboxclaims
+      object_kind: SandboxClaim
+      # Where the endpoint lives on the object. Field names, not a template string.
+      endpoint_field: ["status", "sandbox", "serviceFQDN"]
+      ready_timeout: 180s
+    ssh:
+      port: 22
+      user: sandbox
+      private_key: /etc/byre/keys/id_key
+      # Pods get a fresh host key each time and the claim is deleted on release, so pinning
+      # buys nothing here. Keep `strict` for long-lived hosts (see docs/handbook/backends.md).
+      host_key_policy: accept-new
+
+identities:
+  # Replace with your own key's fingerprint (`ssh-keygen -lf ~/.ssh/id_ed25519.pub`).
+  - fingerprint: "SHA256:REPLACE_ME"
+    backend: sandbox

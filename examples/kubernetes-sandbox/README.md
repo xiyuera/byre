@@ -1,90 +1,116 @@
-# Example: a declarative, pooled sandbox backend
+# Kubernetes starter kit
 
-Use this when the cluster already has a CRD that turns a declarative object into a running workload with
-a stable endpoint (the reference deployments use one; any equivalent works). The gateway only needs the
-two values it cannot invent: **which template to instantiate** and **how long to wait for it**.
+byre in front of a Kubernetes-native sandbox controller. The gateway turns "this SSH key
+connected" into "create/extend/release one claim for it"; the controller does the rest.
 
-## 1. A template (cluster-specific)
+The controller used here is [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox)
+(`extensions.agents.x-k8s.io/v1beta1`). byre does not implement it and does not depend on it
+in code — the CRD group, version, kind and endpoint field are all configuration, so a
+different controller with the same shape works with no rebuild.
 
-```yaml
-# examples/kubernetes-sandbox/template.yaml
-apiVersion: <your.crd.group>/v1beta1
-kind: <SandboxTemplate>
-metadata:
-  name: sandbox
-spec:
-  podTemplate:
-    spec:
-      containers:
-        - name: sandbox
-          image: "<registry>/<sshd-image>:<tag>"
-          ports:
-            - containerPort: 22
-  service: {}
-  # four policies: create/delete/expiry/idle, per your CRD's schema
+```mermaid
+flowchart TB
+    U[your ssh client] -->|":2222"| B[byre gateway]
+    B -->|create / get / delete| C[SandboxClaim]
+    C --> T[SandboxTemplate]
+    C --> P[SandboxWarmPool]
+    P --> S[pod: sshd]
+    B -->|"ssh, pool key"| S
 ```
 
-Those angle-bracket placeholders are not valid YAML until you replace them — this is a cluster manifest
-to apply with `kubectl`, not a byre configuration file, so `-check-config` has nothing to say about it.
+## Prerequisites
 
-The template must produce a workload that:
+1. **The controller installed.** Its CRDs must serve `SandboxTemplate`, `SandboxWarmPool` and
+   `SandboxClaim` in `extensions.agents.x-k8s.io/v1beta1`. Install it per its own docs;
+   nothing here reimplements it.
+2. **A sandbox image that runs sshd.** The quickest path is the one from the docker kit:
 
-- listens on 22 and accepts the gateway's pool key (mounted or injected by your template);
-- has a stable, resolvable endpoint for as long as the object exists;
-- needs no manual `kubectl port-forward` — the gateway dials it directly from inside the cluster.
+   ```sh
+   docker build -f ../docker-sandbox/Dockerfile.sandbox \
+     -t <your-registry>/byre-sandbox:latest ../docker-sandbox
+   docker push <your-registry>/byre-sandbox:latest
+   ```
 
-## 2. A pool (optional but recommended)
+   then edit `image:` in `10-sandbox-template.yaml`. Any image with sshd on 22 and the pool
+   key in `authorized_keys` works.
+3. **A pool key pair.** `../docker-sandbox/scripts/keys.sh` generates one; the gateway keeps
+   the private half, the image bakes in the public half.
 
-```yaml
-# examples/kubernetes-sandbox/warmpool.yaml
-apiVersion: <your.crd.group>/v1beta1
-kind: <SandboxWarmPool>
-metadata:
-  name: sandbox
-spec:
-  replicas: 2      # keep small: each warm instance costs memory while it waits
-  templateRef:
-    name: sandbox
-```
-
-Claims are then created against `warm_pool: sandbox`, which is faster than cold-creating a template.
-
-The claim's status must expose the SSH endpoint at `endpoint_field` (default
-`status.sandbox.serviceFQDN`). A bare host is accepted and gets `:22` appended. If your API puts the
-address elsewhere, change the path — no code change is needed.
-
-## 3. Point byre at it
-
-The block below is a **fragment**: it goes under `backends:` in a complete configuration, which also needs
-`listen`, `host_key` and an `identities:` list (see [`../local-quickstart/config.yaml`](../local-quickstart/config.yaml)).
-
-```yaml
-backends:
-  - name: claims
-    provision: claims
-    namespace: "<namespace>"
-    provider:
-      template: sandbox
-      warm_pool: sandbox
-      ready_timeout: 120s
-      api_group: "<crd-group>"          # e.g. your.sandbox.api
-      api_version: "<crd-version>"
-      resource: "<plural-resource>"
-      object_kind: "<Kind>"
-      endpoint_field: ["status", "sandbox", "serviceFQDN"]
-    ssh:
-      user: "<remote-user>"
-      private_key: /etc/byre/keys/id_key
-      host_key_policy: accept-new
-```
-
-## 4. Verify
+## Apply
 
 ```sh
-byre -config config.yaml -check-config       # schema and references
-kubectl -n <namespace> get <sandboxclaims> -w  # one object appears per identity while leased
-ssh -i <client-key> -p 2222 <user>@<gateway>   # auth, then hostname
+kubectl create namespace byre
+
+kubectl -n byre create secret generic byre-pool-key \
+  --from-file=id_key=../docker-sandbox/keys/id_key
+
+ssh-keygen -lf ~/.ssh/id_ed25519.pub     # SHA256:... -> identities[0].fingerprint in 40-byre-config.yaml
+kubectl -n byre create configmap byre-config \
+  --from-file=config.yaml=40-byre-config.yaml
+
+kubectl apply -f 10-sandbox-template.yaml
+kubectl apply -f 20-sandbox-warmpool.yaml
+kubectl apply -f 30-rbac.yaml
+kubectl apply -f 50-byre-deployment.yaml
+
+kubectl -n byre port-forward svc/byre 2222:2222
 ```
 
-Two connections in a row must print the **same** hostname (ADR-0002). If they differ, the lease is being
-keyed on the connection rather than the identity.
+Then, from another shell:
+
+```sh
+ssh -o StrictHostKeyChecking=no -p 2222 -i ~/.ssh/id_ed25519 sandbox@127.0.0.1 hostname
+```
+
+`verify.sh` runs that twice and asserts both land on the same instance.
+
+## What each file does
+
+| file | why it exists |
+|---|---|
+| `10-sandbox-template.yaml` | the pod spec every sandbox pod gets; `readOnlyRootFilesystem` + memory-backed `/run` because sshd needs nothing else |
+| `20-sandbox-warmpool.yaml` | pre-started pods so the first connection is fast |
+| `30-rbac.yaml` | a Role that can only create/get/list/watch/delete `sandboxclaims` — not the template, not the pool |
+| `40-byre-config.yaml` | `provision: claims` + where the endpoint lives |
+| `50-byre-deployment.yaml` | one replica, `Recreate`: leases are in memory, two copies would hand out independent sandboxes for one key |
+| `verify.sh` | two connections, one instance |
+
+## Two things that bite
+
+**`sandboxTemplateRef`, not `templateRef`.** The eager form is accepted by
+`kubectl --dry-run=server` and then ignored by the controller: the pool starts with zero warm
+pods and nothing reports an error.
+
+**`replicas: 0` is meaningful.** It means "no warm capacity, create on demand", not "unset" —
+an operator shrinking the pool before rotating the pool key depends on that.
+
+## Using a different controller
+
+Nothing in byre knows the name `SandboxClaim`. To point it at another controller, change only
+the `provider:` block in `40-byre-config.yaml`:
+
+```yaml
+    provider:
+      warm_pool: <pool-object-name>
+      api_group: <your.crd.group>
+      api_version: <version>
+      resource: <plural-resource>            # what the REST path uses: .../sandboxclaims
+      object_kind: <Kind>                    # what appears in manifests
+      endpoint_field: ["status", "sandbox", "serviceFQDN"]
+      ready_timeout: 180s
+```
+
+`endpoint_field` is a list of field names, not a template string; the default
+`status.sandbox.serviceFQDN` is where the reference controller puts the endpoint. A bare host
+is accepted and gets `:22` appended (or whatever `ssh.port` says).
+
+The three requirements on the controller are structural, not API-shaped: the claim object must
+be creatable and deletable by byre, its status must expose a resolvable endpoint while it
+exists, and the resulting pod must accept the gateway's pool key on the SSH port. Everything
+else is convention.
+
+## Publishing
+
+`.github/workflows/release.yml` builds `ghcr.io/<owner>/byre` on a tag push. The sandbox image
+is deliberately *not* published by this repository: it is one `FROM alpine` away from anything
+you already run, and pinning your own copy beats depending on ours.

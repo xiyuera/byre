@@ -403,12 +403,13 @@ identifier SSH already verifies — the public key — and hangs the lease on it
 | [handbook/operations.md](docs/handbook/operations.md) | install, RBAC, host-key rotation, metrics, upgrading, symptoms |
 | [handbook/troubleshooting.md](docs/handbook/troubleshooting.md) | what each failure looks like from the client and from the gateway log |
 | [examples/](examples/) | one runnable configuration per shape, plus `examples/local-quickstart/` — the Quick start above as a file you can copy |
+| [examples/docker-sandbox/](examples/docker-sandbox/README.md) · [examples/kubernetes-sandbox/](examples/kubernetes-sandbox/README.md) | the two starter kits: a complete gateway + sandbox deployment on plain docker, and the same on Kubernetes with a claim-based controller |
 | [roadmap.md](docs/roadmap.md) · [adr/](docs/adr/) | what is absent from v1 and in what order it would arrive; the decisions, with the conditions that would reverse them |
 | [acceptance/](docs/acceptance/) · [docs/README.md](docs/README.md) | what was verified on a real cluster; the index of everything else |
 
 Some of it is English only, and saying so beats a reader discovering it: the four handbook pages,
 `docs/release.md`, `docs/i18n.md`, `docs/integrations/README.md`, `deploy/gitea-runner/README.md`,
-`docs/adr/*` and `docs/acceptance/*`, and the three shape examples under `examples/`.
+`docs/adr/*` and `docs/acceptance/*`, and the shape and starter-kit examples under `examples/`.
 `scripts/check-i18n.sh` prints the pages it tracks as `UNTRANSLATED` instead of skipping them; the
 remaining ones are English only by the rule in [`docs/i18n.md`](docs/i18n.md), not by omission.
 

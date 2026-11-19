@@ -1,0 +1,90 @@
+# The gateway itself. Single replica: it holds lease state in memory and SSH sessions in
+# flight, so two copies would hand out independent sandboxes for the same identity.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: byre
+  namespace: byre
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: byre
+  template:
+    metadata:
+      labels:
+        app: byre
+    spec:
+      serviceAccountName: byre
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: byre
+          image: ghcr.io/xiyuera/byre:v0.3.3
+          args: ["-config", "/etc/byre/config.yaml"]
+          ports:
+            - name: ssh
+              containerPort: 2222
+            - name: health
+              containerPort: 8099
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 10
+            # Generous: byre's health endpoint shares a CPU quota with live SSH sessions.
+            timeoutSeconds: 10
+            failureThreshold: 12
+          volumeMounts:
+            - name: config
+              mountPath: /etc/byre
+              readOnly: true
+            - name: keys
+              mountPath: /etc/byre/keys
+              readOnly: true
+            - name: hostkey
+              mountPath: /var/lib/byre/hostkey
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: byre-config
+        - name: keys
+          secret:
+            secretName: byre-pool-key
+            defaultMode: 0400
+        - name: hostkey
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: byre
+  namespace: byre
+spec:
+  type: ClusterIP
+  selector:
+    app: byre
+  ports:
+    - name: ssh
+      port: 2222
+      targetPort: ssh
+    - name: health
+      port: 8099
+      targetPort: health

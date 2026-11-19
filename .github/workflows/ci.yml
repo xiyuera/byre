@@ -1,0 +1,97 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# This file runs unchanged on Gitea and GitHub.
+#
+# Two things differ between the forges and are handled below rather than by forking the file:
+#   - the job token: Gitea injects `secrets.GITEA_TOKEN`, GitHub injects `github.token`
+#   - the toolchain: the Gitea runner's job image already carries Go, GitHub's does not
+#
+# Deliberately no `uses:` at all. Every JS action would have to be fetched from github.com by
+# the runner, which is the one thing a self-hosted CI must not depend on.
+
+env:
+  GH_TOKEN: ${{ secrets.GITEA_TOKEN || github.token }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        run: |
+          host="${GITHUB_SERVER_URL#https://}"
+          git clone --depth 1 \
+            "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git" .
+      - uses: actions/setup-go@v5
+        if: github.server_url == 'https://github.com'
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go vet
+        run: go vet ./...
+      - name: tests
+        run: go test -race ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        run: |
+          host="${GITHUB_SERVER_URL#https://}"
+          git clone --depth 1 \
+            "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git" .
+      - uses: actions/setup-go@v5
+        if: github.server_url == 'https://github.com'
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l . | grep -v '^vendor/' || true)
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+  i18n:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        run: |
+          host="${GITHUB_SERVER_URL#https://}"
+          git clone --depth 1 \
+            "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git" .
+      - name: bilingual docs in sync
+        run: sh scripts/check-i18n.sh
+
+  dco:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: checkout with history
+        run: |
+          host="${GITHUB_SERVER_URL#https://}"
+          git clone \
+            "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git" .
+      - name: every commit in the PR carries Signed-off-by
+        run: |
+          base="origin/${{ github.base_ref }}"
+          git fetch -q origin "${{ github.base_ref }}"
+          missing=$(git log --format='%H %s' "$base..HEAD" | while read -r sha _; do
+            git log -1 --format=%B "$sha" | grep -q '^Signed-off-by: ' || echo "$sha"
+          done)
+          if [ -n "$missing" ]; then
+            echo "commits without Signed-off-by:"; echo "$missing"; exit 1
+          fi

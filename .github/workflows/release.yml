@@ -1,0 +1,102 @@
+name: release
+
+# Tag push -> cross-compiled binaries + a multi-arch image.
+#
+# Runs unchanged on both forges. The only two things that differ are configuration, not code:
+#   vars.REGISTRY        where the image goes   (ghcr.io on GitHub, your registry on Gitea)
+#   secrets.REGISTRY_TOKEN  a token for it      (GITHUB_TOKEN on GitHub, a PAT on Gitea)
+# Set them in Settings -> Actions -> Variables / Secrets on each side.
+#
+# No `uses:` for the build itself: the job image carries Go and docker, and `docker buildx`
+# on GitHub's runner is enough. `gh release` is used only when running on GitHub.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  GH_TOKEN: ${{ secrets.GITEA_TOKEN || github.token }}
+  REGISTRY: ${{ vars.REGISTRY }}
+  REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN || secrets.GITEA_TOKEN || github.token }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout (tags need the tagged commit, so no --depth)
+        run: |
+          host="${GITHUB_SERVER_URL#https://}"
+          git clone "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git" .
+          git checkout -q "${GITHUB_REF_NAME}"
+          echo "at $(git rev-parse --short HEAD) ($(git describe --tags --exact-match 2>/dev/null || echo no-tag))"
+
+      - uses: actions/setup-go@v5
+        if: github.server_url == 'https://github.com'
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: build linux binaries
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          commit=$(git rev-parse --short HEAD)
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            out="dist/byre-${tag}-linux-${arch}"
+            GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
+              go build -trimpath \
+                -ldflags "-s -w -X main.version=${tag} -X main.commit=${commit}" \
+                -o "$out" ./cmd/byre
+            ./"$out" --version
+          done
+          cd dist && sha256sum byre-* > SHA256SUMS && cat SHA256SUMS
+
+      - name: build and push image
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          [ -n "$REGISTRY" ] || { echo "vars.REGISTRY is not set" >&2; exit 1; }
+          ref="${REGISTRY}/${GITHUB_REPOSITORY,,}:${tag}"
+          echo "$REGISTRY_TOKEN" | docker login "$REGISTRY" -u "${REGISTRY_USER:-x}" --password-stdin
+          docker buildx create --use --name byre-builder >/dev/null 2>&1 || true
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.version=${tag}" \
+            -t "$ref" --push .
+          digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          echo "image ${ref}@${digest}"
+          printf 'IMAGE_REF=%s\nIMAGE_DIGEST=%s\n' "$ref" "$digest" >> dist/images.txt
+          cat dist/images.txt
+
+      - name: attach release assets (GitHub only)
+        if: github.server_url == 'https://github.com'
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          awk -v t="$tag" '
+            $0 ~ "^## \\[" substr(t,2) "\\]" {p=1; next}
+            p && /^## \[/ {exit}
+            p {print}
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || { echo "no CHANGELOG section for $tag" >&2; exit 1; }
+          gh release create "$tag" dist/* --title "$tag" --notes-file notes.md --verify-tag
+
+      - name: attach release assets (Gitea)
+        if: github.server_url != 'https://github.com'
+        run: |
+          # Gitea's `tea` CLI is not guaranteed on a job pod, so the release is created through
+          # the REST API with the job token instead of a CLI.
+          tag="${GITHUB_REF_NAME}"
+          host="${GITHUB_SERVER_URL#https://}"
+          api="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
+          existing=$(curl -sS -H "Authorization: token ${GH_TOKEN}" "${api}/releases/tags/${tag}")
+          if echo "$existing" | grep -q '"id"'; then
+            echo "release ${tag} already exists; leaving it alone"; exit 0
+          fi
+          curl -sS -X POST "${api}/releases" \
+            -H "Authorization: token ${GH_TOKEN}" -H 'Content-Type: application/json' \
+            -d "{\"tag_name\":\"${tag}\",\"name\":\"${tag}\",\"body\":\"See CHANGELOG.md\"}" >/dev/null
+          echo "release ${tag} created; upload assets with the Gitea UI or tea"

@@ -1,0 +1,14 @@
+# Warm capacity: pre-started sandboxes a claim can bind to immediately.
+#
+# Field name is `sandboxTemplateRef` -- not `templateRef`. The zero value of `replicas` is a
+# valid configuration too ("no warm capacity, create on demand"); this example keeps two warm
+# so the first connection after a deploy is fast.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: byre-sandbox
+  namespace: byre
+spec:
+  replicas: 2
+  sandboxTemplateRef:
+    name: byre-sandbox

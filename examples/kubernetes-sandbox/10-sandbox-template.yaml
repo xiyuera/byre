@@ -1,0 +1,56 @@
+# The sandbox the gateway hands out. One template, any number of claims.
+#
+# `podTemplate` is a plain PodTemplateSpec: whatever runs in it must speak SSH on the port the
+# gateway's backend config names. This example reuses the image built by
+# ../docker-sandbox/Dockerfile.sandbox, so both starter kits run the same sandbox.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: byre-sandbox
+  namespace: byre
+spec:
+  podTemplate:
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sandbox
+          # Build with ../docker-sandbox and push to a registry your cluster can pull from:
+          #   docker build -f examples/docker-sandbox/Dockerfile.sandbox -t <reg>/byre-sandbox:latest examples/docker-sandbox
+          #   docker push <reg>/byre-sandbox:latest
+          image: ghcr.io/example/byre-sandbox:latest
+          ports:
+            - name: ssh
+              containerPort: 22
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              # sshd needs to switch users and chroot to /var/empty; everything else is dropped.
+              drop: ["ALL"]
+              add: ["SYS_CHROOT", "SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "KILL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: run
+              mountPath: /run
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            tcpSocket:
+              port: 22
+            periodSeconds: 2
+            failureThreshold: 15
+      volumes:
+        - name: run
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi

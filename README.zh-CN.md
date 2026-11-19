@@ -369,11 +369,12 @@ namespace，kustomize 的 `namespace:` 又会一次性改写所有对象——�
 | [handbook/troubleshooting.md](docs/handbook/troubleshooting.md) | 每种故障在客户端和网关日志里分别长什么样 |
 | [roadmap.md](docs/roadmap.md) · [adr/](docs/adr/) | v1 明确不做什么、按什么顺序到来；每个决策以及反转它的条件 |
 | [examples/](examples/) | 每种形态一份可跑配置，另有 `examples/local-quickstart/`——把上面的快速开始落成可复制的文件 |
+| [examples/docker-sandbox/](examples/docker-sandbox/README.md) · [examples/kubernetes-sandbox/](examples/kubernetes-sandbox/README.md) | 两套 starter kit：纯 docker 上一套完整的网关+沙箱部署，以及同样的东西在 Kubernetes 上配一个基于 claim 的控制器 |
 | [acceptance/](docs/acceptance/) · [docs/README.md](docs/README.md) | 真实集群上验证了什么；以及全部文档的索引 |
 
 其中一部分只有英文，写出来比让读者自己撞上要好：四份 handbook、`docs/release.md`、`docs/i18n.md`、
 `docs/integrations/README.md`、`deploy/gitea-runner/README.md`、`docs/adr/*` 与 `docs/acceptance/*`，
-以及 `examples/` 下三种形态的示例。`scripts/check-i18n.sh` 把它追踪的页面打印成 `UNTRANSLATED`
+以及 `examples/` 下的形态示例与两套 starter kit。`scripts/check-i18n.sh` 把它追踪的页面打印成 `UNTRANSLATED`
 而不是跳过；其余的是按 [`docs/i18n.md`](docs/i18n.md) 的规则有意只留英文，不是漏了。
 
 ## 依赖

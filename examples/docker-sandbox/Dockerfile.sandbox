@@ -1,0 +1,34 @@
+# A sandbox that is only reachable through the gateway.
+#
+# Deliberately minimal: sshd, one non-root user, nothing else. The point of the example is
+# the lease, not the sandbox -- swap this image for anything that runs sshd and the gateway
+# behaviour is unchanged.
+FROM alpine:3.20
+
+RUN apk add --no-cache openssh-server \
+ && adduser -D -s /bin/sh sandbox \
+ && passwd -u sandbox \
+ && mkdir -p /home/sandbox/.ssh \
+ && chown sandbox:sandbox /home/sandbox/.ssh \
+ && chmod 700 /home/sandbox/.ssh \
+ && ssh-keygen -A
+
+# The gateway authenticates to the instance with this key (the "pool key"). In a real
+# deployment it is mounted from a Secret; here it is copied in so the example has no moving
+# parts. Nothing else can log in: PasswordAuthentication is off.
+COPY keys/id_key.pub /home/sandbox/.ssh/authorized_keys
+RUN chown sandbox:sandbox /home/sandbox/.ssh/authorized_keys \
+ && chmod 600 /home/sandbox/.ssh/authorized_keys
+
+RUN printf '%s\n' \
+    'PermitRootLogin no' \
+    'PasswordAuthentication no' \
+    'PubkeyAuthentication yes' \
+    'AllowUsers sandbox' \
+    'PrintMotd no' \
+    > /etc/ssh/sshd_config.d/byre.conf
+
+EXPOSE 22
+# /run is a tmpfs in the example (the container root is read-only), so the privilege
+# separation directory sshd wants has to be created at start, not at build time.
+CMD ["/bin/sh", "-c", "mkdir -p /run/sshd && exec /usr/sbin/sshd -D -e"]

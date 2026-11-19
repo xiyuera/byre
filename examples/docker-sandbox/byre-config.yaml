@@ -1,0 +1,37 @@
+# Minimal gateway config for the docker starter kit.
+#
+# Run from this directory:   byre -config byre-config.yaml
+# The gateway listens on :2222, asks scripts/acquire.sh for a sandbox when a new key shows up,
+# reuses it for the lease TTL, and calls scripts/release.sh when the lease expires.
+listen: ":2222"
+
+host_key: ./hostkey/id_ed25519
+
+lease:
+  ttl: 120s
+  grace: 30s
+
+backends:
+  - name: docker
+    provision: command
+    command:
+      acquire: ["./scripts/acquire.sh"]
+      release: ["./scripts/release.sh"]
+      list: ["./scripts/list.sh"]
+      timeout: 120s
+      env:
+        - BYRE_SANDBOX_IMAGE=byre-sandbox:local
+        - BYRE_SANDBOX_NETWORK=byre-example
+    ssh:
+      user: sandbox
+      private_key: ./keys/id_key
+      # Containers are throwaway and docker reuses IPs, so a *changed* host key is normal here.
+      # `accept-new` would refuse those (it pins on first use and fails on mismatch); `insecure`
+      # is the right choice for this backend, as docs/integrations/agent-runtime.md notes.
+      host_key_policy: insecure
+
+identities:
+  # Replace with your own key's fingerprint. `ssh-keygen -lf ~/.ssh/id_ed25519.pub` prints it;
+  # byre expects the "SHA256:..." form.
+  - fingerprint: "SHA256:REPLACE_ME"
+    backend: docker
