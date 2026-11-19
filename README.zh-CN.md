@@ -19,12 +19,16 @@ agent 在租约有效期内独占一个实例。
 
 ## 这是什么
 
-```
-agent ──ssh(pubkey)──▶ byre :2222 ──ssh(pool key)──▶ instance :22
-        身份                  │                        容器、虚拟机、
-        = 租约               │                        实验机——任何跑着
-                            └─ 内存里的租约表         sshd 的东西
-                               ttl + grace，热池
+```mermaid
+flowchart LR
+    agent["agent<br/>身份 = 租约"]
+    byre["byre :2222<br/>SSH 前端"]
+    lease["内存里的租约表<br/>ttl + grace · 热池"]
+    inst["instance :22<br/>容器、虚拟机、实验机——<br/>任何跑着 sshd 的东西"]
+
+    agent -->|"ssh（公钥）"| byre
+    byre -->|"ssh（池密钥）"| inst
+    byre -.->|"查表"| lease
 ```
 
 网关只用公钥认证客户端，不看别的。它从这把公钥推导出一个身份，这个身份在持续连接期间独占一个实例。结束

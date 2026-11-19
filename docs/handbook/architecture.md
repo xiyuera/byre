@@ -2,19 +2,25 @@
 
 ## 1. Shape
 
-```
-             ┌──────────────────────────── byre ────────────────────────────┐
-client ──────┤ :2222  ssh front end                                            │
-(pubkey)     │          │                                                     │
-             │          ├── auth: publickey → identity = sha256(key)           │
-             │          ├── lease manager: identity → lease (exclusive)        │
-             │          ├── pool: warm instances, refill on checkout           │
-             │          └── backend driver: acquire / release / list / adopt   │
-             │                                     │                           │
-             │ :8099  /healthz  /metrics           │ ssh (pool key)            │
-             └─────────────────────────────────────┼───────────────────────────┘
-                                                   ▼
-                                       instance (any sshd-capable unit)
+```mermaid
+flowchart LR
+    client["client<br/>(pubkey)"]
+
+    subgraph byre["byre"]
+        direction TB
+        fe[":2222 · ssh front end"]
+        auth["auth: publickey → identity = sha256(key)"]
+        lease["lease manager: identity → lease (exclusive)"]
+        pool["pool: warm instances, refill on checkout"]
+        driver["backend driver: acquire / release / list / adopt"]
+        obs[":8099 · /healthz · /metrics"]
+        fe --> auth --> lease --> pool --> driver
+    end
+
+    inst["instance<br/>(any sshd-capable unit)"]
+
+    client -->|"ssh (pubkey)"| fe
+    driver -->|"ssh (pool key)"| inst
 ```
 
 Two listeners, no persistence, no external services. State lives in memory plus instance annotations.
@@ -38,13 +44,15 @@ Splicing is byte-level after channel setup: no protocol inspection of the payloa
 
 ## 3. Lease states
 
-```
-        ┌─────────┐  acquire    ┌────────┐  idle > ttl+grace  ┌──────────┐  release   ┌──────┐
-        │ pending │────────────>│ leased │───────────────────>│ draining │───────────>│ dead │
-        └─────────┘             └────────┘                    └──────────┘            └──────┘
-             │                       │                              │
-             │ creation failed       └──── activity: last_seen ─────┘
-             └── dead                    (refreshed while in use)
+```mermaid
+stateDiagram-v2
+    [*] --> pending: create requested
+    pending --> leased: acquire
+    pending --> dead: creation failed
+    leased --> draining: idle > ttl + grace
+    draining --> leased: activity (last_seen)
+    draining --> dead: release
+    dead --> [*]
 ```
 
 - `pending` is the row that exists while an instance is being created. A second connection for the same

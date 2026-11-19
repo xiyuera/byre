@@ -20,12 +20,16 @@ control master open or remembering an identifier: the key it already authenticat
 
 ## What it is
 
-```
-agent ──ssh(pubkey)──▶ byre :2222 ──ssh(pool key)──▶ instance :22
-        identity           │                           a container, a VM,
-        = the lease        │                           a lab machine — anything
-                           └─ lease table in memory    that runs sshd
-                              ttl + grace, warm pool
+```mermaid
+flowchart LR
+    agent["agent<br/>identity = the lease"]
+    byre["byre :2222<br/>SSH front end"]
+    lease["lease table in memory<br/>ttl + grace · warm pool"]
+    inst["instance :22<br/>a container, a VM, a lab machine —<br/>anything that runs sshd"]
+
+    agent -->|"ssh (pubkey)"| byre
+    byre -->|"ssh (pool key)"| inst
+    byre -.->|"looks up"| lease
 ```
 
 The gateway authenticates the client with a public key and nothing else. From that key it derives an
