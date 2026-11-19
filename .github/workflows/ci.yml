@@ -76,6 +76,21 @@ jobs:
       - name: bilingual docs in sync
         run: sh scripts/check-i18n.sh
 
+  # Renders deploy/ with the same engine `kubectl apply -k` uses, so a broken kustomization
+  # is caught before a cluster sees it. `make render` degrades to a warning when kustomize is
+  # absent -- the Gitea job image ships it, GitHub's runner does not, and that is acceptable:
+  # the check runs for real on whichever side has the tool.
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        run: |
+          host="${GITHUB_SERVER_URL#https://}"
+          git clone --depth 1 \
+            "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git" .
+      - name: Validate kustomize output
+        run: make render
+
   dco:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
