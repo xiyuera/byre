@@ -3,7 +3,7 @@
 ## 1. Shape
 
 ```mermaid
-flowchart LR
+flowchart TB
     client["client<br/>(pubkey)"]
 
     subgraph byre["byre"]
