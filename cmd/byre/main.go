@@ -22,6 +22,7 @@ import (
 	"byre/internal/backend"
 	"byre/internal/config"
 	"byre/internal/lease"
+	"byre/internal/lease/crd"
 	"byre/internal/metrics"
 	"byre/internal/sshfront"
 	"byre/internal/version"
@@ -105,6 +106,32 @@ func main() {
 		if p, ok := drv.(lease.Pooler); ok {
 			mgr.SetPool(name, poolSize, p)
 		}
+	}
+
+	// The lease table moves to a CRD when configured (ADR-0013). This has to happen before Adopt: a
+	// store attached later would leave the first restart restoring from annotations, which is the
+	// defect the store exists to fix.
+	if cfg.Lease.Store == "crd" {
+		st, err := newLeaseStore(ctx, cfg, backends)
+		if err != nil {
+			logger.Error("lease store", "error", err)
+			os.Exit(1)
+		}
+		mgr.SetStore(lease.NewCRDStore(st))
+		// A table in a different namespace from the instances is legitimate -- one table, instances
+		// spread across namespaces -- but it is also a configuration where an operator looking in the
+		// obvious namespace sees nothing. Say it once, at startup, rather than let it be discovered.
+		if explicit := strings.TrimSpace(cfg.Lease.Namespace); explicit != "" {
+			for name, drv := range backends {
+				if k, ok := drv.(*backend.Kubernetes); ok && k.Namespace() != explicit {
+					logger.Warn("lease table is in a different namespace than the backend that provisions its instances",
+						"backend", name, "lease_namespace", explicit, "backend_namespace", k.Namespace())
+				}
+			}
+		}
+		names := identityNames(cfg)
+		mgr.SetIdentityNames(names)
+		logger.Info("lease store", "kind", "crd", "namespace", st.Namespace(), "identity_names", len(names))
 	}
 
 	// Adoption must happen before warming: an unannotated instance found at startup is stale pool
@@ -280,6 +307,10 @@ func writeMetrics(w io.Writer, mgr *lease.Manager, backends map[string]backend.B
 byre_instances_reclaimed %d
 `, mgr.ReclaimedTotal())
 	fmt.Fprintf(w, "# HELP byre_leases_adopted_pending Adopted leases no connection has picked up yet; add it to leases_active when comparing across a restart.\n# TYPE byre_leases_adopted_pending gauge\nbyre_leases_adopted_pending %d\n", mgr.AdoptedPending())
+	// Non-zero means these leases exist only in this process's memory: the store does not have them, so
+	// a second replica could hand the same identity a different instance. A gauge, not a counter,
+	// because the condition heals as soon as a retry succeeds on the next reuse.
+	fmt.Fprintf(w, "# HELP byre_leases_unpersisted Live leases the lease store does not know about; non-zero breaks one-instance-per-identity while more than one replica runs.\n# TYPE byre_leases_unpersisted gauge\nbyre_leases_unpersisted %d\n", mgr.UnpersistedCount())
 	fmt.Fprintf(w, "# HELP byre_oldest_idle_lease_age_seconds Age of the oldest lease without a connection.\n# TYPE byre_oldest_idle_lease_age_seconds gauge\nbyre_oldest_idle_lease_age_seconds %g\n", mgr.OldestIdleAge().Seconds())
 	fmt.Fprintf(w, "# HELP byre_lease_dead_instance_total Leases dropped because the instance behind them no longer exists.\n# TYPE byre_lease_dead_instance_total counter\nbyre_lease_dead_instance_total %d\n", mgr.DeadInstancesTotal())
 	fmt.Fprintf(w, "# HELP byre_lease_liveness_errors_total Existence checks that could not answer; those leases were kept.\n# TYPE byre_lease_liveness_errors_total counter\nbyre_lease_liveness_errors_total %d\n", mgr.LivenessErrorsTotal())
@@ -386,6 +417,67 @@ func identityNamer(cfg *config.Config, backendName string) func(string) (string,
 		}
 		return name, nil
 	}
+}
+
+// newLeaseStore builds the ByreLease store, reusing the dynamic client a Kubernetes backend already
+// created: reading the kubeconfig a second time would work but doubles the credential surface for no
+// gain, and two clients that could disagree about which cluster they point at is not a state worth
+// having.
+func newLeaseStore(ctx context.Context, cfg *config.Config, backends map[string]backend.Backend) (*crd.Store, error) {
+	namespace := strings.TrimSpace(cfg.Lease.Namespace)
+	var st *crd.Store
+	for name, drv := range backends {
+		k, ok := drv.(*backend.Kubernetes)
+		if !ok {
+			continue
+		}
+		dyn := k.Dynamic()
+		if dyn == nil {
+			return nil, fmt.Errorf("backend %q has no cluster client (was it built in dry-run mode?)", name)
+		}
+		if namespace == "" {
+			namespace = k.Namespace()
+		}
+		st = crd.New(dyn, namespace)
+		break
+	}
+	if st == nil {
+		// No Kubernetes backend to borrow a client from: a `command` or `endpoints` backend can still
+		// want the table in a cluster, because where instances come from and where the binding is
+		// recorded are independent questions.
+		if namespace == "" {
+			return nil, fmt.Errorf("lease.store is %q but no namespace is known: set lease.namespace", cfg.Lease.Store)
+		}
+		var err error
+		st, err = crd.NewFromKubeconfig(cfg.Lease.Kubeconfig, namespace)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Checked at startup so a missing CRD is a sentence naming the manifest to apply, not a bare 404 on
+	// somebody's first connection.
+	if err := st.Ready(ctx); err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
+// identityNames maps a fingerprint to the configured stable name, for spec.name of the lease objects.
+// Identities without a name are omitted rather than given a derived one: a name that changes when the
+// key rotates is worse than no name at all.
+//
+// The key is the fingerprint *as the SSH layer reports it*, which omits the "SHA256:" label that the
+// configuration file uses. Keying this map on the config spelling would never match — the lookup would
+// fail silently and every lease would be written without a name.
+func identityNames(cfg *config.Config) map[string]string {
+	out := make(map[string]string, len(cfg.Identities))
+	for _, id := range cfg.Identities {
+		if id.Name == "" {
+			continue
+		}
+		out[strings.TrimPrefix(id.Fingerprint, "SHA256:")] = id.Name
+	}
+	return out
 }
 
 // buildBackends instantiates one driver per configured backend. dryRun skips cluster clients so that
