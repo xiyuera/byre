@@ -93,9 +93,10 @@ import json,sys
 try: d=json.load(sys.stdin)
 except Exception: print('parse_error'); raise SystemExit
 st=[x['status'] for x in (d.get('statuses') or []) if '(pull_request)' not in x['context']]
-# `skipped` is a pass: dco is deliberately skipped on push (it needs a merge base that a push
-# does not have). Counting it as failure made this check reject a green commit the first time it
-# ran for real. Pending is its own answer -- it means "not finished", not "broken".
+# A skipped check is a pass, not a failure: dco is skipped on push because it needs a merge base
+# that a push does not have. Counting it as failure made this check reject a green commit the first
+# time it ran for real. Pending is its own answer -- it means not finished, not broken.
+# (No backticks in here: this python is a double-quoted shell string, so they would run as commands.)
 ok = all(s in ('success','skipped') for s in st)
 bad = any(s in ('failure','error','cancelled','cancel') for s in st)
 print(('green' if ok else ('red' if bad else 'pending')) if st else 'none')
