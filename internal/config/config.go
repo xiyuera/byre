@@ -445,6 +445,7 @@ func (c *Config) Validate() error {
 			fail("%s (%s): name is required on backend %q, which sets provider.volumes — the claim is "+
 				"named after it, so without a name a key rotation silently means a different home",
 				where, fp, id.Backend)
+		}
 		for _, key := range sortedKeys(id.Labels) {
 			if err := validateIdentityLabel(key, id.Labels[key]); err != nil {
 				fail("%s (%s): labels: %v", where, fp, err)
@@ -531,6 +532,11 @@ func checkClaimLabel(s string) error {
 		}
 		if r == '-' && (i == 0 || i == len(s)-1) {
 			return fmt.Errorf("%q must not start or end with '-'", s)
+		}
+	}
+	return nil
+}
+
 // validateIdentityLabel checks an operator-declared label written onto leased objects. It is strict
 // because a value Kubernetes rejects does not fail at config load: it fails on the first Acquire, hours
 // later, as an annotate error that releases the instance it just created.
@@ -630,6 +636,8 @@ func validateVolumes(where string, b Backend, fail func(string, ...any)) {
 		m != "ReadOnlyMany" && m != "ReadWriteMany" {
 		fail("%s (%s): provider.volumes.access_mode %q is not a valid access mode", where, b.Name, m)
 	}
+}
+
 // sortedKeys keeps validation messages in a stable order; map iteration would make the same broken
 // config produce a different message on every run.
 func sortedKeys(m map[string]string) []string {

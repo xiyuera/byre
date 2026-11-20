@@ -650,7 +650,7 @@ func (k *Kubernetes) acquireWithHome(ctx context.Context, identity string) (Inst
 		return Instance{}, err
 	}
 	ann := bindingAnnotations(in, identity)
-	if err := k.annotate(ctx, in.ID, ann); err != nil {
+	if err := k.annotate(ctx, in.ID, ann, k.bindingLabels(identity)); err != nil {
 		_ = k.Release(ctx, in)
 		return Instance{}, fmt.Errorf("annotate %s: %w", in.ID, err)
 	}
