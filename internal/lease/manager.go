@@ -24,6 +24,12 @@ import (
 // for every client.
 const defaultLivenessTimeout = 2 * time.Second
 
+// maxBindRetries bounds how many times Acquire discards an instance because another process already
+// holds the identity. Small on purpose: the point of the store is that exactly one process wins, so a
+// repeated loss means the other holder is not going away, and spinning is worse than an error the
+// caller can act on.
+const maxBindRetries = 3
+
 // The two numbers behind the reaper's sweep for instances that belong to nobody.
 //
 // reclaimEvery is how often a List is spent on the question. It is deliberately not the reap interval: a
@@ -124,6 +130,18 @@ type Manager struct {
 	discarded  int
 	reclaimed  int
 
+	// store persists the binding so a restart and a second replica read the same truth (ADR-0013).
+	// nil means "in-memory only", which is the correct mode for backends that provision nothing
+	// (`endpoints`, `command`): there is no cluster to hold a CR, and no second replica to agree with.
+	store LeaseStore
+	// names maps a fingerprint to the configured stable name (identities[].name). Read on the write
+	// path only, to fill spec.name of the CR; the lease key stays the fingerprint, because that is
+	// what a connection authenticates as.
+	names map[string]string
+	// persistErrors counts failed writes to store. A non-zero value means the table and the CR are
+	// out of step -- the number an operator needs before blaming the backend.
+	persistErrors atomic.Int64
+
 	// reap-age bookkeeping for the sweep; see defaultReclaimEvery.
 	reclaimEvery time.Duration
 	reclaimAge   time.Duration
@@ -135,6 +153,59 @@ func (m *Manager) SetLogger(l *slog.Logger) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.logger = l
+}
+
+// SetStore makes the manager persist bindings (ADR-0013). Call it before the first Acquire.
+//
+// A manager without a store keeps its table in memory, which is the only option for backends with no
+// cluster behind them: `endpoints` and `command` provision nothing, so there is nothing for a second
+// replica to agree about and no CRD installed to hold it.
+func (m *Manager) SetStore(s LeaseStore) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.store = s
+}
+
+// SetIdentityNames gives the manager the fingerprint -> stable name mapping. Optional: a CR written
+// without it carries no spec.name, and an operator reading `kubectl get byreleases` sees the
+// fingerprint instead.
+func (m *Manager) SetIdentityNames(names map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.names = names
+}
+
+// PersistErrors reports how many bindings could not be written. A non-zero value means the CR and
+// the in-memory table disagree -- the number an operator needs before blaming the backend.
+func (m *Manager) PersistErrors() int64 { return m.persistErrors.Load() }
+
+// persist writes the binding for a lease that has just become usable. A manager with no store is a
+// no-op, not an error: in-memory is a supported mode.
+func (m *Manager) persist(ctx context.Context, e Entry) error {
+	m.mu.Lock()
+	store, name := m.store, m.names[e.Identity]
+	m.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	return store.Put(ctx, StoredBinding{
+		Identity:    e.Identity,
+		Name:        name,
+		Backend:     e.Backend,
+		Instance:    e.Instance.ID,
+		InstanceUID: e.Instance.UID,
+	})
+}
+
+// forget removes a binding. No store means in-memory only, which is not an error.
+func (m *Manager) forget(ctx context.Context, identity string) error {
+	m.mu.Lock()
+	store := m.store
+	m.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	return store.Delete(ctx, identity)
 }
 
 // New builds a manager over the given drivers. Keys are backend names.
@@ -171,6 +242,10 @@ func New(ttl, grace time.Duration, backends map[string]backend.Backend) (*Manage
 // The snapshot is a copy on purpose: the manager keeps mutating refs/LastSeen under its own lock, and
 // handing out the internal pointer would race with the reaper.
 func (m *Manager) Acquire(ctx context.Context, identity, backendName string) (Entry, error) {
+	// Losing the bind race is transient: the winner may release at any moment, so one retry is worth
+	// making. An unbounded retry is not -- if a second replica holds this identity indefinitely, this
+	// loop would burn a core forever and the caller would never get an answer.
+	bindRetries := 0
 	for {
 		m.mu.Lock()
 		if e, ok := m.byIdentity[identity]; ok {
@@ -267,6 +342,58 @@ func (m *Manager) Acquire(ctx context.Context, identity, backendName string) (En
 		close(pending.done)
 		snap := *pending
 		m.mu.Unlock()
+
+		// Persist the binding after the table says the lease is usable, so a failure here has a
+		// well-defined state to roll back to. This is one of only two write paths (the other is
+		// release); nothing on the per-connection path touches the store.
+		if err := m.persist(ctx, snap); err != nil {
+			// Which failure this is decides the response:
+			//
+			//   ErrBindingExists -- another replica bound this identity first. Dropping our instance
+			//   and re-reading is the only correct move: handing out two instances for one identity
+			//   is the exact defect the store exists to prevent.
+			//
+			//   anything else -- the store is unreachable. Counting it and keeping the lease is the
+			//   recoverable choice; destroying a working instance over a bookkeeping error would take
+			//   the client's files with it.
+			if errors.Is(err, ErrBindingExists) {
+				if log := m.log(); log != nil {
+					log.Warn("identity bound elsewhere; discarding the instance we just created",
+						"identity", shortIdentity(identity), "backend", backendName,
+						"instance", snap.Instance.ID, "action", "release and re-acquire")
+				}
+				m.mu.Lock()
+				if cur, ok := m.byIdentity[identity]; ok && cur.Instance.ID == snap.Instance.ID {
+					delete(m.byIdentity, identity)
+				}
+				m.mu.Unlock()
+				// Hand the instance back directly rather than through release: release also closes
+				// the entry's done channel, and snap is a copy sharing that channel -- closing it a
+				// second time panics. The table row is already gone, so only the backend call is owed.
+				if drv := m.driver(snap.Backend); drv != nil {
+					if relErr := drv.Release(ctx, snap.Instance); relErr != nil {
+						metrics.IncReleaseError()
+						if log := m.log(); log != nil {
+							log.Warn("could not release the instance we lost the bind race for; it is an orphan",
+								"identity", shortIdentity(identity), "instance", snap.Instance.ID, "error", relErr)
+						}
+					}
+				}
+				bindRetries++
+				if bindRetries > maxBindRetries {
+					return Entry{}, fmt.Errorf(
+						"identity %s is bound by another process and did not release after %d attempts: %w",
+						shortIdentity(identity), maxBindRetries, ErrBindingExists)
+				}
+				continue
+			}
+			m.persistErrors.Add(1)
+			if log := m.log(); log != nil {
+				log.Error("could not persist the binding; the table and the store are out of step",
+					"identity", shortIdentity(identity), "backend", backendName,
+					"instance", snap.Instance.ID, "error", err)
+			}
+		}
 
 		if fromPool {
 			// Refill after the checkout, never during it.
@@ -640,6 +767,19 @@ func (m *Manager) release(ctx context.Context, e *Entry, reason string) error {
 	close(e.done)
 	logger := m.logger
 	m.mu.Unlock()
+
+	// Forget the binding only when the instance is actually gone. A failed release means the object
+	// still exists, and a CR pointing at it is the one record that lets a restart find it again;
+	// deleting it would turn a leaked instance into an unreferenced one.
+	if releaseErr == nil {
+		if err := m.forget(ctx, e.Identity); err != nil {
+			m.persistErrors.Add(1)
+			if logger != nil {
+				logger.Error("released the instance but could not delete its binding",
+					"identity", shortIdentity(e.Identity), "instance", e.Instance.ID, "error", err)
+			}
+		}
+	}
 
 	if logger != nil {
 		if releaseErr != nil {

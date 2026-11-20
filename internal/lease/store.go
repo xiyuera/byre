@@ -1,0 +1,88 @@
+package lease
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"byre/internal/lease/crd"
+)
+
+// StoredBinding is the part of a lease that must survive a restart and be visible to a second
+// replica. It is deliberately narrower than Entry: connection counts, the idle clock, pool state and
+// metrics are process-local and stay in memory (ADR-0013).
+type StoredBinding struct {
+	Identity string
+	// Name is the stable identity name from `identities[].name`, when configured. A fingerprint can
+	// be rotated; this survives it, which is what a persistent home is named after.
+	Name        string
+	Backend     string
+	Instance    string
+	InstanceUID string
+}
+
+// LeaseStore persists bindings. Implementations must be safe for concurrent use.
+//
+// The interface is this small on purpose. A store that also wants to know about connections, or
+// timestamps, or phases, has drifted from what the API server is for: the hot path performs no
+// writes at all, and Acquire/Release are the only callers.
+type LeaseStore interface {
+	// Put records a new binding. An error wrapping ErrBindingExists means another party already holds
+	// this identity: the caller lost the race and must re-read rather than retry.
+	Put(ctx context.Context, b StoredBinding) error
+	// Delete forgets a binding. Deleting an absent one is not an error.
+	Delete(ctx context.Context, identity string) error
+	// List returns every binding, for startup.
+	List(ctx context.Context) ([]StoredBinding, error)
+}
+
+// ErrBindingExists is returned (wrapped) by LeaseStore.Put when the identity is already bound.
+var ErrBindingExists = errors.New("lease: binding exists")
+
+// crdStore adapts crd.Store to LeaseStore: same operations, narrower types, and the "already exists"
+// sentinel translated into this package's vocabulary so callers do not import the crd package just to
+// tell the two apart.
+type crdStore struct{ inner *crd.Store }
+
+// NewCRDStore exposes a crd.Store as a LeaseStore.
+func NewCRDStore(s *crd.Store) LeaseStore { return &crdStore{inner: s} }
+
+func (c *crdStore) Put(ctx context.Context, b StoredBinding) error {
+	_, err := c.inner.Put(ctx, crd.Binding{
+		Identity:    b.Identity,
+		Name:        b.Name,
+		Backend:     b.Backend,
+		Instance:    b.Instance,
+		InstanceUID: b.InstanceUID,
+		Phase:       crd.PhaseLeased,
+	})
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, crd.ErrExists) {
+		return fmt.Errorf("%w: %s", ErrBindingExists, b.Identity)
+	}
+	return err
+}
+
+func (c *crdStore) Delete(ctx context.Context, identity string) error {
+	return c.inner.Delete(ctx, identity)
+}
+
+func (c *crdStore) List(ctx context.Context) ([]StoredBinding, error) {
+	all, err := c.inner.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]StoredBinding, 0, len(all))
+	for _, b := range all {
+		out = append(out, StoredBinding{
+			Identity:    b.Identity,
+			Name:        b.Name,
+			Backend:     b.Backend,
+			Instance:    b.Instance,
+			InstanceUID: b.InstanceUID,
+		})
+	}
+	return out, nil
+}
