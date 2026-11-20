@@ -127,6 +127,22 @@ type Liveness interface {
 	Alive(ctx context.Context, in Instance) error
 }
 
+// DeletionWatcher is implemented by drivers that can report an instance disappearing as it happens.
+//
+// It exists because Alive() runs on specific paths only: an object deleted while a client is idle
+// leaves a lease pointing at a dead address until ttl+grace expires, and every reconnect pays a
+// failed dial first. A watch closes that window by pushing the event instead of waiting for a probe.
+//
+// A watch is not a replacement for Alive(). Watches expire, and a driver that cannot tell "the watch
+// ended" from "nothing happened" would go quiet without saying so. Alive() remains the backstop for
+// the paths that can afford a round trip.
+type DeletionWatcher interface {
+	// WatchDeletions streams the identifiers of instances that no longer exist. The channel is
+	// closed when ctx is done or the underlying watch ends; a caller that wants continuous coverage
+	// re-subscribes.
+	WatchDeletions(ctx context.Context) (<-chan string, error)
+}
+
 // ErrInstanceGone is returned (wrapped) by a Liveness check when the object behind an instance is
 // definitively absent: deleted, or replaced by a different object under the same name. It is not
 // "cannot be reached" — a live instance whose sshd is wedged is a different failure, and the caller

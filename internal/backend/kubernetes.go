@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -1007,4 +1008,78 @@ func buildRestConfig(kubeconfig string) (*rest.Config, error) {
 		return nil, fmt.Errorf("in-cluster config (set provider kubeconfig outside a cluster): %w", err)
 	}
 	return cfg, nil
+}
+
+// WatchDeletions streams the names of managed objects that disappear, so a lease can be dropped the
+// moment its instance is gone instead of at the next idle expiry (ADR-0013, part 4).
+//
+// Only Deleted events are forwarded. A Modified event could mean "still there but unhealthy", and
+// acting on that from here would duplicate what Alive() already decides with a real round trip; the
+// failure this closes is the narrow one where the object is gone and nobody notices.
+//
+// The selector matches List's on purpose. If the two drifted apart the watch would report deletions
+// for objects the table never held, and drop would find no row — silent, and wrong in the direction
+// that looks healthy.
+func (k *Kubernetes) WatchDeletions(ctx context.Context) (<-chan string, error) {
+	out := make(chan string, 16)
+	switch k.cfg.Provider.Kind {
+	case KindWorkloads:
+		w, err := k.client.CoreV1().Pods(k.cfg.Namespace).Watch(ctx, metav1.ListOptions{
+			LabelSelector: LabelManaged + "=byre",
+		})
+		if err != nil {
+			return nil, fmt.Errorf("watch pods: %w", err)
+		}
+		go k.pumpDeletions(ctx, w, out, func(obj any) string {
+			if pod, ok := obj.(*corev1.Pod); ok {
+				return pod.Name
+			}
+			return ""
+		})
+	case KindClaims:
+		w, err := k.dyn.Resource(k.gvr()).Namespace(k.cfg.Namespace).Watch(ctx, metav1.ListOptions{
+			LabelSelector: LabelManaged + "=byre",
+		})
+		if err != nil {
+			return nil, fmt.Errorf("watch %s: %w", k.cfg.Provider.Resource, err)
+		}
+		go k.pumpDeletions(ctx, w, out, func(obj any) string {
+			if u, ok := obj.(*unstructured.Unstructured); ok {
+				return u.GetName()
+			}
+			return ""
+		})
+	default:
+		return nil, fmt.Errorf("backend %q does not watch deletions", k.cfg.Name)
+	}
+	return out, nil
+}
+
+func (k *Kubernetes) pumpDeletions(ctx context.Context, w watch.Interface, out chan<- string, nameOf func(any) string) {
+	defer close(out)
+	defer w.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-w.ResultChan():
+			if !ok {
+				// The watch expired or was torn down. Returning closes the channel, which the manager
+				// logs as "coverage ended" rather than treating it as "nothing was deleted".
+				return
+			}
+			if ev.Type != watch.Deleted {
+				continue
+			}
+			id := nameOf(ev.Object)
+			if id == "" {
+				continue
+			}
+			select {
+			case out <- id:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
 }
