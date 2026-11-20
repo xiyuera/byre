@@ -14,6 +14,11 @@ resources:
   - hostkey-pvc.yaml
   - deployment.yaml
   - service.yaml
+  # The lease table's CRD (ADR-0013). It is cluster-scoped, so applying this kustomization needs
+  # permission to create a CRD -- an operator who only has namespace rights should apply
+  # deploy/crd/byreleases.yaml separately first, once per cluster. kustomize understands
+  # cluster-scoped kinds, so `namespace: byre-system` above does not get stamped onto it.
+  - crd/byreleases.yaml
 
 # The example configuration doubles as the shipped default: one file, no drift.
 configMapGenerator:
