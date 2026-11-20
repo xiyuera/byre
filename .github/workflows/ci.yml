@@ -30,9 +30,14 @@ jobs:
     steps:
       - name: checkout
         run: |
+          # `git clone` alone lands on the default branch, so a pull_request run would test
+          # main instead of the PR. Fetch the exact commit by sha: GITHUB_SHA is set by both
+          # forges and is a commit, not a ref.
           host="${GITHUB_SERVER_URL#https://}"
-          git clone --depth 1 \
-            "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git" .
+          git init -q .
+          git remote add origin "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth 1 origin "${GITHUB_SHA}"
+          git checkout -q FETCH_HEAD
       - uses: actions/setup-go@v5
         if: github.server_url == 'https://github.com'
         with:
@@ -48,9 +53,14 @@ jobs:
     steps:
       - name: checkout
         run: |
+          # `git clone` alone lands on the default branch, so a pull_request run would test
+          # main instead of the PR. Fetch the exact commit by sha: GITHUB_SHA is set by both
+          # forges and is a commit, not a ref.
           host="${GITHUB_SERVER_URL#https://}"
-          git clone --depth 1 \
-            "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git" .
+          git init -q .
+          git remote add origin "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth 1 origin "${GITHUB_SHA}"
+          git checkout -q FETCH_HEAD
       - uses: actions/setup-go@v5
         if: github.server_url == 'https://github.com'
         with:
@@ -70,9 +80,14 @@ jobs:
     steps:
       - name: checkout
         run: |
+          # `git clone` alone lands on the default branch, so a pull_request run would test
+          # main instead of the PR. Fetch the exact commit by sha: GITHUB_SHA is set by both
+          # forges and is a commit, not a ref.
           host="${GITHUB_SERVER_URL#https://}"
-          git clone --depth 1 \
-            "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git" .
+          git init -q .
+          git remote add origin "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth 1 origin "${GITHUB_SHA}"
+          git checkout -q FETCH_HEAD
       - name: bilingual docs in sync
         run: sh scripts/check-i18n.sh
 
@@ -85,9 +100,14 @@ jobs:
     steps:
       - name: checkout
         run: |
+          # `git clone` alone lands on the default branch, so a pull_request run would test
+          # main instead of the PR. Fetch the exact commit by sha: GITHUB_SHA is set by both
+          # forges and is a commit, not a ref.
           host="${GITHUB_SERVER_URL#https://}"
-          git clone --depth 1 \
-            "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git" .
+          git init -q .
+          git remote add origin "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth 1 origin "${GITHUB_SHA}"
+          git checkout -q FETCH_HEAD
       - name: Validate kustomize output
         run: make render
 
@@ -97,9 +117,14 @@ jobs:
     steps:
       - name: checkout with history
         run: |
+          # dco needs the merge base, so fetch the branch tip with full history and check out
+          # the PR commit on top of it.
           host="${GITHUB_SERVER_URL#https://}"
-          git clone \
-            "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git" .
+          git init -q .
+          git remote add origin "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
+          git fetch -q origin '+refs/heads/*:refs/remotes/origin/*'
+          git fetch -q origin "${GITHUB_SHA}"
+          git checkout -q FETCH_HEAD
       - name: every commit in the PR carries Signed-off-by
         run: |
           base="origin/${{ github.base_ref }}"
