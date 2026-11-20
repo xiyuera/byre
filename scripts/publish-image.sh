@@ -47,6 +47,25 @@ mkdir -p "$out"
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 
+# The binary in the image has to report a version somebody built. An image built without
+# --build-arg VERSION/COMMIT/BUILD_DATE reports "dev (none, unknown)" and every step of the pipeline
+# still succeeds — that is exactly how v0.4.0 shipped, and the only place the difference is visible is
+# the running process. Ask the artifact, through the runtime that is about to push it, and refuse to
+# publish a build nobody can identify. `make image` supplies all three arguments.
+stamped=$("$runtime" run --rm "$ref" --version 2>&1 | tail -1 || true)
+case "$stamped" in
+  dev\ \(none*|dev|"")
+    echo "image reports '$stamped': built without --build-arg VERSION/COMMIT/BUILD_DATE" >&2
+    echo "rebuild it with 'make image' (it passes all three from git), then publish that tag" >&2
+    exit 2
+    ;;
+esac
+case "$stamped" in
+  "${ref##*:}"*) ;;
+  *) echo "warning: image reports '$stamped', which does not start with the tag ${ref##*:}" >&2 ;;
+esac
+echo "image reports: $stamped"
+
 # Push first; a tag in the output is not evidence, the digest is.
 if ! "$runtime" push "$ref" >"$log" 2>&1; then
   sed 's/^/  /' "$log" >&2 || true
