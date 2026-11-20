@@ -194,3 +194,34 @@ func TestRecoverWithoutAStoreIsAdopt(t *testing.T) {
 		t.Errorf("instance = %q, want lab-5", got.Instance.ID)
 	}
 }
+
+// A recovered lease whose row could not be written must be marked unpersisted, or the sweep never retries
+// it and the next restart loses it -- the cold start recovery exists to remove. The counter alone is not
+// enough: it tells a human, not the code.
+func TestRecoverRetriesABindingWhoseWriteFailed(t *testing.T) {
+	ctx := context.Background()
+	m, fb, _ := newManager(t)
+	st := &fakeStore{}
+	m.SetStore(st)
+	// The store is empty, so this instance is recovered from its annotation and needs a row written.
+	fb.list = []backend.Instance{annotatedIn("lab-1", "alice")}
+	st.setPutErr(errors.New("apiserver unreachable"))
+
+	if _, err := m.Recover(ctx); err == nil {
+		t.Fatal("Recover must report a write it could not complete")
+	}
+	if n := m.UnpersistedCount(); n != 1 {
+		t.Fatalf("unpersisted = %d after a failed write during recovery, want 1", n)
+	}
+
+	st.setPutErr(nil)
+	if _, err := m.Reap(ctx); err != nil {
+		t.Fatalf("Reap: %v", err)
+	}
+	if n := m.UnpersistedCount(); n != 0 {
+		t.Errorf("unpersisted = %d after the sweep retried, want 0", n)
+	}
+	if puts, _ := st.snapshot(); len(puts) != 1 {
+		t.Errorf("puts = %+v, want exactly one successful write", puts)
+	}
+}

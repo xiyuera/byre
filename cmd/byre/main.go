@@ -114,7 +114,15 @@ func main() {
 	// is configured, because claiming an instance that belongs to another deployment is the same mistake
 	// in both modes. Without it, a process pointed at a shared namespace adopts its neighbours' leases and
 	// the reaper eventually releases their instances.
-	mgr.SetAllowedIdentities(identityFingerprints(cfg))
+	fingerprints := identityFingerprints(cfg)
+	if len(fingerprints) == 0 {
+		// A config file with no usable fingerprints yields an unrestricted manager, and the failure mode
+		// is the one the boundary exists to prevent. The manager keeps the permissive behaviour because
+		// embedders rely on it, so the process that read the config has to be the one that says so.
+		logger.Warn("no identities are configured, so adoption is unrestricted: any annotated instance this process can see may be taken over",
+			"action", "check the identities block -- an empty list, or entries without a fingerprint, disable the ownership boundary")
+	}
+	mgr.SetAllowedIdentities(fingerprints)
 
 	// The lease table moves to a CRD when configured (ADR-0013). This has to happen before Adopt: a
 	// store attached later would leave the first restart restoring from annotations, which is the

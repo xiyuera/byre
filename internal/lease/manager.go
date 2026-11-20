@@ -975,6 +975,10 @@ func (m *Manager) pool(name string) *pool {
 // Call this *instead of* Adopt at startup. Bindings that match no live instance are removed: an object
 // that is gone cannot be handed out, and a row naming a backend this configuration dropped can never be
 // satisfied either. Leaving them would make those identities permanently unusable.
+//
+// This is one of only two places that deletes a row this process did not just create (the other is
+// Release). identityAllowed is what makes that safe: a row for an identity we do not serve may belong to
+// another deployment that is using it right now. Any future deletion here needs the same guard.
 func (m *Manager) Recover(ctx context.Context) (int, error) {
 	m.mu.Lock()
 	store := m.store
@@ -1020,6 +1024,11 @@ func (m *Manager) Recover(ctx context.Context) (int, error) {
 	for _, e := range missing {
 		if err := m.persist(ctx, e); err != nil {
 			m.persistErrors.Add(1)
+			// The flag, not the counter, is what makes this heal. Reap and the reuse path both look for
+			// it; a recovered lease whose row was never written is otherwise in memory unmarked, so the
+			// sweep never touches it and the next restart loses it -- the cold start this change exists
+			// to remove.
+			m.markUnpersisted(e.Identity, e.Instance.ID)
 			if firstErr == nil {
 				firstErr = fmt.Errorf("record the recovered lease for %s: %w", shortIdentity(e.Identity), err)
 			}
