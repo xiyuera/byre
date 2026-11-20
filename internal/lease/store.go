@@ -19,6 +19,16 @@ type StoredBinding struct {
 	Backend     string
 	Instance    string
 	InstanceUID string
+
+	// Phase is the persisted lifecycle state, empty for stores that have no such notion (the in-memory
+	// case). Recovery reads it to tell a live binding from one being drained -- handing out an instance
+	// that is already on its way out is the race ADR-0012 exists to close, and a recovered binding has
+	// no in-process memory to consult.
+	Phase string
+
+	// RV is the store's optimistic-concurrency token, empty when the store has none. Recovery carries
+	// it forward so a conditional write cannot resurrect a binding somebody else deleted meanwhile.
+	RV string
 }
 
 // LeaseStore persists bindings. Implementations must be safe for concurrent use.
@@ -48,13 +58,16 @@ type crdStore struct{ inner *crd.Store }
 func NewCRDStore(s *crd.Store) LeaseStore { return &crdStore{inner: s} }
 
 func (c *crdStore) Put(ctx context.Context, b StoredBinding) error {
+	// Phase is passed through rather than forced to Leased. It is written through the status
+	// subresource, so this call cannot change it either way -- but pretending it can would be a lie the
+	// next reader has to un-learn when part 4 starts moving leases to Draining.
 	_, err := c.inner.Put(ctx, crd.Binding{
 		Identity:    b.Identity,
 		Name:        b.Name,
 		Backend:     b.Backend,
 		Instance:    b.Instance,
 		InstanceUID: b.InstanceUID,
-		Phase:       crd.PhaseLeased,
+		Phase:       b.Phase,
 	})
 	if err == nil {
 		return nil
@@ -82,6 +95,8 @@ func (c *crdStore) List(ctx context.Context) ([]StoredBinding, error) {
 			Backend:     b.Backend,
 			Instance:    b.Instance,
 			InstanceUID: b.InstanceUID,
+			Phase:       b.Phase,
+			RV:          b.RV,
 		})
 	}
 	return out, nil

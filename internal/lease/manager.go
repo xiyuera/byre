@@ -190,10 +190,16 @@ func (m *Manager) PersistErrors() int64 { return m.persistErrors.Load() }
 // no-op, not an error: in-memory is a supported mode.
 func (m *Manager) persist(ctx context.Context, e Entry) error {
 	m.mu.Lock()
-	store, name := m.store, m.names[e.Identity]
+	store, name, known := m.store, m.names[e.Identity], len(m.names)
 	m.mu.Unlock()
 	if store == nil {
 		return nil
+	}
+	if name == "" && known > 0 && m.log() != nil {
+		// A configured name that does not reach the object is worse than no name feature at all: a
+		// persistent home is derived from it, so a silent miss means a fresh home on every acquisition.
+		m.log().Warn("identity has no configured name though names are configured",
+			"identity", shortIdentity(e.Identity), "backend", e.Backend, "configured_names", known)
 	}
 	return store.Put(ctx, StoredBinding{
 		Identity:    e.Identity,
@@ -680,8 +686,21 @@ func (m *Manager) Reap(ctx context.Context) (int, error) {
 	now := m.now()
 	horizon := m.ttl + m.grace
 	var draining []*Entry
+	var retry []*Entry
 	for _, e := range m.byIdentity {
-		if e.state != stateLeased || e.refs > 0 {
+		if e.state != stateLeased {
+			continue
+		}
+		if e.unpersisted {
+			// Retried on the sweep as well as on reuse. A client that connects once and leaves would
+			// otherwise keep the binding in memory only for the whole ttl -- hours, at the sizes this
+			// runs at -- and a restart in that window leaves the instance orphaned, which is the
+			// failure this change exists to prevent. The sweep already runs on a fixed interval, so
+			// this costs no timer.
+			cp := *e
+			retry = append(retry, &cp)
+		}
+		if e.refs > 0 {
 			continue
 		}
 		if now.Sub(e.LastSeen) >= horizon {
@@ -695,6 +714,16 @@ func (m *Manager) Reap(ctx context.Context) (int, error) {
 	m.mu.Unlock()
 
 	var firstErr error
+	for _, e := range retry {
+		if err := m.persist(ctx, *e); err != nil {
+			m.persistErrors.Add(1)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		m.markPersisted(e.Identity, e.Instance.ID)
+	}
 	for _, e := range draining {
 		if err := m.release(ctx, e, "expired"); err != nil && firstErr == nil {
 			firstErr = err

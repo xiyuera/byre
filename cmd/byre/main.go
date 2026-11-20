@@ -118,6 +118,17 @@ func main() {
 			os.Exit(1)
 		}
 		mgr.SetStore(lease.NewCRDStore(st))
+		// A table in a different namespace from the instances is legitimate -- one table, instances
+		// spread across namespaces -- but it is also a configuration where an operator looking in the
+		// obvious namespace sees nothing. Say it once, at startup, rather than let it be discovered.
+		if explicit := strings.TrimSpace(cfg.Lease.Namespace); explicit != "" {
+			for name, drv := range backends {
+				if k, ok := drv.(*backend.Kubernetes); ok && k.Namespace() != explicit {
+					logger.Warn("lease table is in a different namespace than the backend that provisions its instances",
+						"backend", name, "lease_namespace", explicit, "backend_namespace", k.Namespace())
+				}
+			}
+		}
 		names := identityNames(cfg)
 		mgr.SetIdentityNames(names)
 		logger.Info("lease store", "kind", "crd", "namespace", st.Namespace(), "identity_names", len(names))
