@@ -93,7 +93,12 @@ import json,sys
 try: d=json.load(sys.stdin)
 except Exception: print('parse_error'); raise SystemExit
 st=[x['status'] for x in (d.get('statuses') or []) if '(pull_request)' not in x['context']]
-print('green' if st and all(s=='success' for s in st) else ('red' if st else 'none'))
+# `skipped` is a pass: dco is deliberately skipped on push (it needs a merge base that a push
+# does not have). Counting it as failure made this check reject a green commit the first time it
+# ran for real. Pending is its own answer -- it means "not finished", not "broken".
+ok = all(s in ('success','skipped') for s in st)
+bad = any(s in ('failure','error','cancelled','cancel') for s in st)
+print(('green' if ok else ('red' if bad else 'pending')) if st else 'none')
 " 2>/dev/null)
 [ "$STATUS" = "green" ] || die "CI on $SHORT is '$STATUS', not green (push-event contexts)"
 say "CI green"
