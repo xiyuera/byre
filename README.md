@@ -74,7 +74,19 @@ Four repairs that look obvious — source address, session id, connection-scoped
 
 ## Quick start
 
-You need Go 1.23+ and at least one machine you can reach over SSH. The simplest backend is
+**Thirty seconds, with Docker.** Nothing to edit, no Go, no cluster:
+
+```sh
+git clone https://github.com/xiyuera/byre && cd byre/examples/quickstart
+./run.sh
+```
+
+It generates the keys, renders the config, builds a sandbox image, starts both containers and prints
+the one `ssh` command you need. Connect twice and you get the same instance; wait out the 120s ttl and
+it is released. [`examples/quickstart/`](examples/quickstart/README.md) explains what you are looking
+at and how to move from it to a real deployment.
+
+**Without Docker**, five minutes and one machine you can already reach over SSH. The simplest backend is
 `provision: endpoints`: nothing is created, the gateway only decides who gets which host. For the five
 minutes below that host can be any Linux box with `sshd`, including the one you are sitting at.
 

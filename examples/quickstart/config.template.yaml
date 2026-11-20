@@ -1,0 +1,36 @@
+# Template for `run.sh`. It renders one copy per run into .work/config.yaml, substituting
+# __FINGERPRINT__ with the SHA256 of the client key it just generated.
+#
+# `provision: endpoints` is deliberate: the quickstart's job is to show the lease, not to show a
+# provisioner. One sandbox container exists for the whole demo, and the gateway leases it to
+# whichever identity connects. Swap this block for `docker`/`claims` (see ../docker-sandbox and
+# ../kubernetes-sandbox) to see provisioning instead.
+listen: ":2222"
+
+# Written on first start. Inside the container $HOME is /home/byre and is writable, so no mount is
+# needed; a restarted container gets a new host key, which is fine for a throwaway demo.
+host_key: /home/byre/.ssh/id_ed25519
+
+lease:
+  # Short enough that a curious reader sees the instance come back on its own. Real deployments
+  # use hours: the whole point is that reconnecting inside the window lands on the same instance.
+  ttl: 120s
+  grace: 30s
+
+backends:
+  - name: demo
+    provision: endpoints
+    endpoints: ["sandbox:22"]
+    ssh:
+      user: sandbox
+      private_key: /home/byre/id_key
+      # The sandbox image rebuilds a host key every time, and the container is throwaway, so
+      # pinning would refuse every run after the first rebuild. See the note in
+      # ../../docs/integrations/agent-runtime.md about when `insecure` is the correct choice.
+      host_key_policy: insecure
+
+identities:
+  # Rendered by run.sh. This is the entire access-control model: a key that is not in this list is
+  # refused during authentication, with no message that distinguishes it from a bad password.
+  - fingerprint: "__FINGERPRINT__"
+    backend: demo
