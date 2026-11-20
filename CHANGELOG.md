@@ -11,6 +11,15 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
 
 ### Added
 
+- **`scripts/release.sh` cuts a release in one verified pass.** The first v0.4.0 attempt lost
+  half an hour waiting for a GitHub run that could never start: the tag existed on Gitea and not
+  on the mirror. Gitea's push mirror propagates a tag *deletion* but not a *re-creation*, and it
+  reports no error because nothing failed — there was simply nothing to send. The script now
+  pushes the tag to both forges, reads both tag objects back and compares them to the local one,
+  waits on each side with a bound, and finishes by checking release assets on both forges and that
+  the image manifest answers `200` to an anonymous pull. Tag creation is idempotent: the same
+  commit reuses the tag, a different commit is refused instead of silently moved.
+
 - **A release publishes the image digest its tag resolved to.** `images.txt` is written by the pipeline
   now, not by hand: `scripts/record-release-image.sh` asks the registry what `<tag>` resolves to, hashes
   the manifest it gets back, and the release uploads that file beside the binaries. A tag whose image was

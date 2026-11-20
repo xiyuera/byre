@@ -23,23 +23,53 @@ A release is not "a passing CI run". It needs, in the release notes:
 
 ## How the pipeline works
 
-`.gitea/workflows/release.yml` runs on a `v*` tag and does nothing but supply inputs to `make dist`:
+`.github/workflows/release.yml` runs on a `v*` tag. It is one workflow serving two forges, so the
+steps differ only where the forges genuinely differ — never by duplicating the file.
 
-1. `make dist` builds static `linux/arm64` and `linux/amd64` binaries, `CGO_ENABLED=0`, with one build
-   date for both — the commit date in UTC, read once;
-2. the same target writes `build-info.txt` (version, commit, tag, build date, the exact `ldflags`, the
-   `GOOS`/`GOARCH` of every asset, the Go toolchain, the digest of the job image, and a `reproduce=`
-   line) and `SHA256SUMS` over the binaries and `build-info.txt`;
-3. `scripts/record-release-image.sh` asks the registry what `<tag>` resolves to and writes `images.txt`
-   — the digest, the reference to pin, and `PUSHED_AT=unknown` (a registry manifest carries no push
-   timestamp). It is not covered by `SHA256SUMS`: a checksum file describes what a rebuild reproduces,
-   and a registry's answer at one moment is not that. A tag whose image was never pushed fails here
-   instead of publishing a guessed digest, so **push the image for the tag, then push the tag**;
-4. create the release on Gitea through the API, upload those five files, then read `images.txt` back
-   and check it is still what the registry says — the upload loop cannot tell whether it wrote to the
-   right release, and a tag re-pushed mid-release would leave the published digest already stale.
-There is no step 5, and no GitHub API call anywhere in `release.yml`, which should not be described as
-if there were: publishing to a second host is a manual mirroring act, not part of a release.
+1. **Checkout the tagged commit**, not the default branch. `git clone` without a ref lands on
+   `main`, which is how a `pull_request` run once spent days testing the wrong tree.
+2. **Build both binaries**: `linux/arm64` and `linux/amd64`, `CGO_ENABLED=0`, plus `SHA256SUMS`.
+   The smoke check (`--version`) runs only the artifact matching the runner's own architecture:
+   a cross-built ELF cannot start, and `Exec format error` (exit 126) takes the whole job down
+   for a step whose only job was to prove the native one runs.
+3. **Push the image.** `vars.REGISTRY` decides where. Unset on GitHub means `ghcr.io`, and the
+   job token authenticates it because the workflow declares `permissions.packages: write`.
+   Unset on Gitea means this forge has no registry wired up — a Gitea token cannot authenticate
+   to GHCR at all — so the step prints why and exits 0 instead of failing a tag build whose
+   binaries are fine. Set `vars.REGISTRY` on either side to override.
+4. **Create the release** on whichever forge is running, uploading the binaries, `SHA256SUMS`,
+   `build-info.txt` and `images.txt`. The GitHub half uses `gh release create`; the Gitea half
+   uses the REST API, because `tea` is not guaranteed on a job pod.
+
+There is no `uses:` anywhere in either workflow: Gitea ignores step-level `if:` and executes the
+action anyway, so a forge-guarded `uses: actions/setup-go` runs on a runner that cannot reach
+GitHub. Both conditions and the toolchain are shell.
+
+### Compatibility of the toolchain
+
+The job image carries Go and docker; when `go` is absent the step installs the version `go.mod`
+asks for and appends it to `$GITHUB_PATH`. Module downloads honor `secrets.GOPROXY` with a
+`https://proxy.golang.org,direct` fallback — the `||` matters because an empty `GOPROXY` means
+*off* to the go command, not "use the default".
+
+## Cutting a release
+
+`scripts/release.sh vX.Y.Z` does the whole thing and verifies what a user touches:
+
+1. tree clean, on `main`, level with `origin/main`; `CHANGELOG.md` has that version's section;
+   the commit's push-event CI is green;
+2. annotated tag, **idempotent** — same commit reuses it, a different commit is refused rather
+   than silently moved;
+3. push the tag to **both** forges and read both back, comparing tag object IDs. Gitea's push
+   mirror propagates a tag *deletion* but not a tag *re-creation*, so a re-cut tag exists on the
+   source and nowhere else; a wait loop then looks like "still building" instead of
+   "will never start", which is exactly how one release attempt lost half an hour;
+4. bounded waits on each forge's release run, with the failure named;
+5. verify release assets on both forges and that the image manifest answers `200` to an
+   **anonymous** request.
+
+Pushing the tag by hand — `git push origin vX.Y.Z` — is what makes step 3 fail later. There is
+no supported path that skips it.
 
 ## Rebuilding a release
 
@@ -59,23 +89,28 @@ cd dist && sha256sum -c SHA256SUMS
 
 Two builds of one commit produce identical bytes, which is why the build date is the commit date rather
 than the clock on the builder. Anything that changes the bytes must change a field `build-info.txt`
-records: the source, the flags, or the compiler. The job image is pinned in `release.yml` and the job
-fails when the image's Go differs from the pin, so a compiler change cannot enter a release unnamed.
+records: the source, the flags, or the compiler.
 
 `SHA256SUMS` covers every other asset but not itself — a checksum file cannot contain its own digest.
 
-## Publishing to GitHub
+## What the two forges do differently
 
 Gitea is the source of truth; GitHub is a public mirror.
 
-- **Code and tags** travel by Gitea's *push mirror* (Settings → Repository → Mirror Settings). It syncs
-  branches, tags and commits only — issues, PRs and releases are **not** mirrored, and a *pull* mirror
-  deletes releases created on the mirror side.
-- **Release assets are not mirrored.** The pipeline uploads to Gitea only; copying a release to GitHub
-  is a manual step, and undocumented automation is worse than none: `gh release create <tag> \
-  --notes-file <changelog section> dist/*` after the tag exists on both sides.
-- **Nothing flows back.** Pull requests are accepted on Gitea only; the GitHub repository stays read-only so
-  there is one place where a review happened.
+| | Gitea | GitHub |
+|---|---|---|
+| role | source, reviews happen here | public mirror, read-only |
+| code and tags | pushed directly | receive a Gitea *push mirror* |
+| releases/assets | pipeline creates them | pipeline creates them |
+| the image | skipped unless `vars.REGISTRY` is set | `ghcr.io`, job token, no config |
+
+Two mirror behaviours worth knowing before debugging a "release never ran":
+
+- **A deleted ref replicates; a re-created one may not.** A tag deleted and re-cut exists on the
+  source and not on the mirror. Nothing reports an error — the mirror's own `last_error` stays
+  empty, because nothing failed; there was simply nothing to send.
+- **Issues, PRs and releases do not mirror at all.** Only refs travel. A release created on Gitea
+  is not a release on GitHub, which is why the workflow creates one on each side it runs on.
 
 ## What the repository publishes
 
