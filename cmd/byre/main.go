@@ -26,6 +26,8 @@ import (
 	"byre/internal/metrics"
 	"byre/internal/sshfront"
 	"byre/internal/version"
+
+	"k8s.io/client-go/dynamic"
 )
 
 func main() {
@@ -108,6 +110,20 @@ func main() {
 		}
 	}
 
+	// Which identities this process serves, told unconditionally: adoption reads it whether or not a store
+	// is configured, because claiming an instance that belongs to another deployment is the same mistake
+	// in both modes. Without it, a process pointed at a shared namespace adopts its neighbours' leases and
+	// the reaper eventually releases their instances.
+	fingerprints := identityFingerprints(cfg)
+	if len(fingerprints) == 0 {
+		// A config file with no usable fingerprints yields an unrestricted manager, and the failure mode
+		// is the one the boundary exists to prevent. The manager keeps the permissive behaviour because
+		// embedders rely on it, so the process that read the config has to be the one that says so.
+		logger.Warn("no identities are configured, so adoption is unrestricted: any annotated instance this process can see may be taken over",
+			"action", "check the identities block -- an empty list, or entries without a fingerprint, disable the ownership boundary")
+	}
+	mgr.SetAllowedIdentities(fingerprints)
+
 	// The lease table moves to a CRD when configured (ADR-0013). This has to happen before Adopt: a
 	// store attached later would leave the first restart restoring from annotations, which is the
 	// defect the store exists to fix.
@@ -134,12 +150,16 @@ func main() {
 		logger.Info("lease store", "kind", "crd", "namespace", st.Namespace(), "identity_names", len(names))
 	}
 
-	// Adoption must happen before warming: an unannotated instance found at startup is stale pool
+	// Recovery must happen before warming: an unannotated instance found at startup is stale pool
 	// capacity for drivers that can tell (see ADR-0009), while warming would immediately create more.
 	// The outcome is always logged, including "nothing adopted": a restart that quietly found nothing
 	// and a restart that quietly destroyed something used to look the same.
-	if n, err := mgr.Adopt(ctx); err != nil {
-		logger.Warn("adoption incomplete", "adopted", n, "error", err)
+	//
+	// Recover rather than Adopt: with a store configured the durable table is read first, so a restart
+	// hands back the instance each identity was using instead of cold-starting all of them. Without one,
+	// or when the store cannot be read, Recover delegates to Adopt and behaviour is exactly as before.
+	if n, err := mgr.Recover(ctx); err != nil {
+		logger.Warn("recovery incomplete", "adopted", n, "error", err)
 	} else {
 		logger.Info("adoption finished", "adopted", n)
 	}
@@ -425,35 +445,50 @@ func identityNamer(cfg *config.Config, backendName string) func(string) (string,
 // having.
 func newLeaseStore(ctx context.Context, cfg *config.Config, backends map[string]backend.Backend) (*crd.Store, error) {
 	namespace := strings.TrimSpace(cfg.Lease.Namespace)
-	var st *crd.Store
-	for name, drv := range backends {
+	var borrowed dynamic.Interface
+	for _, drv := range backends {
 		k, ok := drv.(*backend.Kubernetes)
 		if !ok {
 			continue
 		}
-		dyn := k.Dynamic()
-		if dyn == nil {
-			return nil, fmt.Errorf("backend %q has no cluster client (was it built in dry-run mode?)", name)
-		}
 		if namespace == "" {
 			namespace = k.Namespace()
 		}
-		st = crd.New(dyn, namespace)
+		// A dry-run backend has no cluster client: -check-config must work on a machine with no
+		// credentials, so its client is nil by design.
+		borrowed = k.Dynamic()
 		break
 	}
-	if st == nil {
-		// No Kubernetes backend to borrow a client from: a `command` or `endpoints` backend can still
-		// want the table in a cluster, because where instances come from and where the binding is
-		// recorded are independent questions.
+
+	var st *crd.Store
+	switch {
+	case cfg.Lease.Kubeconfig != "":
+		// An explicit kubeconfig wins over borrowing. It is how the table is pointed at a cluster the
+		// backends do not use, and on a machine whose backends rely on in-cluster credentials it is the
+		// only way to give the table the permissions the backend's identity may not have.
 		if namespace == "" {
-			return nil, fmt.Errorf("lease.store is %q but no namespace is known: set lease.namespace", cfg.Lease.Store)
+			return nil, fmt.Errorf("lease.store is %q with lease.kubeconfig set but no namespace is known", cfg.Lease.Store)
 		}
 		var err error
 		st, err = crd.NewFromKubeconfig(cfg.Lease.Kubeconfig, namespace)
 		if err != nil {
 			return nil, err
 		}
+	case borrowed != nil:
+		st = crd.New(borrowed, namespace)
+	case namespace != "":
+		// No Kubernetes backend to borrow from: a `command` or `endpoints` backend can still want the
+		// table in a cluster, because where instances come from and where the binding is recorded are
+		// independent questions.
+		var err error
+		st, err = crd.NewFromKubeconfig("", namespace)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("lease.store is %q but no namespace is known: set lease.namespace", cfg.Lease.Store)
 	}
+
 	// Checked at startup so a missing CRD is a sentence naming the manifest to apply, not a bare 404 on
 	// somebody's first connection.
 	if err := st.Ready(ctx); err != nil {
@@ -476,6 +511,19 @@ func identityNames(cfg *config.Config) map[string]string {
 			continue
 		}
 		out[strings.TrimPrefix(id.Fingerprint, "SHA256:")] = id.Name
+	}
+	return out
+}
+
+// identityFingerprints lists every configured identity, named or not. It feeds SetAllowedIdentities,
+// which is what stops this process from adopting -- and later releasing -- instances that belong to a
+// different deployment sharing the same namespace.
+func identityFingerprints(cfg *config.Config) []string {
+	out := make([]string, 0, len(cfg.Identities))
+	for _, id := range cfg.Identities {
+		if id.Fingerprint != "" {
+			out = append(out, id.Fingerprint)
+		}
 	}
 	return out
 }

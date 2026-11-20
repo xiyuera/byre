@@ -14,8 +14,10 @@ type fakeStore struct {
 	mu      sync.Mutex
 	puts    []StoredBinding
 	deletes []string
+	list    []StoredBinding
 	putErr  error
 	delErr  error
+	listErr error
 }
 
 func (f *fakeStore) Put(_ context.Context, b StoredBinding) error {
@@ -38,7 +40,14 @@ func (f *fakeStore) Delete(_ context.Context, identity string) error {
 	return nil
 }
 
-func (f *fakeStore) List(context.Context) ([]StoredBinding, error) { return nil, nil }
+func (f *fakeStore) List(context.Context) ([]StoredBinding, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return append([]StoredBinding(nil), f.list...), nil
+}
 
 // setPutErr flips the store between failing and working, for the tests that exercise recovery.
 func (f *fakeStore) setPutErr(err error) {
