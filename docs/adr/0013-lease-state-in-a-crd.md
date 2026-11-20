@@ -1,19 +1,59 @@
 # ADR-0013 — Lease state belongs in a CRD; memory holds only what is derived
 
-- Status: accepted (implementation deferred to the next minor release)
+- Status: accepted (implementation in progress; see Implementation)
 - Date: 2026-11-20
 - Deciders: maintainers
 - Qualifies: ADR-0002 (one live lease per identity), ADR-0010 (multi-replica preconditions)
 
-## Implementation note
+## Implementation
 
-Accepted as the direction; the code change is deliberately deferred to the next minor release, because
-it needs a new API type, RBAC and a migration of the existing annotations.
+Landing in parts, because a single change to the acquisition path is a regression nobody sees until an
+operator's ssh stops working.
 
-If the failure recurs before then, the first-layer fix ships on its own: an informer watch that drops a
-`byIdentity` row when its instance object is deleted. That is roughly 100 lines, moves no state, and
-removes the "delete a sandbox, every entry point dials a dead address" outcome. It does not fix restarts
-or enable a second replica — those still wait for this ADR.
+| part | what | state |
+|---|---|---|
+| 1 | `ByreLease` CRD, `internal/lease/crd` (get/put/update/setPhase/delete/list/watch), RBAC | landed |
+| 2 | `LeaseStore` interface; `Acquire` writes the binding, `Release` deletes it; failures counted | landed |
+| 3 | startup reads the bindings instead of relying on annotations | next |
+| 4 | watch: an instance object that goes away moves its lease to `Draining` | next |
+| 5 | connection-level demotion (see below) | under discussion |
+
+Parts 1–2 change no behaviour on their own: with no store configured the manager keeps its table in
+memory, which stays the correct mode for `endpoints` and `command` — those provision nothing, so there
+is nothing for a second replica to agree about.
+
+**Part 3 is the one that stops the recurring incident.** It was placed after the watch when this ADR
+was written; it is now before it, because the failure that keeps happening is not "the object was
+deleted" but "the process restarted and forgot everything".
+
+## A second failure mode this ADR did not anticipate
+
+The Context above describes an instance that is **deleted**. In practice the more common shape is an
+instance that is **still there and no longer usable**:
+
+```
+container OOM-killed and restarted
+→ the object is untouched: the pod is still Running, the claim still exists
+→ no Deleted event, and Alive()'s GET answers "it is still there"
+→ sshd inside the container refuses new sessions until it is ready again
+→ every reconnect is handed an instance that answers "session open refused by peer"
+```
+
+Neither the watch in part 4 nor `Alive()` catches this: both ask about the **object**, and the object is
+fine. What is broken is reachability. The only signal that carries this information is the connection
+itself, which is why part 5 exists:
+
+> After N consecutive session-open failures on the same instance, within a bounded window, treat the
+> instance as unusable: drop the lease and provision a replacement. N and the window are configuration,
+> and the counter resets on any successful session.
+
+The threshold matters more than it looks: too eager and a brief network blip destroys a client's files;
+too lazy and an operator waits out a ttl of hours. It should default to "clearly broken", not "slightly
+slow".
+
+**The general lesson, worth stating because it will recur:** a lease is a claim about *usability*, not
+about *existence*. Every check in this codebase that asks "does the object exist" is answering a
+strictly weaker question than the one that matters.
 
 ## Context
 
