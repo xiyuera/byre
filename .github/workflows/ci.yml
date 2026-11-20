@@ -23,6 +23,10 @@ permissions:
 
 env:
   GH_TOKEN: ${{ secrets.GITEA_TOKEN || github.token }}
+  # proxy.golang.org is unreachable from the Gitea runner; the same modules come from the
+  # mirror named here. `|| default` matters: an empty GOPROXY means "off" to the go tool, not
+  # "use the default".
+  GOPROXY: ${{ secrets.GOPROXY || 'https://proxy.golang.org,direct' }}
 
 jobs:
   test:
@@ -38,11 +42,21 @@ jobs:
           git remote add origin "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
           git fetch -q --depth 1 origin "${GITHUB_SHA}"
           git checkout -q FETCH_HEAD
-      - uses: actions/setup-go@v5
-        if: github.server_url == 'https://github.com'
-        with:
-          go-version-file: go.mod
-          cache: true
+      # Gitea ignores step-level `if:` AND still executes any `uses:`, so a JS action cannot be
+      # made conditional. The job image ships Go on Gitea; GitHub's runner does not. Installed
+      # in shell so both forges take the same path.
+      - name: ensure go
+        run: |
+          if command -v go >/dev/null 2>&1; then
+            echo "go present: $(go version)"
+            exit 0
+          fi
+          ver=$(awk '/^go /{print $2; exit}' go.mod)
+          echo "installing go ${ver}"
+          curl -fsSL "https://go.dev/dl/go${ver}.linux-amd64.tar.gz" -o /tmp/go.tgz
+          tar -xzf /tmp/go.tgz -C /tmp
+          echo "/tmp/go/bin" >> "$GITHUB_PATH"
+          /tmp/go/bin/go version
       - name: go vet
         run: go vet ./...
       - name: tests
@@ -61,11 +75,21 @@ jobs:
           git remote add origin "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
           git fetch -q --depth 1 origin "${GITHUB_SHA}"
           git checkout -q FETCH_HEAD
-      - uses: actions/setup-go@v5
-        if: github.server_url == 'https://github.com'
-        with:
-          go-version-file: go.mod
-          cache: true
+      # Gitea ignores step-level `if:` AND still executes any `uses:`, so a JS action cannot be
+      # made conditional. The job image ships Go on Gitea; GitHub's runner does not. Installed
+      # in shell so both forges take the same path.
+      - name: ensure go
+        run: |
+          if command -v go >/dev/null 2>&1; then
+            echo "go present: $(go version)"
+            exit 0
+          fi
+          ver=$(awk '/^go /{print $2; exit}' go.mod)
+          echo "installing go ${ver}"
+          curl -fsSL "https://go.dev/dl/go${ver}.linux-amd64.tar.gz" -o /tmp/go.tgz
+          tar -xzf /tmp/go.tgz -C /tmp
+          echo "/tmp/go/bin" >> "$GITHUB_PATH"
+          /tmp/go/bin/go version
       - name: gofmt
         run: |
           unformatted=$(gofmt -l . | grep -v '^vendor/' || true)

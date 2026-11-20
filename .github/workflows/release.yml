@@ -20,6 +20,7 @@ permissions:
 
 env:
   GH_TOKEN: ${{ secrets.GITEA_TOKEN || github.token }}
+  GOPROXY: ${{ secrets.GOPROXY || 'https://proxy.golang.org,direct' }}
   REGISTRY: ${{ vars.REGISTRY }}
   REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN || secrets.GITEA_TOKEN || github.token }}
 
@@ -34,11 +35,18 @@ jobs:
           git checkout -q "${GITHUB_REF_NAME}"
           echo "at $(git rev-parse --short HEAD) ($(git describe --tags --exact-match 2>/dev/null || echo no-tag))"
 
-      - uses: actions/setup-go@v5
-        if: github.server_url == 'https://github.com'
-        with:
-          go-version-file: go.mod
-          cache: true
+      - name: ensure go
+        run: |
+          if command -v go >/dev/null 2>&1; then
+            echo "go present: $(go version)"
+            exit 0
+          fi
+          ver=$(awk '/^go /{print $2; exit}' go.mod)
+          echo "installing go ${ver}"
+          curl -fsSL "https://go.dev/dl/go${ver}.linux-amd64.tar.gz" -o /tmp/go.tgz
+          tar -xzf /tmp/go.tgz -C /tmp
+          echo "/tmp/go/bin" >> "$GITHUB_PATH"
+          /tmp/go/bin/go version
 
       - name: build linux binaries
         run: |
@@ -72,10 +80,15 @@ jobs:
           printf 'IMAGE_REF=%s\nIMAGE_DIGEST=%s\n' "$ref" "$digest" >> dist/images.txt
           cat dist/images.txt
 
-      - name: attach release assets (GitHub only)
-        if: github.server_url == 'https://github.com'
+      - name: attach release assets
+        env:
+          HOST_URL: ${{ github.server_url }}
         run: |
           tag="${GITHUB_REF_NAME}"
+          if [ "$HOST_URL" != "https://github.com" ]; then
+            echo "not github ($HOST_URL); skipping gh release"
+            exit 0
+          fi
           awk -v t="$tag" '
             $0 ~ "^## \\[" substr(t,2) "\\]" {p=1; next}
             p && /^## \[/ {exit}
@@ -85,11 +98,16 @@ jobs:
           gh release create "$tag" dist/* --title "$tag" --notes-file notes.md --verify-tag
 
       - name: attach release assets (Gitea)
-        if: github.server_url != 'https://github.com'
+        env:
+          HOST_URL: ${{ github.server_url }}
         run: |
           # Gitea's `tea` CLI is not guaranteed on a job pod, so the release is created through
           # the REST API with the job token instead of a CLI.
           tag="${GITHUB_REF_NAME}"
+          if [ "$HOST_URL" = "https://github.com" ]; then
+            echo "github; handled by the previous step"
+            exit 0
+          fi
           host="${GITHUB_SERVER_URL#https://}"
           api="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
           existing=$(curl -sS -H "Authorization: token ${GH_TOKEN}" "${api}/releases/tags/${tag}")
