@@ -24,6 +24,21 @@ import (
 // for every client.
 const defaultLivenessTimeout = 2 * time.Second
 
+// The two numbers behind the reaper's sweep for instances that belong to nobody.
+//
+// reclaimEvery is how often a List is spent on the question. It is deliberately not the reap interval: a
+// reap is arithmetic on the lease table, while a sweep is an API call, and one every 30 seconds for a
+// condition that only a crash or a failed release produces is noise.
+//
+// reclaimAge is the age an anonymous instance must exceed before it can be destroyed. It is the guard
+// that makes the sweep safe rather than clever: a create that is still waiting for its endpoint is
+// invisible to the lease table (the instance has no ID yet), so only age separates "abandoned" from
+// "in flight". It must therefore stay comfortably above the largest provider.ready_timeout.
+const (
+	defaultReclaimEvery = 5 * time.Minute
+	defaultReclaimAge   = 15 * time.Minute
+)
+
 // entryState is the lifecycle of one table row. Each state says what a caller may do with the entry:
 //
 //	pending   an instance is being created; another connection for the same identity waits for the
@@ -107,6 +122,12 @@ type Manager struct {
 	logger     *slog.Logger
 	adopted    int
 	discarded  int
+	reclaimed  int
+
+	// reap-age bookkeeping for the sweep; see defaultReclaimEvery.
+	reclaimEvery time.Duration
+	reclaimAge   time.Duration
+	lastReclaim  time.Time
 }
 
 // SetLogger attaches a logger (optional).
@@ -132,6 +153,8 @@ func New(ttl, grace time.Duration, backends map[string]backend.Backend) (*Manage
 		grace:           grace,
 		now:             time.Now,
 		livenessTimeout: defaultLivenessTimeout,
+		reclaimEvery:    defaultReclaimEvery,
+		reclaimAge:      defaultReclaimAge,
 		backends:        backends,
 		byIdentity:      make(map[string]*Entry),
 	}, nil
@@ -493,7 +516,108 @@ func (m *Manager) Reap(ctx context.Context) (int, error) {
 			firstErr = err
 		}
 	}
+	// The sweep runs on its own, much slower clock; see defaultReclaimEvery. A driver that reports a
+	// broken List must not make the reap itself look broken, so a sweep error is returned but the reap
+	// count is unaffected.
+	if err := m.reclaimAnonymous(ctx); err != nil && firstErr == nil {
+		firstErr = err
+	}
 	return len(draining), firstErr
+}
+
+// reclaimAnonymous destroys instances that belong to nobody.
+//
+// Adopt already does this, but only at startup. An object can also be orphaned while the process runs —
+// a create that lost its annotate step, a release that failed three times — and then it survives until
+// the next restart, which with a long ttl is arbitrarily long. Measured on a live gateway: two claims
+// with no identity annotation stayed Running for half an hour across a restart, because the lister never
+// returned them at all.
+//
+// Three guards, because destroying a live lease is unrecoverable and leaving capacity behind is not:
+//   - the driver must promise that an anonymous instance is stale (backend.StaleCapacity);
+//   - the instance must be unreferenced: not in a lease row, not held as warm capacity;
+//   - the driver must report a creation time, and it must be older than reclaimAge. No timestamp means
+//     no decision — the instance could be a create that is still waiting for an address.
+//
+// It returns the first error (a List or a Release that failed); every other instance is still processed.
+func (m *Manager) reclaimAnonymous(ctx context.Context) error {
+	m.mu.Lock()
+	now := m.now()
+	if !m.lastReclaim.IsZero() && now.Sub(m.lastReclaim) < m.reclaimEvery {
+		m.mu.Unlock()
+		return nil
+	}
+	m.lastReclaim = now
+	age := m.reclaimAge
+	drivers := make(map[string]backend.Backend, len(m.backends))
+	for name, drv := range m.backends {
+		drivers[name] = drv
+	}
+	held := make(map[string]struct{}, len(m.byIdentity))
+	for _, e := range m.byIdentity {
+		if e.Instance.ID != "" {
+			held[e.Instance.ID] = struct{}{}
+		}
+	}
+	pools := make([]*pool, 0, len(m.pools))
+	for _, p := range m.pools {
+		pools = append(pools, p)
+	}
+	m.mu.Unlock()
+
+	// Warm capacity is anonymous by definition; it is the pool's, not a leak.
+	for _, p := range pools {
+		p.mu.Lock()
+		for _, in := range p.warm {
+			held[in.ID] = struct{}{}
+		}
+		p.mu.Unlock()
+	}
+
+	var firstErr error
+	for name, drv := range drivers {
+		sc, ok := drv.(backend.StaleCapacity)
+		if !ok || !sc.AnonymousInstancesAreStale() {
+			continue
+		}
+		ins, err := drv.List(ctx)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("reclaim: list on %q: %w", name, err)
+			}
+			continue
+		}
+		for _, in := range ins {
+			if in.Annotations[backend.LabelIdentity] != "" {
+				continue
+			}
+			if _, ok := held[in.ID]; ok {
+				continue
+			}
+			if in.Created.IsZero() || now.Sub(in.Created) < age {
+				continue
+			}
+			if err := drv.Release(ctx, in); err != nil {
+				metrics.IncReleaseError()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("reclaim %s on %q: %w", in.ID, name, err)
+				}
+				continue
+			}
+			m.mu.Lock()
+			m.discarded++
+			m.reclaimed++
+			logger := m.logger
+			m.mu.Unlock()
+			if logger != nil {
+				logger.Warn("abandoned instance reclaimed",
+					"backend", name, "instance", in.ID,
+					"created", in.Created.UTC().Format(time.RFC3339),
+					"reason", "no "+backend.LabelIdentity+" annotation and no lease holds it")
+			}
+		}
+	}
+	return firstErr
 }
 
 // release destroys the instance behind a draining entry and then removes the row. The backend call
@@ -699,12 +823,22 @@ func (m *Manager) AdoptedTotal() int {
 	return m.adopted
 }
 
-// DiscardedTotal reports how many instances adoption destroyed because nothing could own them
-// (no identity annotation, a duplicate identity, or a description that could not be dialled).
+// DiscardedTotal reports how many instances were destroyed because nothing could own them
+// (no identity annotation, a duplicate identity, or a description that could not be dialled). It counts
+// both decisions: the one taken at startup and the one taken by the sweep.
 func (m *Manager) DiscardedTotal() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.discarded
+}
+
+// ReclaimedTotal reports how many of those were destroyed by the running sweep rather than at startup.
+// The two are worth telling apart: a non-zero reclaimed count after a long uptime means objects are
+// being orphaned while the gateway runs, which is a defect in the create/bind/release path, not leftovers.
+func (m *Manager) ReclaimedTotal() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return int64(m.reclaimed)
 }
 
 // RunReaper reaps expired leases every interval until ctx is done.

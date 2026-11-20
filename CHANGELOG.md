@@ -19,7 +19,19 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
   waits on each side with a bound, and finishes by checking release assets on both forges and that
   the image manifest answers `200` to an anonymous pull. Tag creation is idempotent: the same
   commit reuses the tag, a different commit is refused instead of silently moved.
-
+- **The identity is written as a label next to the annotation, and operators can add their own.**
+  `byre.io/identity-ref` carries the fingerprint in a form a label can hold (the annotation keeps it
+  exact), and `identities[].labels` is a new config block whose keys are written on every object that
+  identity leases — `hermes.profile: eng` and the like. Without it a cluster could not say who held an
+  instance: the SandboxTemplate put the same constant on every pod, which reads as an answer and is not
+  one. See `docs/identity-on-the-pod.md`.
+- **The reaper sweeps instances that belong to nobody.** Adoption only runs at startup; an object
+  orphaned while the process runs (a create that lost its annotate step, a release that failed three
+  times) used to survive until the next restart. The sweep runs every 5 minutes, only for drivers that
+  promise anonymous instances are stale, only for objects older than 15 minutes, and never for one a
+  lease row or the warm pool still references. `byre_instances_reclaimed` counts them separately from
+  the startup decisions, because a non-zero value after a long uptime means the create/bind/release path
+  is leaking, not that leftovers were tidied.
 - **A release publishes the image digest its tag resolved to.** `images.txt` is written by the pipeline
   now, not by hand: `scripts/record-release-image.sh` asks the registry what `<tag>` resolves to, hashes
   the manifest it gets back, and the release uploads that file beside the binaries. A tag whose image was
@@ -35,6 +47,20 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
   so a digest-only comparison passes while the pod runs the other image. It exits 2 when it cannot
   qualify the check (a bare digest with no registry to compare against), because "could not check" must
   not read as "checked and fine". `make image-verify IMAGES=images.txt` takes the release's own asset.
+
+### Fixed
+
+- **`list` no longer drops an object it cannot address.** The claim path read only
+  `status.sandbox.serviceFQDN` and skipped anything that did not have one, so an object that was ready by
+  its pod IP was invisible to `Adopt` and to `Reap`: neither reused nor destroyed, just Running. Two
+  claims in that state survived a restart on a live gateway while the log reported two *other* anonymous
+  claims discarded. Every selected object is returned now, with the address resolved the way readiness
+  resolves it, and one with no address at all is logged rather than hidden. ADR-0014.
+- **An image whose binary reports the unstamped default can no longer be published.**
+  `scripts/publish-image.sh` runs the image and refuses (`exit 2`) when it prints `dev (none, unknown)`,
+  which is what a build without `--build-arg VERSION/COMMIT/BUILD_DATE` produces while every pipeline
+  step succeeds. That is how v0.4.0 shipped `byre_build_info{version="dev",commit="none"}`. `make image`
+  already supplies the arguments; nothing was checking the artifact.
 
 ## [0.4.0] — the sandbox backend ships with the gateway
 

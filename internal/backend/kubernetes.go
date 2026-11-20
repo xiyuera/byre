@@ -46,6 +46,11 @@ const (
 	// LabelHome marks a claim created for an identity's persistent home. Operators list them with
 	// `kubectl get pvc -l byre.io/home=true` instead of having to know the naming scheme.
 	LabelHome = "byre.io/home"
+	// LabelIdentityRef is the label form of LabelIdentity. A label value cannot carry the characters a
+	// base64 fingerprint contains ('+', '/', '='), so the value is transliterated — and therefore a
+	// hint that can be selected and propagated, never the authoritative identity. The annotation next
+	// to it is that.
+	LabelIdentityRef = "byre.io/identity-ref"
 )
 
 // ProviderSpec is the declarative description of "what an instance is and how it is started".
@@ -114,6 +119,12 @@ type KubernetesConfig struct {
 	// when Provider.Home is set, and deliberately not defaulted to a hash of the fingerprint: a hash
 	// changes when the key rotates, so a rotation would silently start over in an empty directory.
 	IdentityName func(fingerprint string) (string, error)
+	// IdentityLabels returns the operator-declared labels for a fingerprint (for example
+	// hermes.profile=eng). They are written on the object next to the binding annotation, so a claim —
+	// and a pod built from a template that propagates labels — says which identity holds it instead of
+	// carrying a constant. Nil means "no extra labels", not "derive something": the backend will not
+	// invent an operator's naming scheme.
+	IdentityLabels func(fingerprint string) map[string]string
 
 	// Clients are injectable for tests; when nil they are built from Kubeconfig / in-cluster config.
 	Client  kubernetes.Interface
@@ -250,7 +261,7 @@ func (k *Kubernetes) Acquire(ctx context.Context, identity string) (Instance, er
 		return Instance{}, err
 	}
 	ann := bindingAnnotations(in, identity)
-	if err := k.annotate(ctx, in.ID, ann); err != nil {
+	if err := k.annotate(ctx, in.ID, ann, k.bindingLabels(identity)); err != nil {
 		// An unannotated instance would become an orphan on restart; give it back instead.
 		_ = k.Release(ctx, in)
 		return Instance{}, fmt.Errorf("annotate %s: %w", in.ID, err)
@@ -269,7 +280,7 @@ func (k *Kubernetes) Acquire(ctx context.Context, identity string) (Instance, er
 // Bind records the identity on a pooled instance (implements backend.Binder).
 func (k *Kubernetes) Bind(ctx context.Context, in Instance, identity string) error {
 	ann := bindingAnnotations(in, identity)
-	if err := k.annotate(ctx, in.ID, ann); err != nil {
+	if err := k.annotate(ctx, in.ID, ann, k.bindingLabels(identity)); err != nil {
 		return fmt.Errorf("annotate %s: %w", in.ID, err)
 	}
 	return nil
@@ -286,10 +297,66 @@ func bindingAnnotations(in Instance, identity string) map[string]string {
 	return ann
 }
 
-// annotate merges annotations onto the object behind an instance.
-func (k *Kubernetes) annotate(ctx context.Context, id string, ann map[string]string) error {
+// bindingLabels is the binding in label form, so the object can be selected on and, where the object's
+// pods inherit labels, attributed without reading annotations. Two labels are written: the
+// transliterated fingerprint (always) and whatever the operator declared for this identity (optional).
+func (k *Kubernetes) bindingLabels(identity string) map[string]string {
+	labels := map[string]string{LabelIdentityRef: labelValue(identity)}
+	if k.cfg.IdentityLabels != nil {
+		for key, value := range k.cfg.IdentityLabels(identity) {
+			if value != "" {
+				labels[key] = labelValue(value)
+			}
+		}
+	}
+	return labels
+}
+
+// labelValue transliterates an arbitrary string into something Kubernetes accepts as a label value:
+// [A-Za-z0-9._-], at most 63 characters, starting and ending alphanumeric. Fingerprints are base64, so
+// '+', '/' and '=' are the characters that actually appear; mapping them keeps the value recognisable
+// instead of hashing it, and the annotation beside it stays exact.
+func labelValue(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		case r == '+':
+			b.WriteByte('-')
+		case r == '/':
+			b.WriteByte('_')
+		case r == '=':
+			// base64 padding carries no information
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-_.")
+	if len(out) > 63 {
+		out = strings.Trim(out[:63], "-_.")
+	}
+	if out == "" {
+		// A label value may not be empty, and an empty identity is rejected long before this point.
+		return "unknown"
+	}
+	return out
+}
+
+// annotate merges annotations and labels onto the object behind an instance.
+func (k *Kubernetes) annotate(ctx context.Context, id string, ann, labels map[string]string) error {
+	meta := map[string]any{}
+	if len(ann) > 0 {
+		meta["annotations"] = ann
+	}
+	if len(labels) > 0 {
+		meta["labels"] = labels
+	}
+	if len(meta) == 0 {
+		return nil
+	}
 	patch, err := json.Marshal(map[string]any{
-		"metadata": map[string]any{"annotations": ann},
+		"metadata": meta,
 	})
 	if err != nil {
 		return err
@@ -373,6 +440,12 @@ func (k *Kubernetes) Alive(ctx context.Context, in Instance) error {
 }
 
 // List returns instances this driver created (by label), so a restarted process can adopt them.
+//
+// Every object the label selects is returned, including one this driver can no longer address. That is
+// deliberate and it is the fix for a leak: the previous version read only the configured endpoint field
+// and dropped the object when it was empty, so a claim whose address never reached that one field was
+// invisible to Adopt and to the reaper — neither reused nor destroyed, just running. "I cannot dial it"
+// and "it is not mine" are different statements, and only the caller can decide what the first means.
 func (k *Kubernetes) List(ctx context.Context) ([]Instance, error) {
 	switch k.cfg.Provider.Kind {
 	case KindWorkloads:
@@ -384,7 +457,9 @@ func (k *Kubernetes) List(ctx context.Context) ([]Instance, error) {
 		}
 		out := make([]Instance, 0, len(pods.Items))
 		for i := range pods.Items {
-			out = append(out, k.boundInstance(k.instanceFromPod(&pods.Items[i])))
+			in := k.boundInstance(k.instanceFromPod(&pods.Items[i]))
+			in.Created = pods.Items[i].CreationTimestamp.Time
+			out = append(out, in)
 		}
 		return out, nil
 	case KindClaims:
@@ -397,13 +472,31 @@ func (k *Kubernetes) List(ctx context.Context) ([]Instance, error) {
 		out := make([]Instance, 0, len(list.Items))
 		for i := range list.Items {
 			item := &list.Items[i]
-			if addr := k.endpointFromObject(item); addr != "" {
-				out = append(out, k.boundInstance(k.instance(addr, item.GetName(), string(item.GetUID()), item.GetAnnotations())))
+			in := k.boundInstance(k.instance(k.addrFromObject(item), item.GetName(), string(item.GetUID()), item.GetAnnotations()))
+			in.Created = item.GetCreationTimestamp().Time
+			if in.Addr == "" {
+				k.log.Warn("managed object advertises no address",
+					"backend", k.cfg.Name, "instance", in.ID, "resource", k.cfg.Provider.Resource,
+					"endpoint_field", strings.Join(k.cfg.Provider.EndpointField, "."),
+					"action", "returned to the caller anyway: an object hidden here is an object nobody can clean up")
 			}
+			out = append(out, in)
 		}
 		return out, nil
 	}
 	return nil, nil
+}
+
+// addrFromObject is the first address the object advertises, in the same preference order readiness
+// uses: the configured status field, then the pod IPs the controller also publishes. Reading only one
+// of them is what made a live object look absent to List.
+func (k *Kubernetes) addrFromObject(obj *unstructured.Unstructured) string {
+	for _, candidate := range k.endpointCandidates(obj) {
+		if candidate != "" {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // boundInstance decides whether a listed object still holds the identity its annotation claims.
@@ -453,7 +546,7 @@ func (k *Kubernetes) Adopt(ctx context.Context, ins []Instance) error {
 		if in.Annotations[LabelUID] == in.UID {
 			continue
 		}
-		if err := k.annotate(ctx, in.ID, map[string]string{LabelUID: in.UID}); err != nil && firstErr == nil {
+		if err := k.annotate(ctx, in.ID, map[string]string{LabelUID: in.UID}, nil); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("backfill uid on %s: %w", in.ID, err)
 		}
 	}
@@ -463,6 +556,10 @@ func (k *Kubernetes) Adopt(ctx context.Context, ins []Instance) error {
 // AnonymousInstancesAreStale implements StaleCapacity. Every object this driver creates carries
 // LabelIdentity, so a listed object without it is warm capacity from an earlier process: it belongs to
 // nobody, and the pool is refilled right after adoption.
+//
+// It also licenses the reaper's sweep, which is what destroys an object that was orphaned *while* this
+// process runs (a create that lost its annotate step, a release that failed three times). Without the
+// sweep such an object survives until the next restart, and with a long ttl that is arbitrarily long.
 func (k *Kubernetes) AnonymousInstancesAreStale() bool { return true }
 
 var _ StaleCapacity = (*Kubernetes)(nil)
@@ -553,7 +650,7 @@ func (k *Kubernetes) acquireWithHome(ctx context.Context, identity string) (Inst
 		return Instance{}, err
 	}
 	ann := bindingAnnotations(in, identity)
-	if err := k.annotate(ctx, in.ID, ann); err != nil {
+	if err := k.annotate(ctx, in.ID, ann, k.bindingLabels(identity)); err != nil {
 		_ = k.Release(ctx, in)
 		return Instance{}, fmt.Errorf("annotate %s: %w", in.ID, err)
 	}

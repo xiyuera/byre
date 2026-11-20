@@ -17,6 +17,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -265,6 +266,12 @@ type Identity struct {
 	// a rotation there means a new (absent) home rather than the old one — acceptable when nothing
 	// was persisted, misleading when something was.
 	Name string `yaml:"name"`
+	// Labels are written on every object this identity leases, next to the binding annotation. They
+	// exist so a cluster can say who holds an instance without decoding a fingerprint: an operator puts
+	// the label their tooling already filters on (`hermes.profile: eng`), and a SandboxTemplate that
+	// propagates labels carries it onto the pod. Empty means "annotation only", which is the old
+	// behaviour.
+	Labels map[string]string `yaml:"labels"`
 
 	Backend string   `yaml:"backend"`
 	Aliases []string `yaml:"aliases"` // log labels only, never used for routing
@@ -439,6 +446,11 @@ func (c *Config) Validate() error {
 				"named after it, so without a name a key rotation silently means a different home",
 				where, fp, id.Backend)
 		}
+		for _, key := range sortedKeys(id.Labels) {
+			if err := validateIdentityLabel(key, id.Labels[key]); err != nil {
+				fail("%s (%s): labels: %v", where, fp, err)
+			}
+		}
 	}
 	if len(c.Identities) == 0 {
 		fail("at least one identity is required")
@@ -525,6 +537,70 @@ func checkClaimLabel(s string) error {
 	return nil
 }
 
+// validateIdentityLabel checks an operator-declared label written onto leased objects. It is strict
+// because a value Kubernetes rejects does not fail at config load: it fails on the first Acquire, hours
+// later, as an annotate error that releases the instance it just created.
+func validateIdentityLabel(key, value string) error {
+	if key == "" {
+		return errors.New("empty key")
+	}
+	if strings.HasPrefix(key, "byre.io/") || key == "app.kubernetes.io/managed-by" {
+		return fmt.Errorf("%q is reserved: byre writes it", key)
+	}
+	if err := checkLabelName(key); err != nil {
+		return err
+	}
+	if value == "" {
+		return fmt.Errorf("%s: empty value", key)
+	}
+	if len(value) > 63 {
+		return fmt.Errorf("%s: value %q is longer than 63 characters", key, value)
+	}
+	for i, r := range value {
+		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == '-' || r == '_' || r == '.'
+		if !ok {
+			return fmt.Errorf("%s: value %q contains %q; use letters, digits, '-', '_' and '.'", key, value, r)
+		}
+		if (r == '-' || r == '_' || r == '.') && (i == 0 || i == len(value)-1) {
+			return fmt.Errorf("%s: value %q must start and end alphanumeric", key, value)
+		}
+	}
+	return nil
+}
+
+// checkLabelName accepts the DNS-subdomain form Kubernetes allows for a label key: an optional
+// lowercase DNS prefix, a '/', then the name.
+func checkLabelName(key string) error {
+	name := key
+	if i := strings.LastIndex(key, "/"); i >= 0 {
+		prefix, rest := key[:i], key[i+1:]
+		if prefix == "" || len(prefix) > 253 || rest == "" {
+			return fmt.Errorf("key %q is not a valid label key", key)
+		}
+		for _, r := range prefix {
+			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '.') {
+				return fmt.Errorf("key %q: prefix contains %q", key, r)
+			}
+		}
+		name = rest
+	}
+	if name == "" || len(name) > 63 {
+		return fmt.Errorf("key %q must have a name of 1-63 characters", key)
+	}
+	for i, r := range name {
+		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == '-' || r == '_' || r == '.'
+		if !ok {
+			return fmt.Errorf("key %q contains %q", key, r)
+		}
+		if (r == '-' || r == '_' || r == '.') && (i == 0 || i == len(name)-1) {
+			return fmt.Errorf("key %q must start and end alphanumeric", key)
+		}
+	}
+	return nil
+}
+
 // validateVolumes checks the persistent-home block. Every field it needs is required there, because
 // a missing storage class silently produces a claim that never binds and the symptom (a pod stuck
 // Pending) points at the scheduler, not at the configuration.
@@ -560,6 +636,17 @@ func validateVolumes(where string, b Backend, fail func(string, ...any)) {
 		m != "ReadOnlyMany" && m != "ReadWriteMany" {
 		fail("%s (%s): provider.volumes.access_mode %q is not a valid access mode", where, b.Name, m)
 	}
+}
+
+// sortedKeys keeps validation messages in a stable order; map iteration would make the same broken
+// config produce a different message on every run.
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func validateProvision(where string, b Backend, fail func(string, ...any)) {
