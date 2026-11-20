@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"byre/internal/backend"
+	"byre/internal/lease/crd"
 	"byre/internal/metrics"
 )
 
@@ -145,6 +147,15 @@ type Manager struct {
 	// path only, to fill spec.name of the CR; the lease key stays the fingerprint, because that is
 	// what a connection authenticates as.
 	names map[string]string
+
+	// allowed is the set of identities this process is configured to serve, without the "SHA256:" label.
+	// Nil means no restriction, which is the behaviour before this existed.
+	//
+	// It exists because adoption is not owner-scoped: List returns every annotated instance the
+	// credentials can see, so without this a process pointed at a shared namespace takes over its
+	// neighbours' leases -- and once their ttl expires, the reaper releases their instances. That is not
+	// hypothetical, it is how a canary once deleted a production fleet.
+	allowed map[string]bool
 	// persistErrors counts failed writes to store. A non-zero value means the table and the CR are
 	// out of step -- the number an operator needs before blaming the backend.
 	persistErrors atomic.Int64
@@ -180,6 +191,36 @@ func (m *Manager) SetIdentityNames(names map[string]string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.names = names
+}
+
+// SetAllowedIdentities limits adoption and recovery to the identities this process serves. Fingerprints
+// are compared without the "SHA256:" label, which is how the SSH layer reports them and what the lease
+// key is built from.
+//
+// Pass every configured identity, not only the named ones. An empty list disables the restriction, which
+// is what a manager built by an embedder or a test gets.
+//
+// Adopting an instance is not reversible by inspection: once it is in the table, the reaper will release
+// it when the ttl expires. In a shared namespace that means a process can destroy instances belonging to
+// a deployment it knows nothing about, so "which identities are mine" has to be answerable here rather
+// than inferred from an annotation somebody else wrote.
+func (m *Manager) SetAllowedIdentities(fingerprints []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(fingerprints) == 0 {
+		m.allowed = nil
+		return
+	}
+	set := make(map[string]bool, len(fingerprints))
+	for _, fp := range fingerprints {
+		set[strings.TrimPrefix(fp, "SHA256:")] = true
+	}
+	m.allowed = set
+}
+
+// identityAllowed reports whether this process serves an identity. Call it with mu held.
+func (m *Manager) identityAllowed(id string) bool {
+	return m.allowed == nil || m.allowed[id]
 }
 
 // PersistErrors reports how many bindings could not be written. A non-zero value means the CR and
@@ -924,6 +965,94 @@ func (m *Manager) pool(name string) *pool {
 	return m.pools[name]
 }
 
+// Recover rebuilds the table from the store, then lets adoption fill in whatever the store does not know
+// about.
+//
+// This is the reason the store exists. A restart empties in-memory state; before this, every identity
+// cold-started while the instance it had been using was still running, which cut its operator off and
+// left the old instance behind. The store is the durable copy, so it wins wherever the two disagree.
+//
+// Call this *instead of* Adopt at startup. Bindings that match no live instance are removed: an object
+// that is gone cannot be handed out, and a row naming a backend this configuration dropped can never be
+// satisfied either. Leaving them would make those identities permanently unusable.
+func (m *Manager) Recover(ctx context.Context) (int, error) {
+	m.mu.Lock()
+	store := m.store
+	m.mu.Unlock()
+	if store == nil {
+		// No store means in memory is the whole truth, which is what Adopt already assumes.
+		return m.adopt(ctx, nil)
+	}
+
+	bindings, err := store.List(ctx)
+	if err != nil {
+		// An unreadable table is the pre-ADR world rather than a new failure: every identity cold-starts,
+		// and instances are still discoverable through their annotations. Refusing to start would turn a
+		// store outage into an outage of every session.
+		m.log().Error("could not read the lease table at startup; falling back to the instances' annotations",
+			"error", err, "action", "identities will cold-start until the store answers")
+		return m.adopt(ctx, nil)
+	}
+
+	known := make(map[string]StoredBinding, len(bindings))
+	hadRow := make(map[string]bool, len(bindings))
+	for _, b := range bindings {
+		if b.Identity == "" {
+			continue
+		}
+		known[b.Identity] = b
+		hadRow[b.Identity] = true
+	}
+
+	adopted, firstErr := m.adopt(ctx, known)
+
+	// An instance recovered from its annotation alone has no row yet: the store had never heard of it,
+	// because it predates the store or the write was lost. Write one now -- otherwise every restart
+	// re-derives it from scratch, and a second replica never sees it at all.
+	m.mu.Lock()
+	var missing []Entry
+	for id, e := range m.byIdentity {
+		if e.adopted && !hadRow[id] {
+			missing = append(missing, *e)
+		}
+	}
+	m.mu.Unlock()
+	for _, e := range missing {
+		if err := m.persist(ctx, e); err != nil {
+			m.persistErrors.Add(1)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("record the recovered lease for %s: %w", shortIdentity(e.Identity), err)
+			}
+		}
+	}
+
+	// Whatever is left matched no live instance.
+	for identity, b := range known {
+		// A row for an identity this process does not serve is not ours to clean up: another deployment
+		// may be using it right now, and deleting it would make their next restart cold-start.
+		if !m.identityAllowed(identity) {
+			continue
+		}
+		drv := m.driver(b.Backend)
+		if drv != nil && b.Instance != "" && b.Phase == crd.PhaseDraining {
+			// Finish a release the previous process started, rather than leave the object running with
+			// nothing pointing at it.
+			if err := drv.Release(ctx, backend.Instance{ID: b.Instance, UID: b.InstanceUID}); err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("finish the release of %s: %w", b.Instance, err)
+			}
+		}
+		if err := store.Delete(ctx, identity); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("forget the binding for %s: %w", shortIdentity(identity), err)
+			}
+			continue
+		}
+		m.log().Info("binding dropped at startup: no live instance matches it",
+			"identity", shortIdentity(identity), "backend", b.Backend, "instance", b.Instance, "phase", b.Phase)
+	}
+	return adopted, firstErr
+}
+
 // Adopt rebuilds the identity table from instances that already exist, so a restarted process hands
 // the same instance back to the same client instead of orphaning it and cold-starting a new one.
 //
@@ -936,7 +1065,21 @@ func (m *Manager) pool(name string) *pool {
 //
 // Adoption stays forgiving in the other direction too: a driver that cannot list is reported and does
 // not abort the others.
+//
+// Without a store this is the whole recovery story, and it is what Recover falls back to when the store
+// cannot be read. With one, Recover drives it -- see there for which source wins.
 func (m *Manager) Adopt(ctx context.Context) (int, error) {
+	return m.adopt(ctx, nil)
+}
+
+// adopt is Adopt with an optional store-derived view of which instance each identity is already bound
+// to. `known` is consumed: every identity it is consulted for is removed, so the caller can treat what
+// is left as bindings that matched no live instance.
+//
+// The store wins where the two disagree. An instance whose annotation claims an identity that the store
+// has bound elsewhere is the stale one -- it was created before the binding moved, or by a process that
+// lost the race -- and adopting it would put two instances behind one identity.
+func (m *Manager) adopt(ctx context.Context, known map[string]StoredBinding) (int, error) {
 	m.mu.Lock()
 	drivers := make(map[string]backend.Backend, len(m.backends))
 	for name, drv := range m.backends {
@@ -987,6 +1130,13 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 				}
 				continue
 			}
+			// Not ours: another deployment's instance, or one whose identity was removed from this
+			// configuration. Leave it completely alone. Adopting it would put it in our table, and the
+			// reaper would then release somebody else's instance when its ttl expired -- which is not a
+			// theoretical failure mode, it is how a canary once deleted a production fleet.
+			if !m.identityAllowed(id) {
+				continue
+			}
 			if verr := in.Validate(); verr != nil {
 				doomed = append(doomed, discard{in, "unusable instance: " + verr.Error()})
 				continue
@@ -994,6 +1144,22 @@ func (m *Manager) Adopt(ctx context.Context) (int, error) {
 			if _, exists := m.byIdentity[id]; exists {
 				doomed = append(doomed, discard{in, "duplicate identity annotation " + shortIdentity(id)})
 				continue
+			}
+			// With a store present it decides which instance this identity is bound to, so an instance
+			// whose annotation disagrees with it is the leftover: created before the binding moved, or
+			// by a process that lost the race.
+			if known != nil {
+				if b, ok := known[id]; ok {
+					delete(known, id)
+					if b.Instance != "" && b.Instance != in.ID {
+						doomed = append(doomed, discard{in, "the lease table binds this identity to another instance"})
+						continue
+					}
+					if b.Phase == crd.PhaseDraining {
+						doomed = append(doomed, discard{in, "the lease table says this instance is being drained"})
+						continue
+					}
+				}
 			}
 			m.byIdentity[id] = &Entry{
 				Identity: id,
