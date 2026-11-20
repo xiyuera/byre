@@ -458,3 +458,103 @@ func TestEmptyHostKeyNeedsTheEphemeralOptIn(t *testing.T) {
 		t.Fatalf("warnings = %v, want none when host_key is set", got)
 	}
 }
+
+// withHome turns the base config into a workloads backend carrying a persistent home, which is the
+// only shape provider.volumes is legal in.
+func withHome(t *testing.T) *Config {
+	t.Helper()
+	c := baseConfig(t)
+	c.Backends[0] = Backend{
+		Name:      "workloads",
+		Provision: ProvisionWorkloads,
+		Namespace: "ns",
+		Provider: Provider{
+			Image: "img:1",
+			Volumes: &Volumes{
+				MountPath:    "/work",
+				ClaimName:    "home-{{.Name}}",
+				StorageClass: "fast",
+				Size:         "1Gi",
+			},
+		},
+		SSH: SSH{Port: NewNumber(22), User: "u", PrivateKey: "/k", HostKeyPolicy: "strict"},
+	}
+	c.Identities[0].Backend = "workloads"
+	c.Identities[0].Name = "alice"
+	return c
+}
+
+func TestVolumesAcceptsCompleteBlock(t *testing.T) {
+	c := withHome(t)
+	c.ApplyDefaults()
+	if err := c.Validate(); err != nil {
+		t.Fatalf("expected valid config, got: %v", err)
+	}
+}
+
+func TestVolumesRejects(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantSub string
+	}{
+		{"claim backend cannot carry a home", func(c *Config) {
+			c.Backends[0].Provision = ProvisionClaims
+			c.Backends[0].Provider.Template = "tpl"
+			c.Backends[0].Provider.APIGroup = "g"
+			c.Backends[0].Provider.APIVersion = "v1"
+			c.Backends[0].Provider.Resource = "r"
+			c.Backends[0].Provider.ObjectKind = "K"
+		}, "provider.volumes requires provision"},
+		{"claim_name without the placeholder", func(c *Config) {
+			c.Backends[0].Provider.Volumes.ClaimName = "home"
+		}, "must contain {{.Name}}"},
+		{"missing mount path", func(c *Config) {
+			c.Backends[0].Provider.Volumes.MountPath = ""
+		}, "mount_path is required"},
+		{"missing storage class", func(c *Config) {
+			c.Backends[0].Provider.Volumes.StorageClass = ""
+		}, "storage_class is required"},
+		{"missing size", func(c *Config) {
+			c.Backends[0].Provider.Volumes.Size = ""
+		}, "size is required"},
+		{"bogus access mode", func(c *Config) {
+			c.Backends[0].Provider.Volumes.AccessMode = "ReadWriteSometimes"
+		}, "not a valid access mode"},
+		{"identity without a name", func(c *Config) {
+			c.Identities[0].Name = ""
+		}, "name is required on backend"},
+		{"identity name with illegal characters", func(c *Config) {
+			c.Identities[0].Name = "Alice Smith"
+		}, "use lowercase letters, digits and '-' only"},
+		{"identity name with a trailing dash", func(c *Config) {
+			c.Identities[0].Name = "alice-"
+		}, "must not start or end with '-'"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := withHome(t)
+			tc.mutate(c)
+			c.ApplyDefaults()
+			err := c.Validate()
+			if err == nil {
+				t.Fatalf("expected an error containing %q, got nil", tc.wantSub)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("error = %v, want it to contain %q", err, tc.wantSub)
+			}
+		})
+	}
+}
+
+func TestVolumesWithoutHomeDoesNotNeedName(t *testing.T) {
+	// A backend without volumes falls back to nothing, so an identity name stays optional there.
+	c := baseConfig(t)
+	c.ApplyDefaults()
+	if c.Identities[0].Name != "" {
+		t.Fatalf("fixture unexpectedly has a name")
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a config without volumes must not require identity names: %v", err)
+	}
+}

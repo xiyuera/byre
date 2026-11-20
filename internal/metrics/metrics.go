@@ -27,6 +27,10 @@ var (
 	fillErrors    counter
 	releaseErrors counter
 
+	// homeClaimsOrphan is a gauge, not a counter: reclaiming a claim is a deliberate operator action
+	// and the number has to be able to go down.
+	homeClaimsOrphan counter
+
 	fillMu      sync.Mutex
 	fillSum     float64
 	fillCount   int64
@@ -55,6 +59,14 @@ func (c *counter) Value() int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.n
+}
+
+// set exists for gauges. Everything else in this package only ever increases, but "how many home
+// claims have no identity behind them" can fall when an operator deletes one.
+func (c *counter) set(n int64) {
+	c.mu.Lock()
+	c.n = n
+	c.mu.Unlock()
 }
 
 func init() {
@@ -151,3 +163,13 @@ func AcquireTotals() []AcquireTotal {
 	})
 	return out
 }
+
+// SetHomeClaimsOrphan records how many home claims exist with no configured identity behind them.
+//
+// The scanner that feeds this never deletes anything. A claim holds data, and nothing at this layer can
+// tell "the identity is gone" from "the identity is between connections" or "the key was rotated and
+// the name is about to come back".
+func SetHomeClaimsOrphan(n int) { homeClaimsOrphan.set(int64(n)) }
+
+// HomeClaimsOrphan reports the value from the last scan.
+func HomeClaimsOrphan() int { return int(homeClaimsOrphan.Value()) }

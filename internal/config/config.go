@@ -209,6 +209,14 @@ type Provider struct {
 	// RunAsRoot lets a pod instance start as uid 0. Default false: the driver then requires a non-root
 	// user with no capabilities and the default seccomp profile.
 	RunAsRoot bool `yaml:"run_as_root"`
+
+	// Volumes, when set, attaches a persistent claim named after the identity to every instance.
+	//
+	// It requires provision: workloads — the claims path instantiates a CR whose volume fields are
+	// its own, and referencing an existing claim is not something it can express — and it takes the
+	// backend out of the warm pool, because a pooled pod exists before anyone knows which identity
+	// will claim it.
+	Volumes *Volumes `yaml:"volumes"`
 }
 
 // SSH is how the gateway reaches an instance.
@@ -219,11 +227,47 @@ type SSH struct {
 	HostKeyPolicy string `yaml:"host_key_policy"` // strict | accept-new | insecure
 }
 
+// Volumes gives every instance a persistent home backed by a claim named after the identity.
+//
+// This is the alternative to one shared pool disk: one identity, one claim, mounted as an ordinary
+// volume. It rules out the warm pool for that backend — a pooled pod is created before its identity
+// is known, and a pod's volumes are fixed at creation time — and in exchange it needs no extra
+// privileges, no bind mounts and no RWX storage.
+type Volumes struct {
+	// MountPath is where the claim appears inside the instance.
+	MountPath string `yaml:"mount_path"`
+
+	// ClaimName is the claim name template. "{{.Name}}" expands to the identity's stable name.
+	ClaimName string `yaml:"claim_name"`
+
+	// StorageClass must name a class that exists in the cluster. There is deliberately no default:
+	// guessing one would tie a pod spec to one installation.
+	StorageClass string `yaml:"storage_class"`
+
+	// Size is the request, for example "10Gi". Ignored when the claim already exists, so growing it
+	// here does not resize anything — that is a separate, deliberate operation.
+	Size string `yaml:"size"`
+
+	// AccessMode defaults to ReadWriteOnce. A persistent home is held by one identity's instance at
+	// a time by construction, so RWO is the honest request and the one block storage can satisfy.
+	AccessMode string `yaml:"access_mode"`
+}
+
 // Identity maps a client key to a backend.
 type Identity struct {
-	Fingerprint string   `yaml:"fingerprint"`
-	Backend     string   `yaml:"backend"`
-	Aliases     []string `yaml:"aliases"` // log labels only, never used for routing
+	Fingerprint string `yaml:"fingerprint"`
+
+	// Name is the stable label a persistent claim is derived from. It outlives the key: rotate the
+	// fingerprint and the same home is reattached, which is the whole point of naming the claim
+	// after this instead of after the fingerprint.
+	//
+	// It is optional for backends without volumes. Those fall back to a hash of the fingerprint, so
+	// a rotation there means a new (absent) home rather than the old one — acceptable when nothing
+	// was persisted, misleading when something was.
+	Name string `yaml:"name"`
+
+	Backend string   `yaml:"backend"`
+	Aliases []string `yaml:"aliases"` // log labels only, never used for routing
 }
 
 // Option adjusts what Load accepts beyond the file itself.
@@ -325,6 +369,7 @@ func (c *Config) Validate() error {
 	}
 
 	names := map[string]bool{}
+	backendByName := map[string]Backend{}
 	for i, b := range c.Backends {
 		where := fmt.Sprintf("backends[%d]", i)
 		if strings.TrimSpace(b.Name) == "" {
@@ -333,12 +378,14 @@ func (c *Config) Validate() error {
 			fail("%s: duplicate backend name %q", where, b.Name)
 		}
 		names[b.Name] = true
+		backendByName[b.Name] = b
 
 		if strings.TrimSpace(b.Type) != "" {
 			fail("%s (%s): backend.type was replaced by backend.provision (%s|%s|%s|%s); the value %q is not used",
 				where, b.Name, ProvisionClaims, ProvisionWorkloads, ProvisionEndpoints, ProvisionCommand, b.Type)
 		}
 		validateProvision(where, b, fail)
+		validateVolumes(where, b, fail)
 
 		if strings.TrimSpace(b.SSH.User) == "" {
 			fail("%s (%s): ssh.user is required", where, b.Name)
@@ -357,6 +404,7 @@ func (c *Config) Validate() error {
 	}
 
 	seen := map[string]bool{}
+	seenNames := map[string]bool{}
 	for i, id := range c.Identities {
 		where := fmt.Sprintf("identities[%d]", i)
 		fp, err := NormalizeFingerprint(id.Fingerprint)
@@ -372,6 +420,24 @@ func (c *Config) Validate() error {
 			fail("%s (%s): backend is required", where, fp)
 		} else if !names[id.Backend] {
 			fail("%s (%s): unknown backend %q", where, fp, id.Backend)
+		}
+
+		if n := strings.TrimSpace(id.Name); n != "" {
+			if seenNames[n] {
+				// Two fingerprints sharing a name would share a claim, which is a shared home for
+				// two agents pretending to be one.
+				fail("%s (%s): duplicate name %q", where, fp, n)
+			}
+			seenNames[n] = true
+			if err := checkClaimLabel(n); err != nil {
+				fail("%s (%s): name: %v", where, fp, err)
+			}
+		} else if b, ok := backendByName[id.Backend]; ok && b.Provider.Volumes != nil {
+			// A hash fallback here would look like it worked and would silently hand this identity a
+			// different home after the next key rotation.
+			fail("%s (%s): name is required on backend %q, which sets provider.volumes — the claim is "+
+				"named after it, so without a name a key rotation silently means a different home",
+				where, fp, id.Backend)
 		}
 	}
 	if len(c.Identities) == 0 {
@@ -437,6 +503,62 @@ func checkHostKeyPath(path string) error {
 			return fmt.Errorf("no existing ancestor for %s", path)
 		}
 		dir = parent
+	}
+}
+
+// checkClaimLabel validates an identity name used inside a claim name. It is stricter than "any
+// string" on purpose: the value ends up in a PVC name, and a name Kubernetes rejects produces a
+// pod that never starts, hours after the config was written.
+func checkClaimLabel(s string) error {
+	if len(s) > 40 {
+		return fmt.Errorf("%q is longer than 40 characters; it is embedded in a claim name", s)
+	}
+	for i, r := range s {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-'
+		if !ok {
+			return fmt.Errorf("%q contains %q; use lowercase letters, digits and '-' only", s, r)
+		}
+		if r == '-' && (i == 0 || i == len(s)-1) {
+			return fmt.Errorf("%q must not start or end with '-'", s)
+		}
+	}
+	return nil
+}
+
+// validateVolumes checks the persistent-home block. Every field it needs is required there, because
+// a missing storage class silently produces a claim that never binds and the symptom (a pod stuck
+// Pending) points at the scheduler, not at the configuration.
+func validateVolumes(where string, b Backend, fail func(string, ...any)) {
+	v := b.Provider.Volumes
+	if v == nil {
+		return
+	}
+	if b.Provision != ProvisionWorkloads {
+		fail("%s (%s): provider.volumes requires provision: %s; the %s path creates a claim API object "+
+			"whose volumes are its own and cannot be pointed at an existing claim",
+			where, b.Name, ProvisionWorkloads, b.Provision)
+	}
+	if strings.TrimSpace(v.MountPath) == "" {
+		fail("%s (%s): provider.volumes.mount_path is required", where, b.Name)
+	}
+	if strings.TrimSpace(v.ClaimName) == "" {
+		fail("%s (%s): provider.volumes.claim_name is required", where, b.Name)
+	} else if !strings.Contains(v.ClaimName, "{{.Name}}") {
+		// Without the placeholder every identity shares one claim, which is exactly the shared-disk
+		// shape this feature exists to avoid.
+		fail("%s (%s): provider.volumes.claim_name %q must contain {{.Name}}, otherwise every identity "+
+			"would share one claim", where, b.Name, v.ClaimName)
+	}
+	if strings.TrimSpace(v.StorageClass) == "" {
+		fail("%s (%s): provider.volumes.storage_class is required (there is no default: guessing one "+
+			"ties a config file to one cluster)", where, b.Name)
+	}
+	if strings.TrimSpace(v.Size) == "" {
+		fail("%s (%s): provider.volumes.size is required, e.g. 10Gi", where, b.Name)
+	}
+	if m := v.AccessMode; m != "" && m != "ReadWriteOnce" &&
+		m != "ReadOnlyMany" && m != "ReadWriteMany" {
+		fail("%s (%s): provider.volumes.access_mode %q is not a valid access mode", where, b.Name, m)
 	}
 }
 
