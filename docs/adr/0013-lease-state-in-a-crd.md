@@ -156,6 +156,41 @@ outlive the cluster they describe, which is not the case.
 **Store `lastSeen` in the CR as well.** Rejected: it converts every SSH activity into an API write,
 which is the one cost that would make this design worse than the status quo.
 
+## Implementation status
+
+| part | what | state |
+|---|---|---|
+| 1 | the `ByreLease` type and the store over it | merged |
+| 2 | `lease.store` in the config, and the manager writing bindings | merged |
+| 3 | startup recovery, plus the ownership boundary it turned out to require | merged |
+| 4 | a watch that moves a lease to `Draining` when its object disappears | not started |
+| 5 | connection-level degradation when an instance stops accepting sessions | not started |
+
+Acceptance (1) belongs to part 4, not to part 3, and the distinction is worth being precise about:
+recovery cleans a dead binding at startup and the reuse path cleans it on the next connection *from that
+identity*, but "an operator reconnects without anybody restarting anything" needs the watch to notice the
+deletion while the process runs. Acceptance (2) needs a second replica, which is not deployed; the
+compare-and-swap is in place and unit-tested, but the fake client cannot reject a stale write, so that
+one stays unverified until a replica exists to observe it. Acceptance (3) and (4) are checkable today.
+
+### The boundary part 3 had to add
+
+Adoption was never owner-scoped: `List` returns every annotated instance the credentials can see.
+Recovery made that fatal, because a recovered lease is a lease the reaper will eventually release when its
+ttl expires. Building part 3 on a real cluster, with credentials that could see a live deployment, was
+enough to have that deployment's instances released -- they were temporary, so nothing durable was lost,
+and that is luck rather than design.
+
+`Manager` now takes the set of identities it serves and refuses to adopt anything else, and refuses to
+delete rows for identities it does not serve. The tests cover the adoption path, the recovery path, and
+-- the one that matters -- that a foreign instance survives a full ttl without being released, because
+adoption and destruction are separated by a timer and a test that stops at "it was not adopted" would pass
+while the instances disappear.
+
+The general rule this is an instance of: **"an object I can see" is not "an object I own"**, and any code
+that acts destructively on a listed object needs that distinction made explicit, because the credentials
+decide what is visible and the configuration decides what is yours, and they are not the same set.
+
 ## Acceptance
 
 Machine-checkable, in order:
