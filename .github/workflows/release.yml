@@ -2,10 +2,12 @@ name: release
 
 # Tag push -> cross-compiled binaries + a multi-arch image.
 #
-# Runs unchanged on both forges. The only two things that differ are configuration, not code:
-#   vars.REGISTRY        where the image goes   (ghcr.io on GitHub, your registry on Gitea)
-#   secrets.REGISTRY_TOKEN  a token for it      (GITHUB_TOKEN on GitHub, a PAT on Gitea)
-# Set them in Settings -> Actions -> Variables / Secrets on each side.
+# Runs unchanged on both forges. What differs is configuration, not code:
+#   vars.REGISTRY          where the image goes. On GitHub an unset value means ghcr.io and the
+#                          job token (permissions.packages=write) authenticates it, so nothing
+#                          needs configuring there. On Gitea an unset value skips the image step
+#                          instead of failing the tag build.
+#   secrets.REGISTRY_TOKEN a token for it, only when you set vars.REGISTRY yourself.
 #
 # No `uses:` for the build itself: the job image carries Go and docker, and `docker buildx`
 # on GitHub's runner is enough. `gh release` is used only when running on GitHub.
@@ -21,8 +23,13 @@ permissions:
 env:
   GH_TOKEN: ${{ secrets.GITEA_TOKEN || github.token }}
   GOPROXY: ${{ secrets.GOPROXY || 'https://proxy.golang.org,direct' }}
+  # Empty on GitHub means "ghcr.io", authenticated by the job token (permissions.packages=write
+  # below). Empty on any other forge means "this forge has no registry wired up", and the image
+  # step skips: a Gitea token cannot push to ghcr.io, and a publish target nobody configured must
+  # not fail an otherwise good tag build.
   REGISTRY: ${{ vars.REGISTRY }}
-  REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN || secrets.GITEA_TOKEN || github.token }}
+  REGISTRY_USER: ${{ vars.REGISTRY_USER || github.actor }}
+  REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN || github.token }}
 
 jobs:
   publish:
@@ -73,7 +80,18 @@ jobs:
       - name: build and push image
         run: |
           tag="${GITHUB_REF_NAME}"
-          [ -n "$REGISTRY" ] || { echo "vars.REGISTRY is not set" >&2; exit 1; }
+          # Registry resolution. GitHub needs no configuration: an unset vars.REGISTRY means
+          # ghcr.io and the job token authenticates it. On Gitea an unset value means no
+          # registry is wired up for this forge, so skip publishing rather than fail.
+          if [ -z "$REGISTRY" ]; then
+            if [ "${GITHUB_SERVER_URL}" = "https://github.com" ]; then
+              REGISTRY=ghcr.io
+              echo "vars.REGISTRY unset on GitHub; publishing to ghcr.io"
+            else
+              echo "vars.REGISTRY unset on ${GITHUB_SERVER_URL}; skipping image publish for this forge"
+              exit 0
+            fi
+          fi
           ref="${REGISTRY}/${GITHUB_REPOSITORY,,}:${tag}"
           echo "$REGISTRY_TOKEN" | docker login "$REGISTRY" -u "${REGISTRY_USER:-x}" --password-stdin
           docker buildx create --use --name byre-builder >/dev/null 2>&1 || true
