@@ -1,0 +1,50 @@
+name: mirror
+
+# Publishes main to github.com. Replaces Gitea's built-in push mirror, which is `git push --mirror`:
+# that publishes every branch the moment it is pushed, so a work-in-progress branch becomes public
+# before anyone reviewed it. The public repository is a release channel.
+#
+# It lives in .github/workflows rather than .gitea/workflows because branch protection on main
+# requires the four ci/* checks, and a workflow under .gitea/ does not trigger them (Gitea treats a
+# .gitea-only diff as "no code changed"). That would deadlock every PR that touches this file. The
+# cost of living here is that github runs the job too, so the first step exits there.
+#
+# No `uses:` — this job needs nothing that plain git cannot do, and a self-hosted forge must not
+# depend on reaching an action registry.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: push main to github
+        env:
+          MIRROR_GITHUB_TOKEN: ${{ secrets.MIRROR_GITHUB_TOKEN }}
+          GITEA_JOB_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if [ "${GITHUB_SERVER_URL:-}" = "https://github.com" ]; then
+            echo "running on github; github is the mirror target, not a source"
+            exit 0
+          fi
+          if [ -z "${MIRROR_GITHUB_TOKEN:-}" ]; then
+            echo "MIRROR_GITHUB_TOKEN is not set; skipping the mirror rather than failing a good commit"
+            exit 0
+          fi
+          host="${GITHUB_SERVER_URL#https://}"
+          rm -rf /tmp/mirror && mkdir -p /tmp/mirror && cd /tmp/mirror
+          # A bare repository: no working tree to clean up, and no stale local branch that could be
+          # pushed instead of the one just fetched.
+          git init -q --bare .
+          git remote add gitea "https://job:${GITEA_JOB_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
+          git fetch -q gitea "+refs/heads/main:refs/heads/main"
+          sha=$(git rev-parse refs/heads/main)
+          echo "fetched ${sha} from gitea"
+          git remote add github "https://x-access-token:${MIRROR_GITHUB_TOKEN}@github.com/xiyuera/byre.git"
+          git push --quiet github "refs/heads/main:refs/heads/main"
+          echo "mirrored ${sha} -> github main"
