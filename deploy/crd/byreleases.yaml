@@ -1,0 +1,94 @@
+# ByreLease records the one fact every reader of the lease table must agree on: which instance an
+# identity currently holds.
+#
+# Only the binding lives here. Connection counts, the idle clock, pool state and metrics stay in the
+# gateway's memory — they are process-local by definition, and persisting them would turn every SSH
+# keystroke into an API write. See docs/adr/0013-lease-state-in-a-crd.md.
+#
+# `metadata.name` is derived from the identity fingerprint (`byre-<hash>`), because a fingerprint
+# carries ':' and '/' and is not a legal object name. `spec.identity` holds the fingerprint itself,
+# so a reader never has to re-derive it.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: byreleases.byre.io
+spec:
+  group: byre.io
+  scope: Namespaced
+  names:
+    kind: ByreLease
+    listKind: ByreLeaseList
+    plural: byreleases
+    singular: byrelease
+    shortNames: [byl]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        # status is a subresource so that Phase can be written without racing the spec: a Draining
+        # transition must not be able to clobber a concurrent re-bind.
+        status: {}
+      additionalPrinterColumns:
+        - name: Identity
+          type: string
+          jsonPath: .spec.identity
+        - name: Instance
+          type: string
+          jsonPath: .spec.instance
+        - name: Backend
+          type: string
+          jsonPath: .spec.backend
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [identity, backend, instance]
+              properties:
+                # The client key's SHA256 fingerprint, "SHA256:...". This is the lease key.
+                identity:
+                  type: string
+                  minLength: 1
+                # The stable name from `identities[].name`, when configured. A fingerprint can be
+                # rotated; this survives it, and is what a persistent home is named after.
+                name:
+                  type: string
+                # The backend that owns the instance, so a restart knows which driver to ask.
+                backend:
+                  type: string
+                  minLength: 1
+                # The instance's own identifier: a pod name, an endpoint, a claim.
+                instance:
+                  type: string
+                  minLength: 1
+                # The instance object's UID. Names are reused — a pod deleted and recreated under the
+                # same name is a different instance, and a lease that remembered only the name would
+                # hand the new object to a client expecting the old one.
+                instanceUID:
+                  type: string
+            status:
+              type: object
+              properties:
+                # Leased: the binding is live and reusable.
+                # Draining: the instance is gone or going; no path may reuse this row, and the next
+                #          acquisition rebinds. This is the state that makes "delete a sandbox" not
+                #          equal "every entry point dials a dead address".
+                phase:
+                  type: string
+                  enum: [Leased, Draining]
+                # Free-form reason for the current phase, for whoever is reading `kubectl get -o yaml`
+                # while something is wrong. Never parsed by code.
+                message:
+                  type: string
+                lastTransitionTime:
+                  type: string
+                  format: date-time

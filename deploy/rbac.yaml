@@ -27,6 +27,16 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["patch"]
+  # The lease table itself (ADR-0013). The binding lives in a CR so that a restart and a second
+  # replica read the same truth instead of each process keeping its own copy. Missing verbs here
+  # surface as a named startup error ("not allowed to list byreleases"), not as a silent
+  # degradation -- see internal/lease/crd.Store.Ready.
+  - apiGroups: ["byre.io"]
+    resources: ["byreleases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["byre.io"]
+    resources: ["byreleases/status"]
+    verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
