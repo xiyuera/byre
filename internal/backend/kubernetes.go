@@ -145,6 +145,13 @@ type Kubernetes struct {
 	log    *slog.Logger
 }
 
+// Namespace reports the namespace this backend creates objects in.
+func (k *Kubernetes) Namespace() string { return k.cfg.Namespace }
+
+// Dynamic returns the dynamic client, so another component can talk to the same cluster without
+// reading the kubeconfig a second time. Nil in dry-run mode.
+func (k *Kubernetes) Dynamic() dynamic.Interface { return k.dyn }
+
 // NewKubernetes validates the configuration and builds clients when they were not injected.
 func NewKubernetes(cfg KubernetesConfig) (*Kubernetes, error) {
 	if cfg.Name == "" {

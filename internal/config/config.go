@@ -141,6 +141,24 @@ type Lease struct {
 	// procedure — shrink the pool to 0, replace the key, grow it back — silently did nothing, because
 	// the zero was replaced by the default before anyone looked at it.
 	PoolSize *int `yaml:"pool_size"`
+
+	// Store selects where the identity → instance binding lives. Empty keeps it in memory, which is the
+	// correct mode when nothing is provisioned (`endpoints`, `command`) and there is no second replica
+	// to agree with. "crd" persists it as ByreLease objects, so a restart keeps its bindings and a
+	// second replica reads the same truth (ADR-0013).
+	Store string `yaml:"store"`
+
+	// Namespace is where ByreLease objects are written when Store is "crd". Empty means "the namespace
+	// the backends use", which is only accepted when they all agree: two namespaces have no single
+	// answer, and guessing one would file the table where nobody looks. Required when no backend
+	// provides a cluster client.
+	Namespace string `yaml:"namespace"`
+
+	// Kubeconfig is where the store finds the cluster when no backend already has a client: a
+	// `command` or `endpoints` backend can still want the lease table in a cluster, because the two
+	// questions are independent. Empty means in-cluster credentials. Ignored when a Kubernetes backend
+	// is present, since its client is reused.
+	Kubeconfig string `yaml:"kubeconfig"`
 }
 
 // PoolSizeValue returns the pool size after defaults: explicit 0 stays 0.
@@ -362,6 +380,27 @@ func (c *Config) Validate() error {
 	}
 	if c.Lease.PoolSizeValue() < 0 {
 		fail("lease.pool_size must be >= 0")
+	}
+	switch c.Lease.Store {
+	case "":
+		// In-memory: correct when nothing is provisioned and no second replica exists.
+	case "crd":
+		// Writing ByreLease objects needs a cluster client, which only comes from a Kubernetes
+		// backend. A config with nothing but endpoints/command backends would start fine and then
+		// fail on the first acquire, which is the worst possible time to learn this.
+		clustered := false
+		for _, b := range c.Backends {
+			if b.Provision == ProvisionClaims || b.Provision == ProvisionWorkloads {
+				clustered = true
+				break
+			}
+		}
+		if !clustered && strings.TrimSpace(c.Lease.Namespace) == "" {
+			fail("lease.store is %q but no backend provisions Kubernetes objects and lease.namespace is empty: "+
+				"set lease.namespace, or leave lease.store empty to keep the table in memory", c.Lease.Store)
+		}
+	default:
+		fail("lease.store must be empty (in-memory) or \"crd\", got %q", c.Lease.Store)
 	}
 	if len(c.Backends) == 0 {
 		fail("at least one backend is required")
