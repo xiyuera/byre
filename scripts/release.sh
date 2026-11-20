@@ -22,7 +22,9 @@
 #   scripts/release.sh v0.5.0
 #
 # Environment:
-#   GITEA_URL        default https://git.xiyuera.site:8443
+#   GITEA_URL        required; the base URL of your Gitea, e.g. https://gitea.example.com
+#                    (no default: shipping one would bake somebody's private hostname into the
+#                    source, and a wrong one fails silently against the wrong server)
 #   GITEA_TOKEN      token for Gitea (admin is fine; approvals are not done here)
 #   GITHUB_TOKEN     token for github.com, or `gh auth token` is used
 #   GITHUB_REPO      default xiyuera/byre
@@ -38,7 +40,7 @@ case "$VERSION" in
 esac
 SEMVER=${VERSION#v}
 
-GITEA_URL=${GITEA_URL:-https://git.xiyuera.site:8443}
+GITEA_URL=${GITEA_URL:?set GITEA_URL to your Gitea base URL, e.g. https://gitea.example.com}
 GITHUB_REPO=${GITHUB_REPO:-xiyuera/byre}
 SKIP_WAIT=${SKIP_WAIT:-0}
 # Which forge actually builds -- mirrors the BUILD_FORGE repo variable the workflows read.
