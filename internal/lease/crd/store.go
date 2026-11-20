@@ -24,6 +24,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // Phase values. Leased and Draining are the only two states a persisted binding can be in;
@@ -91,6 +93,32 @@ type Store struct {
 // New builds a store over a namespace.
 func New(dyn dynamic.Interface, namespace string) *Store {
 	return &Store{dyn: dyn, ns: namespace, gvr: GVR()}
+}
+
+// NewFromKubeconfig builds a store from credentials of its own, for configurations whose backends have
+// no cluster client to share (a `command` or `endpoints` backend can still want the lease table in a
+// cluster — the two questions are independent). An empty path means in-cluster credentials.
+func NewFromKubeconfig(kubeconfig, namespace string) (*Store, error) {
+	var (
+		restCfg *rest.Config
+		err     error
+	)
+	if kubeconfig != "" {
+		restCfg, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("lease store kubeconfig %s: %w", kubeconfig, err)
+		}
+	} else {
+		restCfg, err = rest.InClusterConfig()
+		if err != nil {
+			return nil, fmt.Errorf("lease store has no kubeconfig and no in-cluster credentials: %w", err)
+		}
+	}
+	dyn, err := dynamic.NewForConfig(restCfg)
+	if err != nil {
+		return nil, fmt.Errorf("lease store client: %w", err)
+	}
+	return New(dyn, namespace), nil
 }
 
 // Namespace reports the namespace the store writes to.
@@ -276,16 +304,14 @@ func toObject(b Binding, namespace string) *unstructured.Unstructured {
 	if b.InstanceUID != "" {
 		spec["instanceUID"] = b.InstanceUID
 	}
-	phase := b.Phase
-	if phase == "" {
-		phase = PhaseLeased
-	}
+	// No status here on purpose. `status` is a subresource, so the API server discards it on Create and
+	// only accepts it through UpdateStatus -- setting it here would look right and silently produce an
+	// object with no phase. A freshly created lease is Leased by definition; see PhaseOrDefault.
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "byre.io/v1alpha1",
 		"kind":       "ByreLease",
 		"metadata":   map[string]any{"name": ObjectName(b.Identity), "namespace": namespace},
 		"spec":       spec,
-		"status":     map[string]any{"phase": phase},
 	}}
 }
 
@@ -305,6 +331,11 @@ func fromObject(obj *unstructured.Unstructured) Binding {
 	}
 	if ts := obj.GetCreationTimestamp(); !ts.IsZero() {
 		b.Created = ts.Time
+	}
+	// `status` is a subresource: a freshly created object has none, and "no phase written" can only mean
+	// the default one. Normalising here keeps every reader from having to remember that.
+	if b.Phase == "" {
+		b.Phase = PhaseLeased
 	}
 	return b
 }

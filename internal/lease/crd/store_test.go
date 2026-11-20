@@ -343,11 +343,27 @@ func TestToObjectSetsNamespaceAndName(t *testing.T) {
 	if obj.GetKind() != "ByreLease" {
 		t.Errorf("kind = %q", obj.GetKind())
 	}
-	// status.phase must be present from the first write, or a reader sees an empty phase and has to
-	// guess between "Leased" and "not written yet".
-	phase, _, _ := unstructured.NestedString(obj.Object, "status", "phase")
-	if phase != PhaseLeased {
-		t.Errorf("initial status.phase = %q, want %q", phase, PhaseLeased)
+	// No status in the created object: it is a subresource, so the API server discards it on Create.
+	// Setting it here would look right and produce an object whose phase is empty forever.
+	if _, found, _ := unstructured.NestedString(obj.Object, "status", "phase"); found {
+		t.Error("toObject set status.phase; the API server drops it on Create, so the object would carry no phase at all")
+	}
+}
+
+// The empty phase a fresh object carries has to read back as Leased, or every consumer needs to know
+// about the subresource rule.
+func TestPhaseDefaultsToLeased(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	if _, err := s.Put(ctx, sample("SHA256:abc")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	back, err := s.Get(ctx, "SHA256:abc")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if back.Phase != PhaseLeased {
+		t.Errorf("phase = %q after a fresh Put, want %q", back.Phase, PhaseLeased)
 	}
 }
 
