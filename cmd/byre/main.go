@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"sort"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -117,6 +118,7 @@ func main() {
 	}
 
 	go mgr.RunReaper(ctx, 30*time.Second)
+	go reportOrphanHomes(ctx, cfg, backends, logger, 5*time.Minute)
 	if poolSize > 0 {
 		go mgr.RunWarmer(ctx, 15*time.Second)
 		// Warming is best effort: a cold cluster must not stop the gateway from accepting sessions.
@@ -271,6 +273,7 @@ func writeMetrics(w io.Writer, mgr *lease.Manager, backends map[string]backend.B
 	fmt.Fprintf(w, "# HELP byre_leases_idle Leases without connections, waiting to be reaped.\n# TYPE byre_leases_idle gauge\nbyre_leases_idle %d\n", idle)
 	fmt.Fprintf(w, "# HELP byre_leases_adopted Leases recovered from existing instances at startup.\n# TYPE byre_leases_adopted counter\nbyre_leases_adopted %d\n", mgr.AdoptedTotal())
 	fmt.Fprintf(w, "# HELP byre_instances_discarded Instances destroyed at startup because nothing could own them.\n# TYPE byre_instances_discarded counter\nbyre_instances_discarded %d\n", mgr.DiscardedTotal())
+	fmt.Fprintf(w, "# HELP byre_home_claims_orphan Home claims with no configured identity behind them; reported only, never deleted.\n# TYPE byre_home_claims_orphan gauge\nbyre_home_claims_orphan %d\n", metrics.HomeClaimsOrphan())
 	fmt.Fprintf(w, "# HELP byre_leases_adopted_pending Adopted leases no connection has picked up yet; add it to leases_active when comparing across a restart.\n# TYPE byre_leases_adopted_pending gauge\nbyre_leases_adopted_pending %d\n", mgr.AdoptedPending())
 	fmt.Fprintf(w, "# HELP byre_oldest_idle_lease_age_seconds Age of the oldest lease without a connection.\n# TYPE byre_oldest_idle_lease_age_seconds gauge\nbyre_oldest_idle_lease_age_seconds %g\n", mgr.OldestIdleAge().Seconds())
 	fmt.Fprintf(w, "# HELP byre_lease_dead_instance_total Leases dropped because the instance behind them no longer exists.\n# TYPE byre_lease_dead_instance_total counter\nbyre_lease_dead_instance_total %d\n", mgr.DeadInstancesTotal())
@@ -335,6 +338,51 @@ func residentMemory() (int64, bool) {
 	return resident * int64(os.Getpagesize()), true
 }
 
+// persistentHome converts the config block into the driver's own type. Nil stays nil, which is what
+// keeps a backend without volumes on the warm path.
+func persistentHome(v *config.Volumes) *backend.PersistentHome {
+	if v == nil {
+		return nil
+	}
+	return &backend.PersistentHome{
+		MountPath:    v.MountPath,
+		ClaimName:    v.ClaimName,
+		StorageClass: v.StorageClass,
+		Size:         v.Size,
+		AccessMode:   v.AccessMode,
+	}
+}
+
+// identityNamer resolves a fingerprint to the stable name its claim is derived from.
+//
+// It returns an error rather than a hash fallback. A hash would change with the key, so a rotation
+// would silently hand the identity an empty directory — indistinguishable from a fresh home, which is
+// the worst possible failure mode for something whose purpose is to keep data.
+func identityNamer(cfg *config.Config, backendName string) func(string) (string, error) {
+	byFingerprint := make(map[string]string, len(cfg.Identities))
+	for _, id := range cfg.Identities {
+		if id.Backend != backendName {
+			continue
+		}
+		fp, err := config.NormalizeFingerprint(id.Fingerprint)
+		if err != nil {
+			continue
+		}
+		byFingerprint[fp] = id.Name
+	}
+	return func(fingerprint string) (string, error) {
+		fp, err := config.NormalizeFingerprint(fingerprint)
+		if err != nil {
+			return "", err
+		}
+		name, ok := byFingerprint[fp]
+		if !ok || name == "" {
+			return "", fmt.Errorf("identity %s has no name on backend %q", fp, backendName)
+		}
+		return name, nil
+	}
+}
+
 // buildBackends instantiates one driver per configured backend. dryRun skips cluster clients so that
 // -check-config works on a machine that has no credentials; the configuration is still what is being
 // checked, not the cluster.
@@ -372,7 +420,9 @@ func buildBackends(cfg *config.Config, logger *slog.Logger, dryRun bool) (map[st
 					ObjectKind:    b.Provider.ObjectKind,
 					EndpointField: b.Provider.EndpointField,
 					AllowRoot:     b.Provider.RunAsRoot,
+					Home:          persistentHome(b.Provider.Volumes),
 				},
+				IdentityName:  identityNamer(cfg, b.Name),
 				SSHUser:       b.SSH.User,
 				SSHPrivateKey: b.SSH.PrivateKey,
 				HostKeyPolicy: b.SSH.HostKeyPolicy,
@@ -425,4 +475,65 @@ func buildIdentities(cfg *config.Config, backends map[string]backend.Backend) (m
 		out[fp] = sshfront.Identity{Fingerprint: fp, Backend: id.Backend, Aliases: id.Aliases}
 	}
 	return out, nil
+}
+
+// reportOrphanHomes periodically counts home claims that no configured identity maps to.
+//
+// It reports and never deletes. A claim holds data, and this layer cannot distinguish three very
+// different situations: the identity was removed, the identity is between connections, or the key was
+// rotated and a new name is about to be configured. Automating the delete would turn all three into
+// data loss, so the number exists to make the question askable rather than to answer it.
+func reportOrphanHomes(ctx context.Context, cfg *config.Config, drvs map[string]backend.Backend, log *slog.Logger, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			scanOrphanHomes(ctx, cfg, drvs, log)
+		}
+	}
+}
+
+// homeClaimLister is implemented by drivers that create claims for identities' homes.
+type homeClaimLister interface {
+	HomeClaimNames(context.Context) ([]string, error)
+}
+
+func scanOrphanHomes(ctx context.Context, cfg *config.Config, drvs map[string]backend.Backend, log *slog.Logger) {
+	// What the configuration expects. Built from the same template the driver renders, so the two
+	// cannot drift into disagreeing about a name.
+	want := map[string]bool{}
+	for _, b := range cfg.Backends {
+		if b.Provider.Volumes == nil {
+			continue
+		}
+		for _, id := range cfg.Identities {
+			if id.Backend != b.Name || id.Name == "" {
+				continue
+			}
+			want[strings.ReplaceAll(b.Provider.Volumes.ClaimName, "{{.Name}}", id.Name)] = true
+		}
+	}
+
+	orphans := 0
+	for name, drv := range drvs {
+		lister, ok := drv.(homeClaimLister)
+		if !ok {
+			continue
+		}
+		claims, err := lister.HomeClaimNames(ctx)
+		if err != nil {
+			log.Warn("orphan claim scan failed", "backend", name, "error", err)
+			continue
+		}
+		for _, c := range claims {
+			if !want[c] {
+				orphans++
+				log.Info("home claim has no configured identity", "backend", name, "claim", c)
+			}
+		}
+	}
+	metrics.SetHomeClaimsOrphan(orphans)
 }

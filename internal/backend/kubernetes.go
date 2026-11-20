@@ -43,6 +43,9 @@ const (
 	// LabelUID records which object the binding belongs to. Without it a recycled name (delete, then
 	// create something else under the same name) silently inherits the previous identity.
 	LabelUID = "byre.io/uid"
+	// LabelHome marks a claim created for an identity's persistent home. Operators list them with
+	// `kubectl get pvc -l byre.io/home=true` instead of having to know the naming scheme.
+	LabelHome = "byre.io/home"
 )
 
 // ProviderSpec is the declarative description of "what an instance is and how it is started".
@@ -71,6 +74,28 @@ type ProviderSpec struct {
 	// claims: status field carrying the SSH endpoint ("host:port" or bare host).
 	// Defaults to status.sandbox.serviceFQDN, which is the shape this project was developed against.
 	EndpointField []string
+
+	// Home, when set, gives every instance a persistent volume named after its identity. Instances
+	// with a home are created on demand instead of taken from the warm pool: a pooled pod exists
+	// before anyone knows which identity will claim it, and a pod's volumes cannot be added later.
+	Home *PersistentHome
+}
+
+// PersistentHome is one claim per identity, mounted as an ordinary pod volume.
+//
+// It is the alternative to a shared pool disk. Nothing privileged is involved and the claim does not
+// need RWX: exactly one identity holds it, so exactly one instance mounts it at a time.
+type PersistentHome struct {
+	// MountPath is where the claim appears inside the instance.
+	MountPath string
+	// ClaimName is the PVC name template; every "{{.Name}}" becomes the identity's stable name.
+	ClaimName string
+	// StorageClass names an existing class. Required: a default here would be a cluster assumption.
+	StorageClass string
+	// Size is the request used only when the claim is first created.
+	Size string
+	// AccessMode defaults to ReadWriteOnce.
+	AccessMode string
 }
 
 // KubernetesConfig configures the driver.
@@ -84,6 +109,11 @@ type KubernetesConfig struct {
 
 	// Kubeconfig is an explicit path; empty means in-cluster credentials.
 	Kubeconfig string
+
+	// IdentityName maps a client fingerprint to the stable name its claim is derived from. Required
+	// when Provider.Home is set, and deliberately not defaulted to a hash of the fingerprint: a hash
+	// changes when the key rotates, so a rotation would silently start over in an empty directory.
+	IdentityName func(fingerprint string) (string, error)
 
 	// Clients are injectable for tests; when nil they are built from Kubeconfig / in-cluster config.
 	Client  kubernetes.Interface
@@ -138,6 +168,24 @@ func NewKubernetes(cfg KubernetesConfig) (*Kubernetes, error) {
 		return nil, fmt.Errorf("kubernetes backend %q: unknown provision %q (want %s|%s)", cfg.Name, cfg.Provider.Kind, KindWorkloads, KindClaims)
 	}
 
+	if h := cfg.Provider.Home; h != nil {
+		if cfg.Provider.Kind != KindWorkloads {
+			return nil, fmt.Errorf("kubernetes backend %q: provider.home requires kind %s, not %s: this path "+
+				"builds the pod itself and needs to reference an existing claim", cfg.Name, KindWorkloads, cfg.Provider.Kind)
+		}
+		if h.MountPath == "" || h.ClaimName == "" || h.StorageClass == "" || h.Size == "" {
+			return nil, fmt.Errorf("kubernetes backend %q: provider.home needs mount_path, claim_name, "+
+				"storage_class and size", cfg.Name)
+		}
+		if cfg.IdentityName == nil {
+			return nil, fmt.Errorf("kubernetes backend %q: provider.home requires IdentityName: the claim is "+
+				"named after the identity and the driver will not invent one", cfg.Name)
+		}
+		if _, err := resource.ParseQuantity(h.Size); err != nil {
+			return nil, fmt.Errorf("kubernetes backend %q: provider.home.size %q: %w", cfg.Name, h.Size, err)
+		}
+	}
+
 	log := cfg.Logger
 	if log == nil {
 		log = slog.Default()
@@ -177,7 +225,7 @@ func (k *Kubernetes) Name() string { return k.cfg.Name }
 func (k *Kubernetes) Create(ctx context.Context) (Instance, error) {
 	switch k.cfg.Provider.Kind {
 	case KindWorkloads:
-		return k.createPod(ctx)
+		return k.createPod(ctx, "")
 	case KindClaims:
 		return k.createClaim(ctx)
 	default:
@@ -189,7 +237,14 @@ func (k *Kubernetes) Create(ctx context.Context) (Instance, error) {
 //
 // The annotation is what makes a restart survivable: after a crash the gateway lists its own objects,
 // reads the identity back, and hands the same instance to the same client instead of starting over.
+//
+// When the backend declares a persistent home, the instance is built for this identity specifically
+// instead of taken from the warm pool: a pooled pod exists before its owner is known, and a pod's
+// volumes are fixed at creation time.
 func (k *Kubernetes) Acquire(ctx context.Context, identity string) (Instance, error) {
+	if k.cfg.Provider.Home != nil {
+		return k.acquireWithHome(ctx, identity)
+	}
 	in, err := k.Create(ctx)
 	if err != nil {
 		return Instance{}, err
@@ -414,7 +469,9 @@ var _ StaleCapacity = (*Kubernetes)(nil)
 
 // ---------------------------------------------------------------- pods
 
-func (k *Kubernetes) createPod(ctx context.Context) (Instance, error) {
+// createPod provisions a bare pod. A non-empty claim mounts that PVC at Provider.Home.MountPath;
+// the warm-pool path passes "" and gets no volume at all.
+func (k *Kubernetes) createPod(ctx context.Context, claim string) (Instance, error) {
 	name := "byre-" + randomSuffix()
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -450,6 +507,20 @@ func (k *Kubernetes) createPod(ctx context.Context) (Instance, error) {
 			}},
 		},
 	}
+	if claim != "" {
+		// The claim name carries the identity, so the volume is named for what it is rather than
+		// "data": a pod listing that shows "home" tells an operator the pod is identity-backed.
+		pod.Spec.Volumes = []corev1.Volume{{
+			Name: "home",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim},
+			},
+		}}
+		pod.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{
+			Name:      "home",
+			MountPath: k.cfg.Provider.Home.MountPath,
+		}}
+	}
 	created, err := k.client.CoreV1().Pods(k.cfg.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
 		return Instance{}, fmt.Errorf("create pod: %w", err)
@@ -461,6 +532,112 @@ func (k *Kubernetes) createPod(ctx context.Context) (Instance, error) {
 		return Instance{}, err
 	}
 	return k.instance(addr, created.Name, string(created.UID), created.Annotations), nil
+}
+
+// acquireWithHome provisions an instance bound to this identity's persistent home.
+//
+// The claim is created on first use and deliberately never deleted from here: the home outlives the
+// pod, which is the entire point. Reclaiming it is an operator decision — deleting a claim destroys
+// data, and nothing at this layer can tell "the user is gone" from "the user is between connections".
+func (k *Kubernetes) acquireWithHome(ctx context.Context, identity string) (Instance, error) {
+	name, err := k.cfg.IdentityName(identity)
+	if err != nil {
+		return Instance{}, fmt.Errorf("identity name: %w", err)
+	}
+	claim, err := k.ensureClaim(ctx, name)
+	if err != nil {
+		return Instance{}, err
+	}
+	in, err := k.createPod(ctx, claim)
+	if err != nil {
+		return Instance{}, err
+	}
+	ann := bindingAnnotations(in, identity)
+	if err := k.annotate(ctx, in.ID, ann); err != nil {
+		_ = k.Release(ctx, in)
+		return Instance{}, fmt.Errorf("annotate %s: %w", in.ID, err)
+	}
+	merged := map[string]string{}
+	for a, v := range in.Annotations {
+		merged[a] = v
+	}
+	for a, v := range ann {
+		merged[a] = v
+	}
+	in.Annotations = merged
+	return in, nil
+}
+
+// ensureClaim returns the claim name for an identity, creating the claim when it is absent.
+//
+// Create-then-already-exists is treated as success: two callers racing on the same identity must end
+// up with one claim, not one claim and a startup error.
+func (k *Kubernetes) ensureClaim(ctx context.Context, identityName string) (string, error) {
+	home := k.cfg.Provider.Home
+	claim := strings.ReplaceAll(home.ClaimName, "{{.Name}}", identityName)
+	claims := k.client.CoreV1().PersistentVolumeClaims(k.cfg.Namespace)
+
+	if _, err := claims.Get(ctx, claim, metav1.GetOptions{}); err == nil {
+		return claim, nil
+	} else if !apierrors.IsNotFound(err) {
+		return "", fmt.Errorf("get claim %s: %w", claim, err)
+	}
+
+	// Unbound is not a failure here: a class with WaitForFirstConsumer binds when the pod arrives,
+	// so this waits for nothing and lets waitForPod decide whether the volume ever materialised.
+	size, err := resource.ParseQuantity(home.Size)
+	if err != nil {
+		return "", fmt.Errorf("claim %s: size %q: %w", claim, home.Size, err)
+	}
+	mode := corev1.ReadWriteOnce
+	if home.AccessMode != "" {
+		mode = corev1.PersistentVolumeAccessMode(home.AccessMode)
+	}
+	class := home.StorageClass
+
+	_, err = claims.Create(ctx, &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      claim,
+			Namespace: k.cfg.Namespace,
+			Labels:    map[string]string{LabelManaged: "byre", LabelHome: "true"},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{mode},
+			StorageClassName: &class,
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: size},
+			},
+		},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return claim, nil
+		}
+		return "", fmt.Errorf("create claim %s: %w", claim, err)
+	}
+	k.log.Info("home claim created", "claim", claim, "size", home.Size, "class", home.StorageClass)
+	return claim, nil
+}
+
+// HomeClaimNames lists the claims this driver created for identities' homes.
+//
+// It is what the orphan report compares against the configured identities, so it looks only at claims
+// carrying both of our labels: a claim an operator made by hand is theirs, not a leak of ours.
+func (k *Kubernetes) HomeClaimNames(ctx context.Context) ([]string, error) {
+	if k.cfg.Provider.Home == nil || k.cfg.Provider.Kind != KindWorkloads {
+		return nil, nil
+	}
+	list, err := k.client.CoreV1().PersistentVolumeClaims(k.cfg.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: LabelManaged + "=byre," + LabelHome + "=true",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list home claims: %w", err)
+	}
+	out := make([]string, 0, len(list.Items))
+	for _, c := range list.Items {
+		out = append(out, c.Name)
+	}
+	return out, nil
 }
 
 // podSecurityContext is the pod-level hardening applied to every instance.

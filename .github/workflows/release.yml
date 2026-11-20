@@ -59,18 +59,31 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME}"
           commit=$(git rev-parse --short HEAD)
+          build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # The stamp lives in internal/version, not in main: `-X main.version` compiles fine and
+          # does nothing, which is how v0.4.0 shipped a binary and an image that both reported
+          # "dev (none, unknown)". Keep these three paths in step with Makefile's LDFLAGS.
+          ldflags="-s -w \
+            -X byre/internal/version.Version=${tag} \
+            -X byre/internal/version.Commit=${commit} \
+            -X byre/internal/version.BuildDate=${build_date}"
           mkdir -p dist
           native=$(go env GOARCH)
           for arch in amd64 arm64; do
             out="dist/byre-${tag}-linux-${arch}"
             GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
-              go build -trimpath \
-                -ldflags "-s -w -X main.version=${tag} -X main.commit=${commit}" \
-                -o "$out" ./cmd/byre
+              go build -trimpath -ldflags "$ldflags" -o "$out" ./cmd/byre
             # Only smoke-run what this host can execute. The runner is arm64; the amd64
             # artifact dies with "Exec format error" (exit 126) and takes the job with it.
             if [ "$arch" = "$native" ]; then
-              ./"$out" --version
+              got=$(./"$out" --version)
+              echo "  $(basename "$out"): $got"
+              # Assert rather than print: a silent -X on a variable that does not exist is exactly
+              # the failure this step is here to catch.
+              case "$got" in
+                "${tag} (${commit},"*) ;;
+                *) echo "  FAIL: version stamp is '$got', want '${tag} (${commit}, ...)'"; exit 1 ;;
+              esac
             else
               echo "  $(basename "$out"): cross-built for ${arch}, not executed here (native=${native})"
             fi
@@ -97,12 +110,25 @@ jobs:
           docker buildx create --use --name byre-builder >/dev/null 2>&1 || true
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
+            --build-arg VERSION="${tag}" \
+            --build-arg COMMIT="$(git rev-parse --short HEAD)" \
+            --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
             --label "org.opencontainers.image.version=${tag}" \
             -t "$ref" --push .
           digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' | tr -d '"')
           echo "image ${ref}@${digest}"
           printf 'IMAGE_REF=%s\nIMAGE_DIGEST=%s\n' "$ref" "$digest" >> dist/images.txt
+          # Read the stamp back out of the image just built. Building an empty ARG list produces
+          # an image that reports "dev (none, unknown)" while every step succeeds, so the check
+          # has to look at the artifact, not at the build log.
+          native_arch=$(go env GOARCH)
+          got=$(docker run --rm --platform "linux/${native_arch}" "$ref" --version 2>&1 | tail -1)
+          echo "image reports: $got"
+          case "$got" in
+            "${tag} ("*) ;;
+            *) echo "FAIL: image version stamp is '$got', want '${tag} (...)'"; exit 1 ;;
+          esac
           cat dist/images.txt
 
       - name: attach release assets
