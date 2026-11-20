@@ -14,8 +14,8 @@ operator's ssh stops working.
 |---|---|---|
 | 1 | `ByreLease` CRD, `internal/lease/crd` (get/put/update/setPhase/delete/list/watch), RBAC | landed |
 | 2 | `LeaseStore` interface; `Acquire` writes the binding, `Release` deletes it; failures counted | landed |
-| 3 | startup reads the bindings instead of relying on annotations | next |
-| 4 | watch: an instance object that goes away moves its lease to `Draining` | next |
+| 3 | startup reads the bindings instead of relying on annotations | landed |
+| 4 | watch: an instance object that goes away moves its lease to `Draining` | landed |
 | 5 | connection-level demotion (see below) | under discussion |
 
 Parts 1–2 change no behaviour on their own: with no store configured the manager keeps its table in
@@ -163,7 +163,7 @@ which is the one cost that would make this design worse than the status quo.
 | 1 | the `ByreLease` type and the store over it | merged |
 | 2 | `lease.store` in the config, and the manager writing bindings | merged |
 | 3 | startup recovery, plus the ownership boundary it turned out to require | merged |
-| 4 | a watch that moves a lease to `Draining` when its object disappears | not started |
+| 4 | a watch that moves a lease to `Draining` when its object disappears | merged |
 | 5 | connection-level degradation when an instance stops accepting sessions | not started |
 
 Acceptance (1) belongs to part 4, not to part 3, and the distinction is worth being precise about:
