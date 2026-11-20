@@ -26,20 +26,31 @@ A release is not "a passing CI run". It needs, in the release notes:
 `.github/workflows/release.yml` runs on a `v*` tag. It is one workflow serving two forges, so the
 steps differ only where the forges genuinely differ — never by duplicating the file.
 
+Only one forge builds. `BUILD_FORGE` (a repo variable) picks it; unset means `github`. The other
+forge runs the same workflow, hits the guard in its first step, and exits — a tag push costs it one
+job that does nothing. Every step re-derives the decision from `GITHUB_SERVER_URL` instead of reading
+a variable written by an earlier step, because Gitea ignores step-level `if:` and still runs the step.
+
 1. **Checkout the tagged commit**, not the default branch. `git clone` without a ref lands on
    `main`, which is how a `pull_request` run once spent days testing the wrong tree.
-2. **Build both binaries**: `linux/arm64` and `linux/amd64`, `CGO_ENABLED=0`, plus `SHA256SUMS`.
+2. **Build both binaries**: `linux/arm64` and `linux/amd64`, `CGO_ENABLED=0`.
    The smoke check (`--version`) runs only the artifact matching the runner's own architecture:
    a cross-built ELF cannot start, and `Exec format error` (exit 126) takes the whole job down
    for a step whose only job was to prove the native one runs.
-3. **Push the image.** `vars.REGISTRY` decides where. Unset on GitHub means `ghcr.io`, and the
+3. **Package the helm chart** with `--version` from the tag and `--app-version` the tag itself, then
+   read the packaged `Chart.yaml` back and assert it. The chart's own `version:` is static, so
+   without the override a chart-installed release would claim a version nobody shipped — the same
+   failure class as the unstamped binary, and the same remedy: assert on the artifact.
+4. **Checksums**: `SHA256SUMS` over everything in `dist/`, written after all artifacts exist.
+5. **Push the image.** `vars.REGISTRY` decides where. Unset on GitHub means `ghcr.io`, and the
    job token authenticates it because the workflow declares `permissions.packages: write`.
    Unset on Gitea means this forge has no registry wired up — a Gitea token cannot authenticate
    to GHCR at all — so the step prints why and exits 0 instead of failing a tag build whose
    binaries are fine. Set `vars.REGISTRY` on either side to override.
-4. **Create the release** on whichever forge is running, uploading the binaries, `SHA256SUMS`,
-   `build-info.txt` and `images.txt`. The GitHub half uses `gh release create`; the Gitea half
-   uses the REST API, because `tea` is not guaranteed on a job pod.
+6. **Create the release** on the build forge, uploading the binaries, `SHA256SUMS`, the helm
+   package and `images.txt`. GitHub uses `gh release create`; Gitea uses the REST API, because
+   `tea` is not guaranteed on a job pod, and it uploads the assets itself rather than leaving an
+   empty release behind.
 
 There is no `uses:` anywhere in either workflow: Gitea ignores step-level `if:` and executes the
 action anyway, so a forge-guarded `uses: actions/setup-go` runs on a runner that cannot reach
@@ -101,7 +112,8 @@ Gitea is the source of truth; GitHub is a public mirror.
 |---|---|---|
 | role | source, reviews happen here | public mirror, read-only |
 | code and tags | pushed directly | receive a Gitea *push mirror* |
-| releases/assets | pipeline creates them | pipeline creates them |
+| `BUILD_FORGE` | builds when set to `gitea` | builds by default |
+| releases/assets | only when it is the build forge | only when it is the build forge |
 | the image | skipped unless `vars.REGISTRY` is set | `ghcr.io`, job token, no config |
 
 Two mirror behaviours worth knowing before debugging a "release never ran":
@@ -114,8 +126,8 @@ Two mirror behaviours worth knowing before debugging a "release never ran":
 
 ## What the repository publishes
 
-Source, and for each release: two static binaries, `SHA256SUMS`, `build-info.txt`, `images.txt`, and the
-changelog entry.
+Source, and for each release on the build forge: two static binaries, `SHA256SUMS` over them, a
+`.tgz` of the helm chart, `images.txt` when an image was published, and the changelog entry.
 Container images are published to a registry separately and referenced by digest — never by mutable tag:
 `make image-push` records the digest the registry assigned in `dist/images.txt`, the release publishes
 the digest the tag resolved to as `images.txt`, and `make image-verify` fails when the running pod is
