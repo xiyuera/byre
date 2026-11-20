@@ -41,6 +41,10 @@ SEMVER=${VERSION#v}
 GITEA_URL=${GITEA_URL:-https://git.xiyuera.site:8443}
 GITHUB_REPO=${GITHUB_REPO:-xiyuera/byre}
 SKIP_WAIT=${SKIP_WAIT:-0}
+# Which forge actually builds -- mirrors the BUILD_FORGE repo variable the workflows read.
+# Only that one publishes release assets; the other runs the same workflow and exits at its first
+# step, so it has a green run and no release. Verifying it for assets would fail a good release.
+BUILD_FORGE=${BUILD_FORGE:-github}
 
 die() { echo "FAIL: $*" >&2; exit 1; }
 say() { echo "  $*"; }
@@ -213,11 +217,13 @@ wait_gitea || die "Gitea publish job did not succeed"
 say "Gitea publish job succeeded"
 
 # ---------------------------------------------------------------- 7. what a user touches
-say "verifying release assets"
-for pair in "GitHub|https://api.github.com/repos/$GITHUB_REPO/releases/tags/$VERSION" \
-            "Gitea|$GITEA_URL/api/v1/repos/byre/byre/releases/tags/$VERSION"; do
-  label=${pair%%|*}; url=${pair#*|}
-  if [ "$label" = "GitHub" ]; then
+say "verifying release assets on the build forge (BUILD_FORGE=$BUILD_FORGE)"
+while IFS='|' read -r label key url; do
+  if [ "$key" != "$BUILD_FORGE" ]; then
+    say "$label: skipped, not the build forge"
+    continue
+  fi
+  if [ "$key" = "github" ]; then
     n=$(curl -sS -H "Authorization: token $GH_TOKEN" "$url" 2>/dev/null \
         | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('assets') or []))" 2>/dev/null)
   else
@@ -229,7 +235,11 @@ for pair in "GitHub|https://api.github.com/repos/$GITHUB_REPO/releases/tags/$VER
     ''|0|null) die "$label has no release assets for $VERSION";;
   esac
   say "$label release: $n assets"
-done
+done <<EOF
+GitHub|github|https://api.github.com/repos/$GITHUB_REPO/releases/tags/$VERSION
+Gitea|gitea|$GITEA_URL/api/v1/repos/byre/byre/releases/tags/$VERSION
+EOF
+
 
 say "verifying the image is pullable without credentials"
 # GHCR does not serve manifests to an anonymous request directly -- that answers 401 even for a

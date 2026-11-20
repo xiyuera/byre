@@ -1,16 +1,20 @@
 name: release
 
-# Tag push -> cross-compiled binaries + a multi-arch image.
+# Tag push -> cross-compiled binaries, a multi-arch image, and a helm package.
 #
-# Runs unchanged on both forges. What differs is configuration, not code:
-#   vars.REGISTRY          where the image goes. On GitHub an unset value means ghcr.io and the
-#                          job token (permissions.packages=write) authenticates it, so nothing
-#                          needs configuring there. On Gitea an unset value skips the image step
-#                          instead of failing the tag build.
-#   secrets.REGISTRY_TOKEN a token for it, only when you set vars.REGISTRY yourself.
+# Only ONE forge actually builds. The other publishes the tag and nothing else.
 #
-# No `uses:` for the build itself: the job image carries Go and docker, and `docker buildx`
-# on GitHub's runner is enough. `gh release` is used only when running on GitHub.
+# `BUILD_FORGE` (repo variable) picks the builder. Unset means github: it is the public release
+# channel, it owns ghcr.io, and its job token carries packages:write. Set it to `gitea` to move the
+# work to a private runner instead -- `vars.REGISTRY` then has to point at a registry that forge can
+# authenticate to', because a Gitea job token has no relationship with ghcr.io.
+#
+# Why every step re-derives the decision instead of one gate step setting a variable: Gitea silently
+# ignores step-level `if:` and still runs the step. A `$GITHUB_ENV` handoff between steps is the same
+# coin -- it depends on the same mechanism. Four lines of shell per step is ugly and it is the only
+# shape that is known to work on both forges.
+#
+# No `uses:` anywhere: a self-hosted forge must not depend on being able to reach an action registry.
 
 on:
   push:
@@ -23,13 +27,14 @@ permissions:
 env:
   GH_TOKEN: ${{ secrets.GITEA_TOKEN || github.token }}
   GOPROXY: ${{ secrets.GOPROXY || 'https://proxy.golang.org,direct' }}
-  # Empty on GitHub means "ghcr.io", authenticated by the job token (permissions.packages=write
-  # below). Empty on any other forge means "this forge has no registry wired up", and the image
-  # step skips: a Gitea token cannot push to ghcr.io, and a publish target nobody configured must
-  # not fail an otherwise good tag build.
+  # Where the image goes. Unset on GitHub means ghcr.io, authenticated by the job token. Unset
+  # elsewhere means this forge has no registry wired up, and the image step skips rather than
+  # failing a tag build that was otherwise fine.
   REGISTRY: ${{ vars.REGISTRY }}
   REGISTRY_USER: ${{ vars.REGISTRY_USER || github.actor }}
   REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN || github.token }}
+  # The forge that builds. The other one exits before compiling anything.
+  BUILD_FORGE: ${{ vars.BUILD_FORGE || 'github' }}
 
 jobs:
   publish:
@@ -37,6 +42,12 @@ jobs:
     steps:
       - name: checkout (tags need the tagged commit, so no --depth)
         run: |
+          forge=github
+          [ "${GITHUB_SERVER_URL}" = "https://github.com" ] || forge=gitea
+          if [ "$forge" != "${BUILD_FORGE}" ]; then
+            echo "BUILD_FORGE=${BUILD_FORGE} but this is ${forge}; not building here."
+            exit 0
+          fi
           host="${GITHUB_SERVER_URL#https://}"
           git clone "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git" .
           git checkout -q "${GITHUB_REF_NAME}"
@@ -44,6 +55,9 @@ jobs:
 
       - name: ensure go
         run: |
+          forge=github
+          [ "${GITHUB_SERVER_URL}" = "https://github.com" ] || forge=gitea
+          [ "$forge" = "${BUILD_FORGE}" ] || exit 0
           if command -v go >/dev/null 2>&1; then
             echo "go present: $(go version)"
             exit 0
@@ -57,6 +71,9 @@ jobs:
 
       - name: build linux binaries
         run: |
+          forge=github
+          [ "${GITHUB_SERVER_URL}" = "https://github.com" ] || forge=gitea
+          [ "$forge" = "${BUILD_FORGE}" ] || exit 0
           tag="${GITHUB_REF_NAME}"
           commit=$(git rev-parse --short HEAD)
           build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -88,14 +105,52 @@ jobs:
               echo "  $(basename "$out"): cross-built for ${arch}, not executed here (native=${native})"
             fi
           done
+
+      - name: package helm chart
+        run: |
+          forge=github
+          [ "${GITHUB_SERVER_URL}" = "https://github.com" ] || forge=gitea
+          [ "$forge" = "${BUILD_FORGE}" ] || exit 0
+          tag="${GITHUB_REF_NAME}"
+          helm_ver=v3.16.4
+          if ! command -v helm >/dev/null 2>&1; then
+            arch=$(go env GOARCH)
+            echo "installing helm ${helm_ver} for ${arch}"
+            curl -fsSL "https://get.helm.sh/helm-${helm_ver}-linux-${arch}.tar.gz" -o /tmp/helm.tgz
+            tar -xzf /tmp/helm.tgz -C /tmp
+            echo "/tmp/linux-${arch}" >> "$GITHUB_PATH"
+            HELM="/tmp/linux-${arch}/helm"
+          else
+            HELM=helm
+          fi
+          # The chart carries its own version, which is not the release tag. Override just for this
+          # build so the packaged chart and the tag cannot drift apart.
+          chart_ver="${tag#v}"
+          "$HELM" lint charts/byre
+          "$HELM" package charts/byre --version "$chart_ver" --app-version "$tag" -d dist
+          ls -l dist/*.tgz
+          # A packaged chart that does not carry the tag is a silent version skew between the
+          # image and the chart that installs it -- the same class of bug as an unstamped binary.
+          got=$(tar -xzOf "dist/byre-${chart_ver}.tgz" byre/Chart.yaml | awk '/^version:/{print $2}')
+          echo "packaged chart version: $got"
+          [ "$got" = "$chart_ver" ] || { echo "FAIL: chart version is '$got', want '$chart_ver'"; exit 1; }
+
+      - name: checksums
+        run: |
+          forge=github
+          [ "${GITHUB_SERVER_URL}" = "https://github.com" ] || forge=gitea
+          [ "$forge" = "${BUILD_FORGE}" ] || exit 0
           cd dist && sha256sum byre-* > SHA256SUMS && cat SHA256SUMS
 
       - name: build and push image
         run: |
+          forge=github
+          [ "${GITHUB_SERVER_URL}" = "https://github.com" ] || forge=gitea
+          [ "$forge" = "${BUILD_FORGE}" ] || exit 0
           tag="${GITHUB_REF_NAME}"
           # Registry resolution. GitHub needs no configuration: an unset vars.REGISTRY means
-          # ghcr.io and the job token authenticates it. On Gitea an unset value means no
-          # registry is wired up for this forge, so skip publishing rather than fail.
+          # ghcr.io and the job token authenticates it. Elsewhere an unset value means no registry
+          # is wired up for this forge, so skip publishing rather than fail.
           if [ -z "$REGISTRY" ]; then
             if [ "${GITHUB_SERVER_URL}" = "https://github.com" ]; then
               REGISTRY=ghcr.io
@@ -131,15 +186,16 @@ jobs:
           esac
           cat dist/images.txt
 
-      - name: attach release assets
-        env:
-          HOST_URL: ${{ github.server_url }}
+      - name: attach release assets (github)
         run: |
-          tag="${GITHUB_REF_NAME}"
-          if [ "$HOST_URL" != "https://github.com" ]; then
-            echo "not github ($HOST_URL); skipping gh release"
+          forge=github
+          [ "${GITHUB_SERVER_URL}" = "https://github.com" ] || forge=gitea
+          [ "$forge" = "${BUILD_FORGE}" ] || exit 0
+          if [ "${GITHUB_SERVER_URL}" != "https://github.com" ]; then
+            echo "BUILD_FORGE is gitea but this is github; skipping"
             exit 0
           fi
+          tag="${GITHUB_REF_NAME}"
           awk -v t="$tag" '
             $0 ~ "^## \\[" substr(t,2) "\\]" {p=1; next}
             p && /^## \[/ {exit}
@@ -148,18 +204,18 @@ jobs:
           [ -s notes.md ] || { echo "no CHANGELOG section for $tag" >&2; exit 1; }
           gh release create "$tag" dist/* --title "$tag" --notes-file notes.md --verify-tag
 
-      - name: attach release assets (Gitea)
-        env:
-          HOST_URL: ${{ github.server_url }}
+      - name: attach release assets (gitea)
         run: |
-          # Gitea's `tea` CLI is not guaranteed on a job pod, so the release is created through
-          # the REST API with the job token instead of a CLI.
-          tag="${GITHUB_REF_NAME}"
-          if [ "$HOST_URL" = "https://github.com" ]; then
-            echo "github; handled by the previous step"
+          forge=github
+          [ "${GITHUB_SERVER_URL}" = "https://github.com" ] || forge=gitea
+          [ "$forge" = "${BUILD_FORGE}" ] || exit 0
+          if [ "${GITHUB_SERVER_URL}" = "https://github.com" ]; then
+            echo "this is github; handled by the previous step"
             exit 0
           fi
-          host="${GITHUB_SERVER_URL#https://}"
+          # Gitea's `tea` CLI is not guaranteed on a job pod, so the release is created through the
+          # REST API with the job token instead of a CLI.
+          tag="${GITHUB_REF_NAME}"
           api="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
           existing=$(curl -sS -H "Authorization: token ${GH_TOKEN}" "${api}/releases/tags/${tag}")
           if echo "$existing" | grep -q '"id"'; then
@@ -168,4 +224,12 @@ jobs:
           curl -sS -X POST "${api}/releases" \
             -H "Authorization: token ${GH_TOKEN}" -H 'Content-Type: application/json' \
             -d "{\"tag_name\":\"${tag}\",\"name\":\"${tag}\",\"body\":\"See CHANGELOG.md\"}" >/dev/null
-          echo "release ${tag} created; upload assets with the Gitea UI or tea"
+          echo "release ${tag} created; uploading assets"
+          for f in dist/*; do
+            name=$(basename "$f")
+            curl -sS -X POST "${api}/releases/tags/${tag}/assets?name=${name}" \
+              -H "Authorization: token ${GH_TOKEN}" \
+              -F "attachment=@${f}" >/dev/null
+            echo "  uploaded ${name}"
+          done
+
