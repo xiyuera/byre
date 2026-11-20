@@ -21,6 +21,7 @@ how the four provisioning shapes differ. This page is the map for everything pas
 | [examples/pod-image/](../examples/pod-image/README.md) | `workloads` | a minimal sshd image and the backend that creates pods from it |
 | [examples/kubernetes-sandbox/](../examples/kubernetes-sandbox/README.md) | `claims` | a template, a warm pool, the backend that claims from them, and the RBAC + deployment to run it |
 | [examples/docker-sandbox/](../examples/docker-sandbox/README.md) | `command` | the whole gateway in one process, sandboxes as docker containers — no cluster at all |
+| [charts/byre/](../charts/byre/README.md) | `claims` | the Kubernetes shape as a Helm chart, template and warm pool included |
 
 ## Decisions and records
 

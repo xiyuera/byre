@@ -1,0 +1,53 @@
+{{- if .Values.sandbox.enabled }}
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: {{ .Values.sandbox.template.name }}
+  namespace: {{ include "byre.backendNamespace" . }}
+  labels:
+    {{- include "byre.labels" . | nindent 4 }}
+spec:
+  podTemplate:
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sandbox
+          image: "{{ .Values.sandbox.image.repository }}:{{ .Values.sandbox.image.tag }}"
+          imagePullPolicy: {{ .Values.sandbox.image.pullPolicy }}
+          ports:
+            - name: ssh
+              containerPort: {{ .Values.backend.ssh.port }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              # sshd needs to switch users and chroot to /var/empty; everything else is dropped.
+              drop: ["ALL"]
+              add: ["SYS_CHROOT", "SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "KILL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: run
+              mountPath: /run
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            tcpSocket:
+              port: ssh
+            periodSeconds: 2
+            failureThreshold: 15
+      volumes:
+        - name: run
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+{{- end }}

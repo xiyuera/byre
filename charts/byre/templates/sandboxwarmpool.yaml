@@ -1,0 +1,15 @@
+{{- if and .Values.sandbox.enabled .Values.sandbox.warmPool.enabled }}
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: {{ .Values.sandbox.warmPool.name }}
+  namespace: {{ include "byre.backendNamespace" . }}
+  labels:
+    {{- include "byre.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.sandbox.warmPool.replicas }}
+  # Field name is `sandboxTemplateRef`; the eager `templateRef` is accepted by the API server
+  # and then ignored, which leaves the pool with zero warm pods and no error.
+  sandboxTemplateRef:
+    name: {{ .Values.sandbox.template.name }}
+{{- end }}

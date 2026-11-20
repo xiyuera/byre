@@ -404,6 +404,7 @@ identifier SSH already verifies — the public key — and hangs the lease on it
 | [handbook/troubleshooting.md](docs/handbook/troubleshooting.md) | what each failure looks like from the client and from the gateway log |
 | [examples/](examples/) | one runnable configuration per shape, plus `examples/local-quickstart/` — the Quick start above as a file you can copy |
 | [examples/docker-sandbox/](examples/docker-sandbox/README.md) · [examples/kubernetes-sandbox/](examples/kubernetes-sandbox/README.md) | the two starter kits: a complete gateway + sandbox deployment on plain docker, and the same on Kubernetes with a claim-based controller |
+| [charts/byre/](charts/byre/README.md) | the same Kubernetes shape as a Helm chart — defaults install and start, `sandbox.enabled` adds the template and pool |
 | [roadmap.md](docs/roadmap.md) · [adr/](docs/adr/) | what is absent from v1 and in what order it would arrive; the decisions, with the conditions that would reverse them |
 | [acceptance/](docs/acceptance/) · [docs/README.md](docs/README.md) | what was verified on a real cluster; the index of everything else |
 

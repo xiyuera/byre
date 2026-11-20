@@ -1,0 +1,30 @@
+byre {{ .Chart.AppVersion }} is installing into {{ .Release.Namespace }}.
+
+The gateway is reachable at:
+
+  {{ include "byre.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.sshPort }}
+
+{{- if not .Values.identities }}
+
+WARNING: `identities` is empty, so the gateway will refuse every key. Add at least one:
+
+  identities:
+    - fingerprint: "SHA256:..."      # ssh-keygen -lf ~/.ssh/id_ed25519.pub
+      backend: {{ .Values.backend.name }}
+{{- end }}
+
+{{- if not .Values.poolKey.existingSecret }}
+{{- if not .Values.poolKey.privateKey }}
+
+WARNING: no pool key configured. Either set poolKey.existingSecret, or create the key pair:
+
+  ./scripts/keys.sh                       # in examples/docker-sandbox
+  helm upgrade {{ .Release.Name }} {{ .Chart.Name }} \
+    --set-file poolKey.privateKey=examples/docker-sandbox/keys/id_key
+{{- end }}
+{{- end }}
+
+Try it from inside the cluster:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "byre.fullname" . }} 2222:{{ .Values.service.sshPort }}
+  ssh -p 2222 -i ~/.ssh/id_ed25519 {{ .Values.backend.ssh.user }}@127.0.0.1 hostname

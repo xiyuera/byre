@@ -1,0 +1,34 @@
+{{- if and .Values.rbac.create (eq .Values.backend.provision "claims") }}
+{{- /*
+Only the claim objects. The gateway never touches the template or the pool: those are
+operator-owned, and a chart that also granted write on them would let a compromise of the
+gateway rewrite every sandbox definition.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "byre.fullname" . }}
+  namespace: {{ include "byre.backendNamespace" . }}
+  labels:
+    {{- include "byre.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["{{ .Values.backend.provider.apiGroup }}"]
+    resources: ["{{ .Values.backend.provider.resource }}"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "byre.fullname" . }}
+  namespace: {{ include "byre.backendNamespace" . }}
+  labels:
+    {{- include "byre.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "byre.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "byre.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

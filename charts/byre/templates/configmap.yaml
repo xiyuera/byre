@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "byre.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "byre.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    listen: {{ .Values.listen | quote }}
+    host_key: /var/lib/byre/hostkey/id_ed25519
+
+    lease:
+      ttl: {{ .Values.lease.ttl }}
+      grace: {{ .Values.lease.grace }}
+      {{- if not (kindIs "invalid" .Values.lease.poolSize) }}
+      pool_size: {{ .Values.lease.poolSize }}
+      {{- end }}
+
+    backends:
+      - name: {{ .Values.backend.name }}
+        provision: {{ .Values.backend.provision }}
+        {{- if eq .Values.backend.provision "claims" }}
+        namespace: {{ include "byre.backendNamespace" . }}
+        provider:
+          warm_pool: {{ .Values.backend.provider.warmPool }}
+          api_group: {{ .Values.backend.provider.apiGroup }}
+          api_version: {{ .Values.backend.provider.apiVersion }}
+          resource: {{ .Values.backend.provider.resource }}
+          object_kind: {{ .Values.backend.provider.objectKind }}
+          endpoint_field:
+          {{- range .Values.backend.provider.endpointField }}
+            - {{ . }}
+          {{- end }}
+          ready_timeout: {{ .Values.backend.provider.readyTimeout }}
+        {{- else if eq .Values.backend.provision "command" }}
+        command:
+          {{- with .Values.backend.command.acquire }}
+          acquire: {{ toJson . }}
+          {{- end }}
+          {{- with .Values.backend.command.release }}
+          release: {{ toJson . }}
+          {{- end }}
+          {{- with .Values.backend.command.list }}
+          list: {{ toJson . }}
+          {{- end }}
+          timeout: {{ .Values.backend.command.timeout }}
+          {{- with .Values.backend.command.env }}
+          env:
+          {{- range . }}
+            - {{ . | quote }}
+          {{- end }}
+          {{- end }}
+        {{- else if eq .Values.backend.provision "endpoints" }}
+        endpoints:
+        {{- range .Values.backend.endpoints }}
+          - {{ . | quote }}
+        {{- end }}
+        {{- end }}
+        ssh:
+          port: {{ .Values.backend.ssh.port }}
+          user: {{ .Values.backend.ssh.user }}
+          private_key: {{ .Values.backend.ssh.privateKey }}
+          host_key_policy: {{ .Values.backend.ssh.hostKeyPolicy }}
+
+    {{- if .Values.identities }}
+    identities:
+    {{- range .Values.identities }}
+      - fingerprint: {{ .fingerprint | quote }}
+        backend: {{ .backend }}
+    {{- end }}
+    {{- else }}
+    identities: []
+    {{- end }}

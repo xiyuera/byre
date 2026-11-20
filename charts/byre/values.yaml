@@ -1,0 +1,169 @@
+# Defaults are a working install: `helm install byre ./charts/byre -n byre --create-namespace`
+# gives you the gateway plus a sandbox template and a warm pool. Everything below can be
+# replaced; nothing below is required except `identities` (empty means "reject every key").
+
+# -- Gateway image. `tag` empty means `.Chart.AppVersion`, so the chart and the binary move
+# together unless you deliberately pin them apart.
+image:
+  repository: ghcr.io/xiyuera/byre
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# -- The gateway keeps leases in memory and holds SSH sessions open, so more than one replica
+# would hand out independent sandboxes for the same identity. Raise this only if you also
+# move lease state out of the process.
+replicaCount: 1
+
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Address the SSH front end listens on, inside the pod.
+listen: ":2222"
+
+lease:
+  # -- Idle time before an instance is reclaimed.
+  ttl: 10m
+  # -- Extra wait after a disconnect before reclaiming.
+  grace: 30s
+  # -- Warm instances to keep ready. `null` leaves the gateway default; `0` means "none".
+  poolSize: null
+
+# -- The provisioner. `claims` = instances come from a CRD (the default, pairs with
+# `sandbox.enabled`); `command` = run your own acquire/release/list programs; `workloads` and
+# `endpoints` are the other two shapes.
+backend:
+  name: sandbox
+  provision: claims
+  # -- Namespace the CRD objects live in. Empty = the release namespace.
+  namespace: ""
+
+  # Used when provision=claims.
+  provider:
+    warmPool: byre-sandbox
+    apiGroup: extensions.agents.x-k8s.io
+    apiVersion: v1beta1
+    resource: sandboxclaims
+    objectKind: SandboxClaim
+    endpointField:
+      - status
+      - sandbox
+      - serviceFQDN
+    readyTimeout: 180s
+
+  # Used when provision=command: ["/path/to/acquire"], etc.
+  command:
+    acquire: []
+    release: []
+    list: []
+    timeout: 120s
+    env: []
+
+  # Used when provision=endpoints.
+  endpoints: []
+
+  # How the gateway reaches whatever it produced.
+  ssh:
+    port: 22
+    user: sandbox
+    privateKey: /etc/byre/keys/id_key
+    # `accept-new` for long-lived hosts, `insecure` for throwaway instances whose IPs get
+    # reused (containers), `strict` when you ship a known_hosts.
+    hostKeyPolicy: accept-new
+
+# -- SSH public-key fingerprints allowed to ask for a lease, and which backend they get.
+# Empty means the gateway starts and rejects everyone — that is intentional: a chart that
+# defaults to "anyone" would be a foot-gun.
+#   - fingerprint: "SHA256:..."
+#     backend: sandbox
+identities: []
+
+# -- The pool key the gateway uses to log in to instances. Prefer `existingSecret`; the
+# inline `privateKey` exists for local trials and puts a private key in a release value.
+poolKey:
+  existingSecret: ""
+  secretKey: id_key
+  privateKey: ""
+
+# -- Sandbox template and warm pool created by this chart. Turn `enabled` off when another
+# team owns the template and you only want the gateway.
+sandbox:
+  # Off by default: turning it on creates a SandboxTemplate that points at
+  # `sandbox.image`, and a warm pool that will sit Pending until that image exists. Build one
+  # from examples/docker-sandbox, push it, set sandbox.image, then flip this to true.
+  enabled: false
+  image:
+    repository: ghcr.io/example/byre-sandbox
+    tag: latest
+    pullPolicy: IfNotPresent
+  template:
+    name: byre-sandbox
+  warmPool:
+    enabled: true
+    name: byre-sandbox
+    replicas: 2
+
+service:
+  type: ClusterIP
+  sshPort: 2222
+  healthPort: 8099
+  annotations: {}
+
+# -- The gateway itself does not need a ServiceAccount for anything except the CRD access
+# below; `rbac.create: false` means you have bound an existing account already.
+rbac:
+  create: true
+  serviceAccountName: ""
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: health
+  periodSeconds: 10
+  timeoutSeconds: 10
+  failureThreshold: 12
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: health
+  periodSeconds: 5
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# -- Extra env for the gateway container (e.g. BYRE_LOG_LEVEL).
+extraEnv: []
+# -- Extra volumes / mounts for the gateway container.
+extraVolumes: []
+extraVolumeMounts: []
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1

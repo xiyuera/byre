@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "byre.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "byre.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # Recreate, not RollingUpdate: leases live in the process, so two pods overlapping would
+  # each hand out their own sandbox for the same identity.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "byre.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "byre.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "byre.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: byre
+          image: {{ include "byre.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["-config", "/etc/byre/config.yaml"]
+          ports:
+            - name: ssh
+              containerPort: {{ .Values.service.sshPort }}
+              protocol: TCP
+            - name: health
+              containerPort: {{ .Values.service.healthPort }}
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/byre
+              readOnly: true
+            - name: pool-key
+              mountPath: /etc/byre/keys
+              readOnly: true
+            - name: hostkey
+              mountPath: /var/lib/byre/hostkey
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "byre.fullname" . }}
+        - name: pool-key
+          secret:
+            secretName: {{ include "byre.poolKeySecret" . }}
+            defaultMode: 0400
+            # optional: an install without a key still starts; the error appears on the first
+            # connection, not as a Pending pod.
+            optional: true
+            items:
+              - key: {{ .Values.poolKey.secretKey }}
+                path: id_key
+        # The host key must survive a restart or every client pinning the fingerprint fails.
+        # An emptyDir means "regenerate on restart"; supply a PVC through extraVolumes when
+        # that matters to you.
+        - name: hostkey
+          emptyDir: {}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

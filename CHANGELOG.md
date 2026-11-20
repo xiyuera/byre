@@ -27,6 +27,59 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
   qualify the check (a bare digest with no registry to compare against), because "could not check" must
   not read as "checked and fine". `make image-verify IMAGES=images.txt` takes the release's own asset.
 
+## [0.4.0] — the sandbox backend ships with the gateway
+
+A reader could previously build the gateway but had to invent the other half. Now both halves
+are in the repository, and there is a chart for the Kubernetes shape.
+
+### Added
+
+- `examples/docker-sandbox/` — the complete deployment with no cluster: `command` provisioner,
+  sandboxes are containers, `scripts/{keys,acquire,release,list}.sh` implement the three-program
+  contract. Verified end to end on aarch64 docker: the same key lands on the same container
+  while the lease holds, `byre.io/identity` is recorded so a restart can adopt it.
+- `examples/kubernetes-sandbox/` — rewritten from a page of placeholders into applyable files:
+  `SandboxTemplate`, `SandboxWarmPool`, the Role that grants only `sandboxclaims`, the gateway
+  Deployment, its ServiceAccount, and `verify.sh`. Uses the real
+  `extensions.agents.x-k8s.io/v1beta1` API.
+- `charts/byre/` — Helm chart. Defaults install and start; `sandbox.enabled` renders the
+  template and pool when you have an image to point them at. Every value is overrideable and
+  documented inline.
+
+### Changed
+
+- Workflows live in `.github/workflows` only. Gitea's `WORKFLOW_DIRS` falls back to that
+  directory when `.gitea/workflows` is absent, so one file serves both forges — which also
+  keeps `.gitea/` out of anything mirrored to GitHub.
+- The CI checkout is a plain `git clone` against `$GITHUB_SERVER_URL`, and the job token is
+  `secrets.GITEA_TOKEN || github.token`, so no job has to fetch an action from the internet.
+
+### Fixed
+
+- The old kubernetes example named `templateRef`; the controller reads
+  **`sandboxTemplateRef`**. The wrong field is accepted by the API server and silently
+  ignored, leaving a pool with zero warm pods and no error.
+- `release.sh` in the docker example reads `$BYRE_INSTANCE_ID`. It is an environment variable,
+  not a positional argument (`internal/backend/command.go`).
+
+## [0.3.3] - 2026-11-18
+
+The release pipeline now records the image digest as an asset, so a reader can tell which
+binary and which image belong to the same tag without trusting a registry UI.
+
+### Added
+
+- `release.yml` writes `images.txt` (image reference + digest) and attaches it to the release;
+  the platform asserts the digest the pipeline recorded matches what the registry reports.
+- `scripts/assert-image-digest.sh` fails when the digest is missing, when the registry prefix
+  does not match the expected one, and when no credential is configured — three different
+  states, three different exit codes.
+
+### Certified
+
+- `v0.3.3` image: `sha256:4af3606f7b5c5e31aa5ac9f8f49f42ee315483d709f536cd28c00d3260c2f86f`,
+  matching the running pod in the reference deployment and the binary built from the tag.
+
 ## [0.3.2] - 2026-11-18
 
 ### Added
