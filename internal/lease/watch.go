@@ -3,6 +3,7 @@ package lease
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"byre/internal/backend"
 )
@@ -24,39 +25,77 @@ func (m *Manager) WatchDeletions(ctx context.Context) {
 	m.mu.Unlock()
 
 	for name, drv := range drivers {
-		watcher, ok := drv.(backend.DeletionWatcher)
-		if !ok {
+		if _, ok := drv.(backend.DeletionWatcher); !ok {
 			continue
 		}
-		events, err := watcher.WatchDeletions(ctx)
-		if err != nil {
-			if logger != nil {
-				logger.Warn("cannot watch for instance deletions; leases will rely on Alive() alone",
-					"backend", name, "error", err)
-			}
-			continue
-		}
-		if logger != nil {
-			logger.Info("watching for instance deletions", "backend", name)
-		}
-		go m.consumeDeletions(ctx, name, events, logger)
+		// One goroutine per driver, and each owns its subscription for the life of ctx.
+		go m.consumeDeletions(ctx, name, drv, logger)
 	}
 }
 
-func (m *Manager) consumeDeletions(ctx context.Context, backendName string, ids <-chan string, logger *slog.Logger) {
+// A deletion watch ending is normal, not exceptional: the apiserver closes watches on a control-plane
+// restart, on etcd compaction, and on "resourceVersion too old". Re-subscribing is what keeps "a deleted
+// instance stops being handed out immediately" true for a process that has been up for weeks -- which is
+// exactly when the guarantee matters and exactly when a one-shot subscription has quietly stopped
+// providing it.
+const (
+	watchRetryMin = time.Second
+	watchRetryMax = 30 * time.Second
+)
+
+func (m *Manager) consumeDeletions(ctx context.Context, backendName string, drv backend.Backend, logger *slog.Logger) {
+	watcher, ok := drv.(backend.DeletionWatcher)
+	if !ok {
+		return
+	}
+	backoff := watchRetryMin
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+		events, err := watcher.WatchDeletions(ctx)
+		switch {
+		case err != nil:
+			if logger != nil {
+				logger.Warn("cannot watch for instance deletions; leases rely on Alive() meanwhile",
+					"backend", backendName, "error", err, "retry_in", backoff)
+			}
+		default:
+			if logger != nil {
+				logger.Info("watching for instance deletions", "backend", backendName)
+			}
+			// A successful subscription resets the backoff: the next failure is a new event, not a
+			// continuation of the previous streak.
+			backoff = watchRetryMin
+			if !m.drainDeletions(ctx, backendName, events) {
+				return
+			}
+			if logger != nil {
+				logger.Warn("instance deletion watch ended; re-subscribing",
+					"backend", backendName, "retry_in", backoff)
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return
+		case <-time.After(backoff):
+		}
+		if backoff < watchRetryMax {
+			backoff *= 2
+		}
+	}
+}
+
+// drainDeletions consumes one subscription until it ends, and reports whether ctx is still live so the
+// caller can tell "the watch ended" from "we are shutting down".
+func (m *Manager) drainDeletions(ctx context.Context, backendName string, ids <-chan string) bool {
+	for {
+		select {
+		case <-ctx.Done():
+			return false
 		case id, ok := <-ids:
 			if !ok {
-				// The watch ended. Saying so matters: silence here would look identical to "no
-				// instance was ever deleted".
-				if logger != nil {
-					logger.Warn("instance deletion watch ended; leases rely on Alive() until it is re-established",
-						"backend", backendName)
-				}
-				return
+				return true
 			}
 			m.dropByInstance(ctx, backendName, id)
 		}
