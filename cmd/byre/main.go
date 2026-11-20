@@ -274,6 +274,11 @@ func writeMetrics(w io.Writer, mgr *lease.Manager, backends map[string]backend.B
 	fmt.Fprintf(w, "# HELP byre_leases_adopted Leases recovered from existing instances at startup.\n# TYPE byre_leases_adopted counter\nbyre_leases_adopted %d\n", mgr.AdoptedTotal())
 	fmt.Fprintf(w, "# HELP byre_instances_discarded Instances destroyed at startup because nothing could own them.\n# TYPE byre_instances_discarded counter\nbyre_instances_discarded %d\n", mgr.DiscardedTotal())
 	fmt.Fprintf(w, "# HELP byre_home_claims_orphan Home claims with no configured identity behind them; reported only, never deleted.\n# TYPE byre_home_claims_orphan gauge\nbyre_home_claims_orphan %d\n", metrics.HomeClaimsOrphan())
+	fmt.Fprintf(w, "# HELP byre_instances_discarded Instances destroyed because nothing could own them, at startup or by the sweep.\n# TYPE byre_instances_discarded counter\nbyre_instances_discarded %d\n", mgr.DiscardedTotal())
+	fmt.Fprintf(w, `# HELP byre_instances_reclaimed Instances destroyed by the running sweep for having no identity and no lease.
+# TYPE byre_instances_reclaimed counter
+byre_instances_reclaimed %d
+`, mgr.ReclaimedTotal())
 	fmt.Fprintf(w, "# HELP byre_leases_adopted_pending Adopted leases no connection has picked up yet; add it to leases_active when comparing across a restart.\n# TYPE byre_leases_adopted_pending gauge\nbyre_leases_adopted_pending %d\n", mgr.AdoptedPending())
 	fmt.Fprintf(w, "# HELP byre_oldest_idle_lease_age_seconds Age of the oldest lease without a connection.\n# TYPE byre_oldest_idle_lease_age_seconds gauge\nbyre_oldest_idle_lease_age_seconds %g\n", mgr.OldestIdleAge().Seconds())
 	fmt.Fprintf(w, "# HELP byre_lease_dead_instance_total Leases dropped because the instance behind them no longer exists.\n# TYPE byre_lease_dead_instance_total counter\nbyre_lease_dead_instance_total %d\n", mgr.DeadInstancesTotal())
@@ -428,6 +433,12 @@ func buildBackends(cfg *config.Config, logger *slog.Logger, dryRun bool) (map[st
 				HostKeyPolicy: b.SSH.HostKeyPolicy,
 				Logger:        logger,
 				DryRun:        dryRun,
+				SSHUser:        b.SSH.User,
+				SSHPrivateKey:  b.SSH.PrivateKey,
+				HostKeyPolicy:  b.SSH.HostKeyPolicy,
+				IdentityLabels: identityLabels(cfg),
+				Logger:         logger,
+				DryRun:         dryRun,
 			})
 			if err != nil {
 				return nil, err
@@ -455,6 +466,38 @@ func buildBackends(cfg *config.Config, logger *slog.Logger, dryRun bool) (map[st
 		}
 	}
 	return out, nil
+}
+
+// identityLabels turns the operator-declared per-identity labels into the lookup the drivers use. It is
+// built once so the label a claim carries and the label the config names cannot drift apart, and it
+// returns a copy because the driver stores what it gets.
+func identityLabels(cfg *config.Config) func(string) map[string]string {
+	byFingerprint := make(map[string]map[string]string, len(cfg.Identities))
+	for _, id := range cfg.Identities {
+		if len(id.Labels) == 0 {
+			continue
+		}
+		fp, err := config.NormalizeFingerprint(id.Fingerprint)
+		if err != nil {
+			continue // Load already rejected this fingerprint; there is nothing to label.
+		}
+		copied := make(map[string]string, len(id.Labels))
+		for k, v := range id.Labels {
+			copied[k] = v
+		}
+		byFingerprint[fp] = copied
+	}
+	return func(fingerprint string) map[string]string {
+		labels := byFingerprint[fingerprint]
+		if len(labels) == 0 {
+			return nil
+		}
+		out := make(map[string]string, len(labels))
+		for k, v := range labels {
+			out[k] = v
+		}
+		return out
+	}
 }
 
 // buildIdentities normalises fingerprints so two spellings of one key cannot become two identities,

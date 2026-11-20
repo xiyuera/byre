@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Instance is one leaseable SSH target.
@@ -35,6 +36,11 @@ type Instance struct {
 
 	// Annotations are durable hints used to adopt instances after a restart.
 	Annotations map[string]string
+
+	// Created is when the object behind the instance was created, when the driver can say. It lets a
+	// sweeper tell "abandoned" from "a create that is still in flight": a driver that cannot report it
+	// leaves the zero value, and nothing is destroyed on a guess.
+	Created time.Time
 }
 
 // Validate rejects an instance that cannot be dialled.
