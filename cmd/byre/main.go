@@ -164,6 +164,12 @@ func main() {
 		logger.Info("adoption finished", "adopted", n)
 	}
 
+	// Subscribe to instance deletions before serving, so a deleted object stops being handed out
+	// immediately rather than at the next idle expiry (ADR-0013, part 4). Best-effort on purpose: a
+	// driver that cannot watch is skipped and Alive() remains the backstop, so a failure here is a
+	// logged warning, never a refused startup. The watch ends when ctx does.
+	mgr.WatchDeletions(ctx)
+
 	go mgr.RunReaper(ctx, 30*time.Second)
 	go reportOrphanHomes(ctx, cfg, backends, logger, 5*time.Minute)
 	if poolSize > 0 {
