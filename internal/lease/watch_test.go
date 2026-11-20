@@ -13,18 +13,30 @@ import (
 // exercised without a cluster.
 type watchingBackend struct {
 	*fakeBackend
-	mu     sync.Mutex
-	out    chan string
-	closed bool
+	mu            sync.Mutex
+	out           chan string
+	closed        bool
+	subscriptions int
 }
 
 func (w *watchingBackend) WatchDeletions(ctx context.Context) (<-chan string, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.out == nil {
-		w.out = make(chan string, 8)
-	}
+	// A fresh channel per subscription, because that is what a real watch is: a new stream every time. A
+	// reused channel would make the re-subscription path untestable, and it is the path that keeps a
+	// long-lived process from silently watching nothing.
+	w.subscriptions++
+	w.out = make(chan string, 8)
+	w.closed = false
 	return w.out, nil
+}
+
+// subscriptionCount reports how many times the manager has subscribed, so a test can tell "subscribed
+// again" from "still waiting".
+func (w *watchingBackend) subscriptionCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.subscriptions
 }
 
 func (w *watchingBackend) delete(id string) {
@@ -57,6 +69,9 @@ func newWatchingManager(t *testing.T) (*Manager, *watchingBackend, *clock, conte
 	m.SetClock(c.now)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.WatchDeletions(ctx)
+	// Subscription happens in its own goroutine by design; wait for it so a test can send a deletion
+	// immediately afterwards instead of racing the goroutine that is about to start watching.
+	waitFor(t, "the initial deletion subscription", func() bool { return wb.subscriptionCount() >= 1 })
 	return m, wb, c, cancel
 }
 
@@ -176,4 +191,35 @@ func TestWatchStopsOnContextCancel(t *testing.T) {
 	if m.Lookup("alice") == nil {
 		t.Fatal("lease vanished after the context was cancelled")
 	}
+}
+
+// A watch ending must lead to a new subscription, not to a process that has been running for weeks with
+// nothing watching and a log line promising coverage. The apiserver closes watches routinely, so this is
+// the normal path rather than an error path.
+func TestWatchResubscribesAfterTheSubscriptionEnds(t *testing.T) {
+	m, wb, _, cancel := newWatchingManager(t)
+	defer cancel()
+	ctx := context.Background()
+
+	// Subscription happens in its own goroutine now, so wait for it rather than assuming it has run.
+	waitFor(t, "the first subscription", func() bool {
+		return wb.subscriptionCount() >= 1
+	})
+	wb.endWatch()
+
+	// The backoff starts at a second; this only needs "it happened", not "it happened quickly".
+	waitFor(t, "the manager subscribed again after the watch ended", func() bool {
+		return wb.subscriptionCount() >= 2
+	})
+
+	// And the new subscription has to be wired to the table, not merely counted.
+	lease, err := m.Acquire(ctx, "alice", "lab")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	m.ReleaseConn("alice")
+	wb.delete(lease.Instance.ID)
+	waitFor(t, "the re-subscribed watch dropped the lease", func() bool {
+		return m.Lookup("alice") == nil
+	})
 }

@@ -881,6 +881,10 @@ func (m *Manager) reclaimAnonymous(ctx context.Context) error {
 // A failed release is reported and then *not* followed by a refill: the old object still exists and is
 // no longer tracked, and creating a replacement would turn one leaked instance into a leak that grows
 // every reap interval.
+//
+// Called at most once per entry: it ends with close(e.done), which panics on a second call. Every caller
+// establishes that by moving the entry to stateDraining under mu first -- Reap, the reuse path, and
+// dropByInstance all do it that way. A fourth caller has to as well.
 func (m *Manager) release(ctx context.Context, e *Entry, reason string) error {
 	var releaseErr error
 	if drv := m.driver(e.Backend); drv != nil {
