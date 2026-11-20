@@ -280,6 +280,10 @@ func writeMetrics(w io.Writer, mgr *lease.Manager, backends map[string]backend.B
 byre_instances_reclaimed %d
 `, mgr.ReclaimedTotal())
 	fmt.Fprintf(w, "# HELP byre_leases_adopted_pending Adopted leases no connection has picked up yet; add it to leases_active when comparing across a restart.\n# TYPE byre_leases_adopted_pending gauge\nbyre_leases_adopted_pending %d\n", mgr.AdoptedPending())
+	// Non-zero means these leases exist only in this process's memory: the store does not have them, so
+	// a second replica could hand the same identity a different instance. A gauge, not a counter,
+	// because the condition heals as soon as a retry succeeds on the next reuse.
+	fmt.Fprintf(w, "# HELP byre_leases_unpersisted Live leases the lease store does not know about; non-zero breaks one-instance-per-identity while more than one replica runs.\n# TYPE byre_leases_unpersisted gauge\nbyre_leases_unpersisted %d\n", mgr.UnpersistedCount())
 	fmt.Fprintf(w, "# HELP byre_oldest_idle_lease_age_seconds Age of the oldest lease without a connection.\n# TYPE byre_oldest_idle_lease_age_seconds gauge\nbyre_oldest_idle_lease_age_seconds %g\n", mgr.OldestIdleAge().Seconds())
 	fmt.Fprintf(w, "# HELP byre_lease_dead_instance_total Leases dropped because the instance behind them no longer exists.\n# TYPE byre_lease_dead_instance_total counter\nbyre_lease_dead_instance_total %d\n", mgr.DeadInstancesTotal())
 	fmt.Fprintf(w, "# HELP byre_lease_liveness_errors_total Existence checks that could not answer; those leases were kept.\n# TYPE byre_lease_liveness_errors_total counter\nbyre_lease_liveness_errors_total %d\n", mgr.LivenessErrorsTotal())

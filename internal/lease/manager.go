@@ -98,6 +98,13 @@ type Entry struct {
 	// ordinary idle count: an operator watching "active back to its old value" would otherwise compare
 	// against a number that is structurally zero.
 	adopted bool
+
+	// unpersisted marks a lease the store never recorded. It happens when the store is unreachable at
+	// the moment the lease becomes usable, and it is load-bearing rather than cosmetic: while this is
+	// set, the CR does not say this identity is bound, so another replica would happily hand out a
+	// second instance. The reuse path retries the write, so a transient outage repairs itself; a
+	// permanent one is visible as byre_leases_unpersisted.
+	unpersisted bool
 }
 
 // Refs reports the number of open connections.
@@ -208,6 +215,41 @@ func (m *Manager) forget(ctx context.Context, identity string) error {
 	return store.Delete(ctx, identity)
 }
 
+// markUnpersisted records that a lease exists only in memory. Both markers check the instance ID, so a
+// lease that was replaced while a write was in flight is never wrongly flagged or cleared.
+func (m *Manager) markUnpersisted(identity, instanceID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.byIdentity[identity]; ok && e.Instance.ID == instanceID {
+		e.unpersisted = true
+	}
+}
+
+// markPersisted clears the flag after a successful retry.
+func (m *Manager) markPersisted(identity, instanceID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.byIdentity[identity]; ok && e.Instance.ID == instanceID {
+		e.unpersisted = false
+	}
+}
+
+// UnpersistedCount reports how many live leases the store does not know about. Anything above zero is a
+// correctness problem while a second replica exists -- that replica cannot see these bindings, so it
+// could hand the same identity a different instance. It is a gauge rather than a counter because the
+// condition can heal, and an operator wants to know whether it is currently true.
+func (m *Manager) UnpersistedCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, e := range m.byIdentity {
+		if e.unpersisted {
+			n++
+		}
+	}
+	return n
+}
+
 // New builds a manager over the given drivers. Keys are backend names.
 func New(ttl, grace time.Duration, backends map[string]backend.Backend) (*Manager, error) {
 	if ttl <= 0 {
@@ -260,6 +302,19 @@ func (m *Manager) Acquire(ctx context.Context, identity, backendName string) (En
 				e.LastSeen = m.now()
 				snap := *e
 				m.mu.Unlock()
+
+				// A lease the store never recorded is one another replica cannot see. Retrying the write
+				// here is what makes a transient store outage self-healing: the lease keeps working, and
+				// the moment the API server answers again the binding appears. A permanent outage stays
+				// visible as byre_leases_unpersisted rather than silently permitting a second instance.
+				if snap.unpersisted {
+					if perr := m.persist(ctx, snap); perr != nil {
+						m.persistErrors.Add(1)
+					} else {
+						m.markPersisted(identity, snap.Instance.ID)
+						snap.unpersisted = false
+					}
+				}
 
 				// A lease is worth reusing only while the object behind it still exists. This is checked
 				// on every reuse, not on a timer: the window being closed is exactly one connection, and
@@ -388,10 +443,12 @@ func (m *Manager) Acquire(ctx context.Context, identity, backendName string) (En
 				continue
 			}
 			m.persistErrors.Add(1)
+			m.markUnpersisted(identity, snap.Instance.ID)
 			if log := m.log(); log != nil {
 				log.Error("could not persist the binding; the table and the store are out of step",
 					"identity", shortIdentity(identity), "backend", backendName,
-					"instance", snap.Instance.ID, "error", err)
+					"instance", snap.Instance.ID, "error", err,
+					"action", "lease kept; the write is retried on the next reuse")
 			}
 		}
 

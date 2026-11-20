@@ -40,6 +40,13 @@ func (f *fakeStore) Delete(_ context.Context, identity string) error {
 
 func (f *fakeStore) List(context.Context) ([]StoredBinding, error) { return nil, nil }
 
+// setPutErr flips the store between failing and working, for the tests that exercise recovery.
+func (f *fakeStore) setPutErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.putErr = err
+}
+
 func (f *fakeStore) snapshot() (puts []StoredBinding, deletes []string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -181,8 +188,51 @@ func TestPersistFailureKeepsTheLeaseAndCounts(t *testing.T) {
 	if n := len(drv.Released()); n != 0 {
 		t.Errorf("released %d instances; an unreachable store must not destroy a working lease", n)
 	}
+	// The lease is live but invisible to the store, and that has to be visible to an operator: with a
+	// second replica running, this is the state that hands one identity two instances.
+	if n := m.UnpersistedCount(); n != 1 {
+		t.Errorf("UnpersistedCount = %d, want 1", n)
+	}
 	if _, err := m.Acquire(ctx, "alice", "lab"); err != nil {
 		t.Fatalf("reuse after persist failure: %v", err)
+	}
+}
+
+// The flag is not a permanent scar: the reuse path retries the write, so a store that comes back makes
+// the binding appear without touching the client's instance.
+func TestReuseRepairsAnUnpersistedLease(t *testing.T) {
+	m, drv, _ := newManager(t)
+	store := &fakeStore{putErr: errors.New("apiserver unreachable")}
+	m.SetStore(store)
+
+	ctx := context.Background()
+	first, err := m.Acquire(ctx, "alice", "lab")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if n := m.UnpersistedCount(); n != 1 {
+		t.Fatalf("UnpersistedCount = %d after a failed write, want 1", n)
+	}
+
+	store.setPutErr(nil) // the API server is back
+	second, err := m.Acquire(ctx, "alice", "lab")
+	if err != nil {
+		t.Fatalf("reuse: %v", err)
+	}
+	if second.Instance.ID != first.Instance.ID {
+		t.Errorf("reuse returned a different instance (%s vs %s); repairing the binding must not recreate the lease",
+			second.Instance.ID, first.Instance.ID)
+	}
+	if n := m.UnpersistedCount(); n != 0 {
+		t.Errorf("UnpersistedCount = %d after a successful retry, want 0", n)
+	}
+	puts, _ := store.snapshot()
+	if len(puts) != 1 {
+		t.Errorf("puts = %d, want exactly 1 (the repair)", len(puts))
+	}
+	// And the instance was never handed back to the backend.
+	if n := len(drv.Released()); n != 0 {
+		t.Errorf("released %d instances; repairing a binding must not disturb the lease", n)
 	}
 }
 
