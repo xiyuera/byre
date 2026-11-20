@@ -65,7 +65,18 @@ byre 自己不创建容器。它向**后端**要一个实例，拿回一条 `{id
 
 ## 快速开始
 
-需要 Go 1.23+，以及至少一台你能 SSH 连到的机器。最简单的后端是 `provision: endpoints`：它什么都不创建，
+**三十秒，有 Docker 就行。** 不用改任何文件，不需要 Go，也不需要集群：
+
+```sh
+git clone https://github.com/xiyuera/byre && cd byre/examples/quickstart
+./run.sh
+```
+
+它自己生成密钥、渲染配置、构建沙箱镜像、起两个容器，然后打印唯一需要的那条 `ssh` 命令。连两次会落到
+同一个实例；等 TTL（120 秒）过期它就被释放。[`examples/quickstart/`](examples/quickstart/README.md)
+讲了你看到的是什么，以及怎么从这里走到真实部署。
+
+**没有 Docker**，五分钟，一台你能 SSH 连到的机器。最简单的后端是 `provision: endpoints`：它什么都不创建，
 网关只决定谁拿到哪台主机。下面这五分钟里，那台机器可以是任何跑着 `sshd` 的 Linux，包括你正坐着的这台。
 
 **1. 构建。**
