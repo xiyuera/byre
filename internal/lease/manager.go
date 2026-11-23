@@ -143,6 +143,14 @@ type Manager struct {
 	// nil means "in-memory only", which is the correct mode for backends that provision nothing
 	// (`endpoints`, `command`): there is no cluster to hold a CR, and no second replica to agree with.
 	store LeaseStore
+
+	// unusable counts consecutive session-open failures per instance. Keyed by instance rather than by
+	// identity: a replacement must start at zero, and an identity can be rebound while the old count is
+	// still interesting only for the log line. Cleared by NoteHealthy.
+	//
+	// This exists for the failure no other check can see: the object exists, the port is open,
+	// authentication succeeds, and the sshd refuses every channel anyway (ADR-0013, part 5).
+	unusable map[string]int
 	// names maps a fingerprint to the configured stable name (identities[].name). Read on the write
 	// path only, to fill spec.name of the CR; the lease key stays the fingerprint, because that is
 	// what a connection authenticates as.
@@ -635,6 +643,63 @@ func (m *Manager) DiscardIfGone(ctx context.Context, identity string, in backend
 		return false, probeErr
 	}
 	return m.dropStale(identity, in.ID, "instance no longer exists (dial failed)", probeErr), probeErr
+}
+
+// UnusableThreshold is how many consecutive session-open failures make an instance unusable. Three outlasts
+// a blip (a restarting sshd refuses for a moment) and is short enough that an operator does not sit through
+// the same wait on every reconnect.
+//
+// Exported because it is an operational number, not an implementation detail: it decides how many failed
+// reconnects an operator sees before the gateway replaces the instance behind them.
+const UnusableThreshold = 3
+
+// RecordUnusable counts a failed attempt to open a session on an instance that answered the handshake, and
+// discards the instance once the failures stop looking like a blip. It reports whether the instance was
+// discarded, so the caller can provision a replacement within the same connection attempt.
+//
+// This is the failure Alive() cannot see: the object exists, the port is open, authentication succeeds, and
+// every session is refused anyway -- a container that was OOM-killed and restarted into a state where its
+// sshd will not accept new channels. Dial-level classification keeps such a lease because the instance
+// exists, which from the client's side is indistinguishable from a host that hangs up on every attempt.
+//
+// Counting instead of discarding on the first failure is deliberate: a restarting sshd refuses sessions for
+// a moment, and replacing the instance at every such moment would churn pods for no reason.
+func (m *Manager) RecordUnusable(ctx context.Context, identity string, in backend.Instance) bool {
+	m.mu.Lock()
+	e, ok := m.byIdentity[identity]
+	if !ok || e.state != stateLeased || e.Instance.ID != in.ID {
+		m.mu.Unlock()
+		return false
+	}
+	if m.unusable == nil {
+		m.unusable = make(map[string]int, 4)
+	}
+	m.unusable[in.ID]++
+	n := m.unusable[in.ID]
+	if n < UnusableThreshold {
+		m.mu.Unlock()
+		m.log().Warn("instance refused a session; keeping the lease for now",
+			"identity", shortIdentity(identity), "instance", in.ID, "attempts", n, "threshold", UnusableThreshold)
+		return false
+	}
+	delete(m.unusable, in.ID)
+	// Mark before releasing, the same order Reap and the watch use: a connection arriving during the
+	// backend call waits on the entry instead of being handed the address that just failed.
+	e.state = stateDraining
+	e.done = make(chan struct{})
+	m.mu.Unlock()
+
+	m.log().Warn("instance refused sessions repeatedly; replacing it",
+		"identity", shortIdentity(identity), "instance", in.ID, "attempts", n)
+	_ = m.release(ctx, e, "refused sessions")
+	return true
+}
+
+// NoteHealthy clears the failure streak for an instance that accepted a session.
+func (m *Manager) NoteHealthy(in backend.Instance) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.unusable, in.ID)
 }
 
 // shortIdentity truncates a fingerprint for logs: enough to correlate, not enough to reconstruct.
