@@ -16,7 +16,7 @@ operator's ssh stops working.
 | 2 | `LeaseStore` interface; `Acquire` writes the binding, `Release` deletes it; failures counted | landed |
 | 3 | startup reads the bindings instead of relying on annotations; adoption is limited to the identities this process serves | landed |
 | 4 | watch: an instance object that goes away moves its lease to `Draining`, and the subscription is re-established when the stream ends | landed |
-| 5 | connection-level demotion (see below) | under discussion |
+| 5 | connection-level demotion: an instance that answers the handshake and refuses every session is replaced after three consecutive refusals | landed |
 
 Parts 1–2 change no behaviour on their own: with no store configured the manager keeps its table in
 memory, which stays the correct mode for `endpoints` and `command` — those provision nothing, so there
@@ -54,6 +54,28 @@ slow".
 **The general lesson, worth stating because it will recur:** a lease is a claim about *usability*, not
 about *existence*. Every check in this codebase that asks "does the object exist" is answering a
 strictly weaker question than the one that matters.
+
+---
+
+**How part 5 landed, and where it differs from the sketch above.** The threshold is a consecutive count
+rather than a count within a time window: the streak is keyed by instance, cleared by any successful
+session, and the instance is discarded at `UnusableThreshold` (3). A window turned out not to be needed --
+a successful session is the event that makes an older count irrelevant, so a recovering blip clears itself
+and a non-recovering one reaches the threshold on its own.
+
+The signal comes from a probe: one session opened and immediately closed after the dial. It has to happen
+there, because `ssh.Dial` stops at authentication, and answering authentication is exactly what a restarted
+container still does.
+
+Two constraints the implementation has that this sketch did not anticipate:
+
+- **A failed probe must not refuse the connection.** A client may be forwarding a port, which needs no
+  session at all (`direct-tcpip` is spliced through a separate path). Refusing on its behalf would break
+  a class of client that was never affected. The probe counts; the connection proceeds.
+- **The replacement provisioned on discard is not itself probed.** A replacement that also refuses is
+  handed to the client, which fails exactly as it would have without any of this. Probing that too would
+  mean a probe inside a retry inside a connection attempt, to cover a case where the client's next attempt
+  starts a fresh count against a fresh instance anyway.
 
 ## Context
 
