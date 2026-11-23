@@ -265,9 +265,6 @@ func (s *Server) handleConn(ctx context.Context, raw net.Conn) {
 		"backend", entry.Backend,
 		"instance", entry.Instance.ID,
 	)
-	// A session opened, so this instance is demonstrably usable: any earlier refusal streak was a blip,
-	// and leaving the count standing would eventually replace an instance that is working.
-	s.cfg.Leases.NoteHealthy(entry.Instance)
 
 	listeners := newListenerSet()
 	defer listeners.closeAll()
@@ -306,22 +303,29 @@ func (s *Server) leaseAndDial(ctx context.Context, fp, backendName, short string
 
 	target, err := s.dial(ctx, entry.Instance)
 	if err == nil {
-		// A successful dial covers TCP and authentication, not the session: an instance whose container
-		// was OOM-killed and restarted answers both and then refuses every channel. Alive() cannot see
-		// that -- the object is still there -- so without this probe the client reconnects to an instance
-		// that hangs up on it, forever (ADR-0013, part 5).
+		// A successful dial covers TCP and authentication, not the session. Probing for one costs a round
+		// trip and catches the instance that answers the handshake and then refuses every channel
+		// (ADR-0013, part 5).
+		//
+		// A failed probe counts against the instance but does *not* refuse the connection. A client may be
+		// here to forward a port, which needs no session at all -- direct-tcpip is spliced through
+		// separately -- and refusing on its behalf would break something that works. The count is what
+		// eventually replaces the instance; until then this client sees exactly what it would have seen
+		// before the probe existed.
 		if perr := probeSession(target); perr != nil {
-			_ = target.Close()
-			s.log.Warn("instance refused a session", "identity", short, "instance", entry.Instance.ID, "error", perr)
 			if s.cfg.Leases.RecordUnusable(ctx, fp, entry.Instance) {
+				_ = target.Close()
+				s.log.Warn("instance refused sessions repeatedly; replacing it",
+					"identity", short, "instance", entry.Instance.ID)
 				return s.provisionReplacement(ctx, fp, backendName, short, entry.Instance.ID, "refused sessions")
 			}
-			// Below the threshold this is treated like any other instance-level fault: the lease stays, so
-			// the next attempt is still aimed at the client's own instance rather than a stranger's, and
-			// the reference goes with the connection.
-			s.unreachable.Add(1)
-			s.cfg.Leases.ReleaseConn(fp)
-			return lease.Entry{}, nil, perr
+			s.log.Warn("instance refused a probe session; allowing the connection anyway",
+				"identity", short, "instance", entry.Instance.ID, "error", perr)
+		} else {
+			// The probe opened a session, which is the only proof available here that this instance works.
+			// NoteHealthy must not be called on connection setup: a connection succeeds against an instance
+			// that refuses every session, and clearing the streak there would keep the instance forever.
+			s.cfg.Leases.NoteHealthy(entry.Instance)
 		}
 		return entry, target, nil
 	}

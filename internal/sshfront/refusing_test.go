@@ -165,3 +165,29 @@ func TestRefusalsBelowTheThresholdKeepTheLease(t *testing.T) {
 		}
 	}
 }
+
+// A client that is here to forward a port needs no session at all, so a refusing instance must not cause the
+// connection to be refused on its behalf. That was the first version of this probe: it closed the
+// connection when the probe failed, which works for a shell client (that was going to fail anyway) and
+// breaks a `-N` forward, which never asked for a session.
+func TestPortForwardIsNotBlockedByARefusingInstance(t *testing.T) {
+	_, priv := newKeyPair(t)
+	driver := &stagedDriver{
+		key:   writeKeyFile(t, priv),
+		addrs: []string{startRefusingTarget(t)},
+	}
+	h := startGatewayDial(t, "", driver, nil)
+
+	c, err := h.dial(t, h.signer)
+	if err != nil {
+		t.Fatalf("the connection was refused because the instance refuses sessions: %v", err)
+	}
+	defer c.Close()
+
+	// The refusal is a session-level fact. The connection itself is fine, which is what a forwarding client
+	// relies on.
+	if sess, serr := c.NewSession(); serr == nil {
+		_ = sess.Close()
+		t.Fatal("the refusing instance accepted a session")
+	}
+}
