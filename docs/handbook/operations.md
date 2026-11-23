@@ -321,6 +321,61 @@ The complete metric list:
 Alerting: use `byre_pool_warm < byre_pool_target` **and only when `byre_pool_target > 0`** — a static
 backend has no pool and a naive comparison fires forever.
 
+## Turning on the lease store
+
+By default the lease table lives in memory: a restart empties it, and every identity cold-starts while the
+instance it was using is still running. Setting `lease.store: crd` moves the table into `ByreLease` objects,
+so a restart — or a second replica — reads the same truth (ADR-0013).
+
+**Preconditions, both checkable before touching any config:**
+
+```sh
+kubectl get crd byreleases.byre.io
+kubectl auth can-i list byreleases.byre.io -n <namespace> \
+  --as=system:serviceaccount:<namespace>:byre
+```
+
+If the CRD is missing, apply `deploy/` (it includes `crd/byreleases.yaml`). The second command answers "can
+the *pod's* identity do this", which is the one that matters — an admin kubeconfig proves nothing here.
+
+**The change** is two lines in the backend configuration:
+
+```yaml
+lease:
+  store: crd
+  namespace: <the namespace the instances live in>
+```
+
+`lease.kubeconfig` is only needed when no backend already has a cluster client. When one does, its client is
+reused on purpose: two clients could point at two different clusters.
+
+**Verify in this order.** Each step fails differently, and skipping to the last one hides which:
+
+1. **Startup.** The log line reads `lease store kind=crd namespace=…`. If it instead reads
+   `could not read the lease table at startup`, the pod's identity lacks the RBAC above — and by design the
+   gateway still starts, degrading to annotation recovery rather than refusing every session.
+2. **One connection.** `kubectl get byreleases -n <ns>` shows one object per live lease, carrying
+   `spec.identity`, `spec.instance`, and `spec.name` when `identities[].name` is configured. An empty
+   `spec.name` with names configured means the fingerprint spelling does not match — see the note in the
+   store's `identityNames`.
+3. **Restart.** The startup log reports `adopted: N` for N live leases, and a reconnect from the same
+   identity returns the **same** `spec.instance`. This is the whole point; before ADR-0013 this step
+   cold-started everyone.
+4. **Delete an instance object.** Within seconds `kubectl get byreleases` loses that row and the next
+   connection gets a fresh instance, without a restart. This exercises the watch (part 4).
+
+**Rollback** is removing `lease.store` and restarting: the table returns to memory and the CRs are then
+ignored. Leave them in place — they are the only record of which instance each identity was using at the
+moment of rollback, and re-enabling the store picks them up again.
+
+**What to watch afterwards:**
+
+- `byre_leases_unpersisted` above zero means the table and the store disagree. It heals on the next
+  successful write (the sweep retries), so a spike is an apiserver blip; a flat non-zero is a permissions or
+  CRD problem, and the error log names it.
+- `byre_persist_errors_total` climbing without recoveries means writes are failing outright.
+- An instance in `lease fail` counts separately from one that is merely unreachable.
+
 ## Tunables
 
 | key | default | guidance |
