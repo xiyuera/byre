@@ -265,6 +265,9 @@ func (s *Server) handleConn(ctx context.Context, raw net.Conn) {
 		"backend", entry.Backend,
 		"instance", entry.Instance.ID,
 	)
+	// A session opened, so this instance is demonstrably usable: any earlier refusal streak was a blip,
+	// and leaving the count standing would eventually replace an instance that is working.
+	s.cfg.Leases.NoteHealthy(entry.Instance)
 
 	listeners := newListenerSet()
 	defer listeners.closeAll()
@@ -303,6 +306,23 @@ func (s *Server) leaseAndDial(ctx context.Context, fp, backendName, short string
 
 	target, err := s.dial(ctx, entry.Instance)
 	if err == nil {
+		// A successful dial covers TCP and authentication, not the session: an instance whose container
+		// was OOM-killed and restarted answers both and then refuses every channel. Alive() cannot see
+		// that -- the object is still there -- so without this probe the client reconnects to an instance
+		// that hangs up on it, forever (ADR-0013, part 5).
+		if perr := probeSession(target); perr != nil {
+			_ = target.Close()
+			s.log.Warn("instance refused a session", "identity", short, "instance", entry.Instance.ID, "error", perr)
+			if s.cfg.Leases.RecordUnusable(ctx, fp, entry.Instance) {
+				return s.provisionReplacement(ctx, fp, backendName, short, entry.Instance.ID, "refused sessions")
+			}
+			// Below the threshold this is treated like any other instance-level fault: the lease stays, so
+			// the next attempt is still aimed at the client's own instance rather than a stranger's, and
+			// the reference goes with the connection.
+			s.unreachable.Add(1)
+			s.cfg.Leases.ReleaseConn(fp)
+			return lease.Entry{}, nil, perr
+		}
 		return entry, target, nil
 	}
 	s.log.Warn("cannot reach instance", "identity", short, "instance", entry.Instance.ID, "error", err)
@@ -321,16 +341,21 @@ func (s *Server) leaseAndDial(ctx context.Context, fp, backendName, short string
 		return lease.Entry{}, nil, err
 	}
 
-	// The instance is gone. Provision a replacement in the same connection attempt: the client has not
-	// seen an error yet, so if the replacement is reachable its session simply continues on a new instance,
-	// which is the whole difference between "the gateway moved me" and "the host hung up". One retry, not a
-	// loop — a second failure is a different problem, and an unbounded retry inside the gateway would turn
-	// one dead instance into a stream of pods.
-	fresh, acquireErr := s.cfg.Leases.Acquire(ctx, fp, backendName)
-	if acquireErr != nil {
+	return s.provisionReplacement(ctx, fp, backendName, short, entry.Instance.ID, "instance disappeared")
+}
+
+// provisionReplacement acquires a fresh instance and dials it, inside the same connection attempt: the
+// client has not seen an error yet, so if the replacement is reachable its session simply continues on a
+// new instance -- the whole difference between "the gateway moved me" and "the host hung up".
+//
+// One retry, not a loop. A second failure is a different problem, and an unbounded retry here would turn
+// one bad instance into a stream of pods.
+func (s *Server) provisionReplacement(ctx context.Context, fp, backendName, short, oldID, reason string) (lease.Entry, *ssh.Client, error) {
+	fresh, err := s.cfg.Leases.Acquire(ctx, fp, backendName)
+	if err != nil {
 		s.log.Warn("no replacement instance after a dead lease",
-			"identity", short, "backend", backendName, "error", acquireErr)
-		return lease.Entry{}, nil, acquireErr
+			"identity", short, "backend", backendName, "reason", reason, "error", err)
+		return lease.Entry{}, nil, err
 	}
 	replacement, dialErr := s.dial(ctx, fresh.Instance)
 	if dialErr != nil {
@@ -340,10 +365,25 @@ func (s *Server) leaseAndDial(ctx context.Context, fp, backendName, short string
 		s.cfg.Leases.ReleaseConn(fp)
 		return fresh, nil, dialErr
 	}
-	s.log.Info("lease replaced after the instance disappeared",
+	s.log.Info("lease replaced",
 		"identity", short, "backend", backendName,
-		"old_instance", entry.Instance.ID, "new_instance", fresh.Instance.ID)
+		"old_instance", oldID, "new_instance", fresh.Instance.ID, "reason", reason)
 	return fresh, replacement, nil
+}
+
+// probeSession proves the instance will accept a session, not merely a handshake.
+//
+// ssh.Dial covers the TCP connection and the authentication. An instance whose container restarted can
+// answer both and then refuse every channel with "Session open refused by peer". Opening and immediately
+// closing a session costs one round trip on a path that has already paid several.
+func probeSession(c *ssh.Client) error {
+	sess, err := c.NewSession()
+	if err != nil {
+		return err
+	}
+	// Failing to close means the channel died between opening and closing, which is not a healthy
+	// instance either; report it rather than swallowing it.
+	return sess.Close()
 }
 
 // UnreachableTotal reports dial failures against instances that still exist.
