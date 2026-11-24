@@ -32,11 +32,55 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      - name: detect scope
+        run: |
+          # A docs-only pull request does not need the full Go suite, but `ci / test (pull_request)`
+          # is a required status check: skipping the *job* leaves the check "Expected" and the PR
+          # can never merge. So the job always runs and always reports green; it exits early instead.
+          #
+          # Gitea ignores step-level `if:`, so this cannot be expressed declaratively -- hence a
+          # marker file that the following steps read. Push events always run the full suite: that
+          # is the last gate before a release, and "nothing changed" is not a thing a push to a
+          # branch can assert.
+          if [ "${GITHUB_EVENT_NAME:-}" != "pull_request" ]; then
+            echo 1 > /tmp/ci_full
+            echo "not a pull_request; running the full suite"
+            exit 0
+          fi
+          host="${GITHUB_SERVER_URL#https://}"
+          work=$(mktemp -d)
+          cd "$work"
+          git init -q .
+          git remote add origin "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
+          # Both refs in ONE fetch, with no --depth. Two independent shallow fetches each get their own
+          # shallow boundary, so the two commits have no common ancestor, `git diff` returns an empty
+          # list, and the guard below reads that as "nothing changed". Not theoretical: the first version
+          # of this step did exactly that and reported "empty diff" for a PR that touched two workflow
+          # files. It fell through to the full suite only because of that guard -- the optimisation would
+          # have silently never fired.
+          git fetch -q origin "refs/heads/${GITHUB_BASE_REF}:refs/base" "${GITHUB_SHA}:refs/pr" \
+            || { echo 1 > /tmp/ci_full; echo "fetch failed; running the full suite"; exit 0; }
+          base=$(git rev-parse refs/base)
+          changed=$(git diff --name-only "$base" refs/pr)
+          if [ -z "$changed" ]; then
+            echo 1 > /tmp/ci_full
+            echo "empty diff; running the full suite rather than guessing"
+            exit 0
+          fi
+          echo "changed files:"; echo "$changed" | sed 's/^/  /'
+          if echo "$changed" | grep -qvE '(\.md$|^docs/|^LICENSE$)'; then
+            echo 1 > /tmp/ci_full
+            echo "code changed; full suite"
+          else
+            echo 0 > /tmp/ci_full
+            echo "docs-only; the Go suite is skipped (job still reports green, because it is required)"
+          fi
       - name: checkout
         run: |
           # `git clone` alone lands on the default branch, so a pull_request run would test
           # main instead of the PR. Fetch the exact commit by sha: GITHUB_SHA is set by both
           # forges and is a commit, not a ref.
+          [ "$(cat /tmp/ci_full 2>/dev/null || echo 1)" = "1" ] || { echo "docs-only; skipping checkout"; exit 0; }
           host="${GITHUB_SERVER_URL#https://}"
           git init -q .
           git remote add origin "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
@@ -47,6 +91,7 @@ jobs:
       # in shell so both forges take the same path.
       - name: ensure go
         run: |
+          [ "$(cat /tmp/ci_full 2>/dev/null || echo 1)" = "1" ] || { echo "docs-only; skipping go install"; exit 0; }
           if command -v go >/dev/null 2>&1; then
             echo "go present: $(go version)"
             exit 0
@@ -58,9 +103,13 @@ jobs:
           echo "/tmp/go/bin" >> "$GITHUB_PATH"
           /tmp/go/bin/go version
       - name: go vet
-        run: go vet ./...
+        run: |
+          [ "$(cat /tmp/ci_full 2>/dev/null || echo 1)" = "1" ] || { echo "docs-only; skipping vet"; exit 0; }
+          go vet ./...
       - name: tests
-        run: go test -race ./...
+        run: |
+          [ "$(cat /tmp/ci_full 2>/dev/null || echo 1)" = "1" ] || { echo "docs-only; skipping tests"; exit 0; }
+          go test -race ./...
 
   lint:
     runs-on: ubuntu-latest
