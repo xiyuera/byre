@@ -51,3 +51,8 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: byre
+    # Explicit, because this file is meant to be applied to the namespace holding the instances, which is
+    # not necessarily the one byre runs in. Without it, applying to `hermes` binds `hermes:byre` -- a
+    # service account that does not exist -- and the Role is created, the binding looks right, and every
+    # permission silently does nothing while SubjectAccessReview answers "no".
+    namespace: byre-system
