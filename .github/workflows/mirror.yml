@@ -14,6 +14,10 @@ name: mirror
 on:
   push:
     branches: [main]
+    # A release tag is the thing most worth publishing, and it used to require a manual push to
+    # github.com: `refs/heads/main` was the only refspec, so the tag simply was not sent. Sitting on the
+    # same event keeps one workflow responsible for "what is public".
+    tags: ["v*"]
   # Manual trigger. A network blip between the runner and github.com is not a code problem, and without
   # this it was unrecoverable: the push failed, the run went red, and the only retry was to land another
   # commit on main. A mirror that cannot be re-run is a mirror that stays behind until somebody happens to
@@ -47,9 +51,13 @@ jobs:
           # pushed instead of the one just fetched.
           git init -q --bare .
           git remote add gitea "https://job:${GITEA_JOB_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
-          git fetch -q gitea "+refs/heads/main:refs/heads/main"
+          git fetch -q gitea "+refs/heads/main:refs/heads/main" "+refs/tags/*:refs/tags/*"
           sha=$(git rev-parse refs/heads/main)
           echo "fetched ${sha} from gitea"
           git remote add github "https://x-access-token:${MIRROR_GITHUB_TOKEN}@github.com/xiyuera/byre.git"
-          git push --quiet github "refs/heads/main:refs/heads/main"
+          # Tags as well as the branch: an annotated tag carries its own object, so this sends the tag
+            # object and the commit it points at. Deleting a tag is deliberately not mirrored -- this
+            # publishes, it does not synchronise removals, and retracting a release should be a decision
+            # someone makes on the public side rather than a side effect of a local `git tag -d`.
+            git push --quiet github "refs/heads/main:refs/heads/main" "refs/tags/*:refs/tags/*"
           echo "mirrored ${sha} -> github main"
