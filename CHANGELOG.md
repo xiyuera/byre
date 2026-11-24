@@ -9,8 +9,37 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-24
+
+The lease table can live in the cluster. Until now `byre` held every identity → instance binding in
+memory, so a restart cold-started every identity and left whatever it had been using Running and
+unreferenced. With `lease.store: crd` those bindings are `ByreLease` objects: a restart rebuilds the table,
+an instance deleted behind the gateway's back is dropped as it happens, and an instance that answers the
+handshake but refuses every session is replaced instead of kept forever.
+
 ### Added
 
+- **The lease store can be the cluster's etcd (ADR-0013).** `lease.store: crd` keeps the binding table in
+  `ByreLease` objects under `lease.namespace`. Opt-in: without it the table stays in memory and behaviour is
+  unchanged. A store that cannot be written degrades to annotation recovery rather than failing startup,
+  which is deliberate — the gateway is every profile's terminal, and a permissions mistake should not take
+  it down. It does mean `lease store kind=crd` in the startup log is not proof the store works; the runbook
+  lists what is. See `docs/adr/0013-lease-state-in-a-crd.md` and `docs/handbook/operations.md`.
+- **A restart rebuilds the table instead of cold-starting.** Adoption consults the store first and only then
+  what the instances say about themselves, so a row that disagrees with an annotation resolves in the
+  store's favour. A row whose instance no longer exists is dropped; one held by an identity this process is
+  not configured to serve is left alone.
+- **Deletions are watched, not polled.** An instance removed out of band releases its lease within seconds,
+  and the watch re-subscribes when the stream ends rather than quietly going deaf.
+- **An instance that refuses every session is replaced.** Three consecutive refused session opens is a
+  different failure from an unreachable TCP port: the handshake succeeds, so a liveness check says "fine"
+  while no shell ever opens. The connection is now counted rather than swallowed, and the instance is
+  recycled. The refusal is still returned to the caller — a client that cannot get a shell deserves a
+  coherent error, not a timeout.
+- **Adoption is limited to the identities this process serves.** A gateway pointed at a namespace it does
+  not own no longer takes over its neighbours' leases, and no longer releases them when their ttl expires.
+  This is a behaviour change: two deployments sharing a namespace and a warm pool used to be able to steal
+  from each other.
 - **`scripts/release.sh` cuts a release in one verified pass.** The first v0.4.0 attempt lost
   half an hour waiting for a GitHub run that could never start: the tag existed on Gitea and not
   on the mirror. Gitea's push mirror propagates a tag *deletion* but not a *re-creation*, and it
@@ -19,6 +48,9 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
   waits on each side with a bound, and finishes by checking release assets on both forges and that
   the image manifest answers `200` to an anonymous pull. Tag creation is idempotent: the same
   commit reuses the tag, a different commit is refused instead of silently moved.
+- **The mirror workflow can be re-run by hand.** A network blip between the runner and github.com used to
+  leave the public repository behind until somebody happened to land another commit. `workflow_dispatch`
+  makes that state recoverable; it takes no inputs because the source of truth is always `main`.
 - **The identity is written as a label next to the annotation, and operators can add their own.**
   `byre.io/identity-ref` carries the fingerprint in a form a label can hold (the annotation keeps it
   exact), and `identities[].labels` is a new config block whose keys are written on every object that
@@ -50,6 +82,12 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
 
 ### Fixed
 
+- **The RBAC manifest names the subject's namespace.** A `ServiceAccount` subject with no namespace
+  inherits the binding's, so `deploy/rbac.yaml` granted the right permissions only when applied to the
+  namespace `byre` runs in — while its own comment tells you to apply it where the instances live. Applied
+  there, the Role and binding were created, `kubectl get rolebinding` looked correct, and every
+  `create byreleases` was denied. Combined with the deliberate degrade-to-annotations behaviour above, the
+  gateway stayed healthy and logged one line.
 - **`list` no longer drops an object it cannot address.** The claim path read only
   `status.sandbox.serviceFQDN` and skipped anything that did not have one, so an object that was ready by
   its pod IP was invisible to `Adopt` and to `Reap`: neither reused nor destroyed, just Running. Two
