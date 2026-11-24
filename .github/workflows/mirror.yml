@@ -14,6 +14,11 @@ name: mirror
 on:
   push:
     branches: [main]
+  # Manual trigger. A network blip between the runner and github.com is not a code problem, and without
+  # this it was unrecoverable: the push failed, the run went red, and the only retry was to land another
+  # commit on main. A mirror that cannot be re-run is a mirror that stays behind until somebody happens to
+  # push something unrelated -- which, for a release channel, can be days.
+  workflow_dispatch:
 
 permissions:
   contents: read
