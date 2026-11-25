@@ -1,6 +1,8 @@
 # byre
 
-**English** · [中文](README.zh-CN.md)
+**English** · [中文](README.zh-CN.md) · **[Documentation ↗](https://xiyuera.github.io/byre/)**
+
+[![documentation](https://img.shields.io/badge/docs-xiyuera.github.io%2Fbyre-009485?logo=readthedocs&logoColor=white)](https://xiyuera.github.io/byre/)
 
 byre is the SSH gateway layer for agent sandboxes: it keys the lease on **identity** — the client's
 public key — not on a connection, so one agent keeps one instance exclusively until the lease expires.
@@ -31,6 +33,11 @@ flowchart LR
     byre -->|"ssh (pool key)"| inst
     byre -.->|"looks up"| lease
 ```
+
+The same pages are published as a site — easier to read than a wall of markdown, and it carries the ones
+that only make sense rendered:
+
+[![the byre documentation site](docs/assets/images/landing.png)](https://xiyuera.github.io/byre/)
 
 The gateway authenticates the client with a public key and nothing else. From that key it derives an
 identity, and the identity holds exactly one instance for as long as it keeps connecting. Idle time ends a
