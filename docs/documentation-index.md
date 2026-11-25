@@ -1,6 +1,6 @@
 # Documentation index
 
-The repository [README](../README.md) is the front door: what byre is, a five-minute Quick start, and
+The repository [README](https://github.com/xiyuera/byre/blob/main/README.md) is the front door: what byre is, a five-minute Quick start, and
 how the four provisioning shapes differ. This page is the map for everything past that point.
 
 ## Handbook
@@ -16,24 +16,24 @@ how the four provisioning shapes differ. This page is the map for everything pas
 
 | example | shape | what it is |
 |---|---|---|
-| [examples/local-quickstart/](../examples/local-quickstart/README.md) | `endpoints` | the README's Quick start as a file: one machine, no cluster |
-| [examples/static-endpoints/](../examples/static-endpoints/README.md) | `endpoints` | a fixed set of lab hosts |
-| [examples/pod-image/](../examples/pod-image/README.md) | `workloads` | a minimal sshd image and the backend that creates pods from it |
-| [examples/kubernetes-sandbox/](../examples/kubernetes-sandbox/README.md) | `claims` | a template, a warm pool, the backend that claims from them, and the RBAC + deployment to run it |
-| [examples/docker-sandbox/](../examples/docker-sandbox/README.md) | `command` | the whole gateway in one process, sandboxes as docker containers — no cluster at all |
-| [charts/byre/](../charts/byre/README.md) | `claims` | the Kubernetes shape as a Helm chart, template and warm pool included |
+| [examples/local-quickstart/](https://github.com/xiyuera/byre/blob/main/examples/local-quickstart/README.md) | `endpoints` | the README's Quick start as a file: one machine, no cluster |
+| [examples/static-endpoints/](https://github.com/xiyuera/byre/blob/main/examples/static-endpoints/README.md) | `endpoints` | a fixed set of lab hosts |
+| [examples/pod-image/](https://github.com/xiyuera/byre/blob/main/examples/pod-image/README.md) | `workloads` | a minimal sshd image and the backend that creates pods from it |
+| [examples/kubernetes-sandbox/](https://github.com/xiyuera/byre/blob/main/examples/kubernetes-sandbox/README.md) | `claims` | a template, a warm pool, the backend that claims from them, and the RBAC + deployment to run it |
+| [examples/docker-sandbox/](https://github.com/xiyuera/byre/blob/main/examples/docker-sandbox/README.md) | `command` | the whole gateway in one process, sandboxes as docker containers — no cluster at all |
+| [charts/byre/](https://github.com/xiyuera/byre/blob/main/charts/byre/README.md) | `claims` | the Kubernetes shape as a Helm chart, template and warm pool included |
 
 ## Decisions and records
 
 | document | what it answers |
 |---|---|
-| [adr/](adr/) | each decision, with the conditions under which it would be reversed |
-| [acceptance/](acceptance/) | what was verified on a real cluster, with the commands and the outputs |
+| [adr/](adr/index.md) | each decision, with the conditions under which it would be reversed |
+| [acceptance/](acceptance/index.md) | what was verified on a real cluster, with the commands and the outputs |
 | [roadmap.md](roadmap.md) | what is deliberately absent from v1, in the order it would arrive |
 | [release.md](release.md) | when to cut a version, what the pipeline produces |
 | [tag-map.md](tag-map.md) | what each tag points at after the history rewrite, and the two published commit hashes that no longer exist |
 | [contributing-from-agents.md](contributing-from-agents.md) | the account-per-role model, credential handling and token discipline for agent contributors |
-| [integrations/](integrations/) | how a host runtime (agent platform, CI) talks to the gateway |
+| [integrations/](integrations/README.md) | how a host runtime (agent platform, CI) talks to the gateway |
 | [rename-to-byre.md](rename-to-byre.md) | the name history, the collisions, and the cutover that is still pending |
 | [i18n.md](i18n.md) | which pages are translated, and how the checker decides a translation is stale |
 

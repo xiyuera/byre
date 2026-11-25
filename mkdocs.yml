@@ -1,0 +1,136 @@
+# Documentation site for byre.
+#
+# The markdown under docs/ is the source of truth and is also browsable on GitHub; this config only
+# changes how it is presented. Nothing here duplicates content -- every page is a file that already
+# exists in the repository, so a doc fix reaches both the site and the repo at once.
+#
+# `docs/index.md` is the exception: it is the landing page, written for a first-time visitor, and is
+# deliberately narrower than README.md (which stays the front door for people reading on GitHub).
+
+site_name: byre
+site_description: >-
+  A lease-based SSH gateway for agent sandboxes: the client's public key is the lease, so one agent
+  keeps one instance exclusively until the lease expires.
+site_url: https://xiyuera.github.io/byre/
+repo_url: https://github.com/xiyuera/byre
+repo_name: xiyuera/byre
+edit_uri: edit/main/docs/
+copyright: Apache-2.0 · source available on GitHub
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  language: en
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  palette:
+    # Dark is the default: this is infrastructure tooling and the diagrams are authored dark-first.
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+  features:
+    - navigation.tracking
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  # Mermaid diagrams. The repository's convention is that every architecture, flow, state or sequence
+  # diagram is a mermaid fence rather than ASCII art, so the site has to render them; without this
+  # fence config they would appear as raw code blocks.
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+# Rewrites ```mermaid fences into the shape mermaid.js reads (see hooks/mermaid.py for the measurements).
+hooks:
+  - hooks/mermaid.py
+
+plugins:
+  - search
+
+# Mermaid is bundled rather than pulled from a CDN: the toolchain already treats every diagram as a
+# mermaid fence, and a docs site that goes blank when a CDN is unreachable is worse than a 2.5 MB asset
+# that gets cached once. Material detects `window.mermaid` and runs it on every page, including the
+# instant-navigation redraws.
+# Only the library. Material 9.8 has its own mermaid integration (it watches for `window.mermaid`
+# and renders `.mermaid` blocks, including on instant-navigation redraws). An init script of our own
+# ran a second render over already-rendered nodes and produced "Syntax error in text" -- measured, not
+# guessed. Bundled locally rather than via CDN so the site does not break where a CDN is unreachable.
+extra_javascript:
+  - assets/javascripts/mermaid.min.js
+  - assets/javascripts/mermaid-init.js
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/xiyuera/byre
+  # Shown as a banner above the content on every page.
+  generator: false
+
+# Nav is hand-written rather than auto-generated: the order encodes the reading paths in
+# docs/README.md ("architecture if you are reading the code, operations if you are running it,
+# troubleshooting if it is running and does not work"). Pages that live outside docs_dir -- the
+# examples/ and charts/ READMEs -- are linked from the pages instead of listed here, because mkdocs
+# cannot include a file from outside docs_dir.
+nav:
+  - Home: index.md
+  - Getting started:
+      - Quick start: getting-started/quickstart.md
+      - Choose a backend: getting-started/backends.md
+      - Kubernetes: getting-started/kubernetes.md
+  - Handbook:
+      - Architecture: handbook/architecture.md
+      - Backends in detail: handbook/backends.md
+      - Operations: handbook/operations.md
+      - Troubleshooting: handbook/troubleshooting.md
+  - Why not a jump host: why-not-a-jump-host.md
+  - Limits: limits.md
+  - Reference:
+      - Documentation index: documentation-index.md
+      - Decision records: adr/index.md
+      - Acceptance runs: acceptance/index.md
+      - Integrations: integrations/README.md
+      - Roadmap: roadmap.md
+      - Release process: release.md

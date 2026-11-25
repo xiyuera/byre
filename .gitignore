@@ -12,3 +12,6 @@ config.local.yaml
 id_*
 !deploy/secret.example.yaml
 /byre
+
+# mkdocs build output
+site/
