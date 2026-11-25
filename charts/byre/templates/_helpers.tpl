@@ -49,6 +49,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/* Resolved image reference. */}}
+{{/*
+Namespace for ByreLease objects: lease.namespace, then backend.namespace, then the release
+namespace. Kept separate from byre.backendNamespace because the lease table can live in a different
+namespace than the sandboxes it describes (one shared lease table, per-team sandbox namespaces).
+*/}}
+{{- define "byre.leaseNamespace" -}}
+{{- if .Values.lease.namespace -}}
+{{ .Values.lease.namespace }}
+{{- else -}}
+{{ include "byre.backendNamespace" . }}
+{{- end -}}
+{{- end -}}
+
 {{- define "byre.image" -}}
 {{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) -}}
 {{- end -}}

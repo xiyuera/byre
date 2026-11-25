@@ -10,6 +10,10 @@ host_key: /var/lib/byre/hostkey/id_ed25519
 lease:
   ttl: 10m
   grace: 30s
+  # Same store the shipped default uses. Needs the ByreLease CRD applied first -- step 1 in the
+  # README -- and the byreleases rule in 30-rbac.yaml, or the gateway starts and holds nothing.
+  store: crd
+  namespace: byre
 
 backends:
   - name: sandbox

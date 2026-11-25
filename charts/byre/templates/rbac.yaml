@@ -32,3 +32,47 @@ roleRef:
   name: {{ include "byre.fullname" . }}
   apiGroup: rbac.authorization.k8s.io
 {{- end }}
+
+{{- /*
+Lease-table permissions. Only rendered when the lease store is the CRD, because a gateway keeping
+leases in memory never touches these objects.
+
+Kept in its own Role rather than folded into the sandbox one above: the lease table and the sandboxes
+can live in different namespaces (one shared lease table, per-team sandbox namespaces), and the two
+grant different things. Without this, `lease.store: crd` starts and then degrades -- the store's Ready
+check cannot list `byreleases`, so it falls back to reading identity off the instance annotation and
+looks healthy while holding no leases at all.
+*/}}
+{{- if and .Values.rbac.create (eq .Values.lease.store "crd") }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "byre.fullname" . }}-leases
+  namespace: {{ include "byre.leaseNamespace" . }}
+  labels:
+    {{- include "byre.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["byre.io"]
+    resources: ["byreleases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["byre.io"]
+    resources: ["byreleases/status"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "byre.fullname" . }}-leases
+  namespace: {{ include "byre.leaseNamespace" . }}
+  labels:
+    {{- include "byre.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "byre.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "byre.fullname" . }}-leases
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

@@ -15,6 +15,15 @@ metadata:
   name: byre-claims
   namespace: byre
 rules:
+  # The lease table. Separate group from the sandbox API because it is byre's own CRD, and a
+  # gateway without these verbs cannot list its own leases: it degrades to reading identity off the
+  # instance annotation and looks healthy while holding none.
+  - apiGroups: ["byre.io"]
+    resources: ["byreleases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["byre.io"]
+    resources: ["byreleases/status"]
+    verbs: ["get", "update", "patch"]
   - apiGroups: ["extensions.agents.x-k8s.io"]
     resources: ["sandboxclaims"]
     verbs: ["create", "get", "list", "watch", "delete"]
