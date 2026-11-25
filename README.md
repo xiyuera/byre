@@ -9,7 +9,7 @@ An agent that syncs a working tree, builds, copies the artefact back and keeps a
 task spread over four SSH connections. byre gives all four the same machine, without the client holding a
 control master open or remembering an identifier: the key it already authenticates with is the address.
 
-> Status: **0.3.0, pre-1.0.** Identity, lease, warm pool and adoption across restarts are verified on a
+> Status: **0.5.0, pre-1.0.** Identity, lease, warm pool and adoption across restarts are verified on a
 > real cluster (`docs/acceptance/`); of the four provisioning shapes only `claims` has a cluster run. Single
 > replica, and no automated end-to-end gate — the cluster runs were executed by hand. The image and
 > `kubectl apply -k` path were executed end to end once (prebuilt variant) and are recorded in
@@ -43,9 +43,11 @@ user, key}` record, so everything about *reaching* an instance over SSH is share
 There are four ways a backend can come by an instance — `endpoints`, `workloads`, `claims` and
 `command` — and which one to use is the subject of
 [Configuration](#configuration-where-do-the-ssh-backends-come-from). Two listeners, no database, no
-sidecar: SSH on `:2222`, `/healthz` and `/metrics` on `:8099`. The lease table is in memory, and the
-Kubernetes backends write the identity onto each instance as an annotation, which is what makes a restart
-survivable — the new process re-adopts live leases before it warms anything.
+sidecar: SSH on `:2222`, `/healthz` and `/metrics` on `:8099`. The lease table is a set of
+`ByreLease` objects in the cluster (`lease.store: crd`, the default), so a restart re-adopts live leases
+from the API server before it warms anything. With `lease.store: memory` the table dies with the
+process and the restart instead rebuilds from the identity annotation the Kubernetes backends write
+onto each instance.
 
 Three consequences worth knowing up front. A shared private key is a shared instance, so key distribution
 *is* access control and aliases in the config only change log labels. Idle is measured with the wall clock,
@@ -384,8 +386,10 @@ identifier SSH already verifies — the public key — and hangs the lease on it
 
 ## Limits and things known to be wrong
 
-- **Single replica.** One process holds the lease table, so a second replica would give one identity two
-  instances. The multi-replica designs are written down in `docs/roadmap.md`; neither is implemented.
+- **Single replica.** The lease table agrees across replicas once it is in the CRD, but an open SSH
+  session is held by one process and cannot move. A second replica without sticky routing would send an
+  identity's reconnects to a pod that does not hold its session. The designs for making that work are
+  written down in `docs/roadmap.md`; neither is implemented.
 - **`/healthz` does not mean "I can hand out an instance".** It answers "the process is up" and prints the
   version stamped into the binary. A gateway missing its cross-namespace grant is green, never warms its
   pool, and refuses every checkout with a 403.
