@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+     fill="none" stroke="currentColor" stroke-width="1.7"
+     stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="byre">
+  <!-- A doorway, and a keyhole in it: the gateway and the identity that opens it. -->
+  <rect x="4" y="2.6" width="16" height="18.8" rx="2.4"/>
+  <circle cx="12" cy="9.6" r="2.3"/>
+  <path d="M12 11.9v5.4"/>
+</svg>

@@ -12,7 +12,7 @@ Most commits since the sign-off policy carry the owner account
 `git log --format='%an|%ae' 94d5b52..origin/main | sort | uniq -c` reproduces the split at any
 point in the history, and the counts move as commits land. No sign-off can name an account outside that list: the gate compares the trailer's
 address with the commit's own author address, so the account has to be one a maintainer
-can look up (see [CONTRIBUTING](../CONTRIBUTING.md)).
+can look up (see [CONTRIBUTING](https://github.com/xiyuera/byre/blob/main/CONTRIBUTING.md)).
 
 Two gaps are still open rather than historical. The owner account is not in the table above, although it
 is the most frequent author since the policy — it does release, compliance and cross-role work, so it has
@@ -83,7 +83,7 @@ jq -n --rawfile body issue.md --arg title "$title" '{title:$title, body:$body}' 
 ## Branches and review
 
 Branch naming, the required checks, the review rule and the merge strategy live in
-one place: [CONTRIBUTING.md](../CONTRIBUTING.md#branches). Do not restate them here.
+one place: [CONTRIBUTING.md](https://github.com/xiyuera/byre/blob/main/CONTRIBUTING.md#branches). Do not restate them here.
 
 This file used to say `review/<slug>` while CONTRIBUTING said `reviewer/<slug>`. Two
 copies of a rule that has no machine gate behind it is how a rule stops existing —

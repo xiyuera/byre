@@ -1,0 +1,70 @@
+name: docs
+
+# Builds the documentation site and publishes it to GitHub Pages.
+#
+# GitHub-only on purpose. Gitea can run this workflow's build half, but it has no Pages, so `deploy`
+# would fail there every time and the failure would be noise rather than signal. The `if` on the jobs keeps
+# the run list honest on the private forge.
+#
+# `paths` is deliberately broad: the site is built from docs/ plus the config and the mermaid hook, so a
+# change to any of them should ship. A change to the chart or the Go code does not affect the site and is
+# filtered out.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "hooks/mermaid.py"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; do not kill an in-flight one, a half-uploaded site is worse than a stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install mkdocs
+        run: pip install mkdocs-material==9.8.2
+
+      - name: build
+        # `--strict` turns a broken internal link or a nav entry pointing at a missing file into a failed
+        # build. The site is small enough that this is cheap, and a dead link on a landing page is exactly
+        # the kind of thing nobody notices for months.
+        env:
+          NO_MKDOCS_2_WARNING: "1"
+        run: mkdocs build --strict --clean
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    if: github.server_url == 'https://github.com'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

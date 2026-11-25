@@ -1,6 +1,6 @@
 # 文档索引
 
-仓库根目录的 [README](../README.zh-CN.md) 是入口：byre 是什么、五分钟 Quick start，以及四种 provision
+仓库根目录的 [README](https://github.com/xiyuera/byre/blob/main/README.zh-CN.md) 是入口：byre 是什么、五分钟 Quick start，以及四种 provision
 的区别。本页是从那之后的地图。
 
 ## 手册
@@ -16,22 +16,22 @@
 
 | 示例 | 形态 | 是什么 |
 |---|---|---|
-| [examples/local-quickstart/](../examples/local-quickstart/README.zh-CN.md) | `endpoints` | README 的 Quick start 落成文件：一台机器，不需要集群 |
-| [examples/static-endpoints/](../examples/static-endpoints/README.md) | `endpoints` | 一组固定的实验机 |
-| [examples/pod-image/](../examples/pod-image/README.md) | `workloads` | 一个最小的 sshd 镜像，以及据此建 Pod 的 backend |
-| [examples/kubernetes-sandbox/](../examples/kubernetes-sandbox/README.md) | `claims` | 一个模板、一个热池，以及从池里领实例的 backend |
+| [examples/local-quickstart/](https://github.com/xiyuera/byre/blob/main/examples/local-quickstart/README.zh-CN.md) | `endpoints` | README 的 Quick start 落成文件：一台机器，不需要集群 |
+| [examples/static-endpoints/](https://github.com/xiyuera/byre/blob/main/examples/static-endpoints/README.md) | `endpoints` | 一组固定的实验机 |
+| [examples/pod-image/](https://github.com/xiyuera/byre/blob/main/examples/pod-image/README.md) | `workloads` | 一个最小的 sshd 镜像，以及据此建 Pod 的 backend |
+| [examples/kubernetes-sandbox/](https://github.com/xiyuera/byre/blob/main/examples/kubernetes-sandbox/README.md) | `claims` | 一个模板、一个热池，以及从池里领实例的 backend |
 
 ## 决策与记录
 
 | 文档 | 回答什么 |
 |---|---|
-| [adr/](adr/) | 每个决策，以及“什么条件下会反转它” |
-| [acceptance/](acceptance/) | 真实集群上的验收记录（命令 + 输出） |
+| [adr/](adr/index.md) | 每个决策，以及“什么条件下会反转它” |
+| [acceptance/](acceptance/index.md) | 真实集群上的验收记录（命令 + 输出） |
 | [roadmap.md](roadmap.md) | v1 明确不做什么，以及它们按什么顺序到来 |
 | [release.md](release.md) | 什么时候发版、流水线产出什么 |
 | [tag-map.md](tag-map.md) | 历史重写后每个 tag 指向哪里，以及两个不再存在的已发布 commit hash |
 | [contributing-from-agents.md](contributing-from-agents.md) | agent 贡献者的一角色一账号模型、凭据处理与 token 纪律 |
-| [integrations/](integrations/) | 宿主运行时（agent 平台、CI）如何对接网关 |
+| [integrations/](integrations/README.md) | 宿主运行时（agent 平台、CI）如何对接网关 |
 | [rename-to-byre.md](rename-to-byre.md) | 改名历史、碰撞证据，以及尚未执行的迁移 |
 | [i18n.md](i18n.md) | 哪些页面有翻译，以及检查器凭什么判定一个翻译过期 |
 

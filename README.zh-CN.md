@@ -382,7 +382,7 @@ namespace，kustomize 的 `namespace:` 又会一次性改写所有对象——�
 | [examples/](examples/) | 每种形态一份可跑配置，另有 `examples/local-quickstart/`——把上面的快速开始落成可复制的文件 |
 | [examples/docker-sandbox/](examples/docker-sandbox/README.md) · [examples/kubernetes-sandbox/](examples/kubernetes-sandbox/README.md) | 两套 starter kit：纯 docker 上一套完整的网关+沙箱部署，以及同样的东西在 Kubernetes 上配一个基于 claim 的控制器 |
 | [charts/byre/](charts/byre/README.md) | 同样的 Kubernetes 形态做成 Helm chart——默认值装上就能起，`sandbox.enabled` 加上模板与热池 |
-| [acceptance/](docs/acceptance/) · [docs/README.md](docs/README.md) | 真实集群上验证了什么；以及全部文档的索引 |
+| [acceptance/](docs/acceptance/) · [docs/documentation-index.md](docs/documentation-index.md) | 真实集群上验证了什么；以及全部文档的索引 |
 
 其中一部分只有英文，写出来比让读者自己撞上要好：四份 handbook、`docs/release.md`、`docs/i18n.md`、
 `docs/integrations/README.md`、`deploy/gitea-runner/README.md`、`docs/adr/*` 与 `docs/acceptance/*`，
