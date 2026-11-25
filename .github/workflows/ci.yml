@@ -164,10 +164,10 @@ jobs:
       - name: bilingual docs in sync
         run: sh scripts/check-i18n.sh
 
-  # Renders deploy/ with the same engine `kubectl apply -k` uses, so a broken kustomization
-  # is caught before a cluster sees it. `make render` degrades to a warning when kustomize is
-  # absent -- the Gitea job image ships it, GitHub's runner does not, and that is acceptable:
-  # the check runs for real on whichever side has the tool.
+  # Renders deploy/ and the Helm chart, so a broken kustomization or template is caught before a
+  # cluster sees it. `make render` fails rather than skipping when no engine is installed — a check
+  # that silently skips reports success without having checked anything. Both tools are installed
+  # explicitly below because neither is on ubuntu-latest.
   manifests:
     runs-on: ubuntu-latest
     steps:
@@ -181,8 +181,38 @@ jobs:
           git remote add origin "https://x:${GH_TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
           git fetch -q --depth 1 origin "${GITHUB_SHA}"
           git checkout -q FETCH_HEAD
-      - name: Validate kustomize output
-        run: make render
+      # helm is not on ubuntu-latest, and the chart is a published artifact -- `helm lint` +
+      # `helm template` is the only thing between a broken helper function and a user's
+      # `helm install`. Sources are ones this runner can reach; the arch branch keeps it working
+      # on an arm64 runner too.
+      - name: Install kubectl and helm
+        run: |
+          set -eu
+          arch=$(uname -m)
+          case "$arch" in
+            aarch64|arm64) a=arm64 ;;
+            *) a=amd64 ;;
+          esac
+          mkdir -p /tmp/tools
+          curl -sSL --retry 3 -m 180 -o /tmp/tools/kubectl \
+            "https://dl.k8s.io/release/v1.31.4/bin/linux/${a}/kubectl"
+          chmod +x /tmp/tools/kubectl
+          curl -sSL --retry 3 -m 180 \
+            "https://mirrors.huaweicloud.com/helm/v3.16.3/helm-v3.16.3-linux-${a}.tar.gz" \
+            | tar xz -C /tmp/tools
+          /tmp/tools/kubectl version --client
+          /tmp/tools/linux-${a}/helm version --short
+      - name: Validate manifests and chart
+        run: |
+          set -eu
+          arch=$(uname -m)
+          case "$arch" in
+            aarch64|arm64) a=arm64 ;;
+            *) a=amd64 ;;
+          esac
+          export PATH="/tmp/tools/linux-${a}:/tmp/tools:$PATH"
+          make render
+          make chart HELM="/tmp/tools/linux-${a}/helm"
 
   dco:
     runs-on: ubuntu-latest

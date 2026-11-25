@@ -89,13 +89,36 @@ IMAGE          ?= byre:$(VERSION)
 IMAGE_REGISTRY ?= localhost:5000
 
 # Renders deploy/ with the same engine `kubectl apply -k` uses. Catches a broken kustomization before
-# a cluster sees it; skipped with a warning when kustomize is not installed.
+# a cluster sees it.
+#
+# Fails rather than skipping when neither engine is installed. It used to print "skipped" and exit 0,
+# which meant a runner without kustomize reported this check as passed while having checked nothing --
+# and a broken kustomization would reach a cluster unchallenged. `kubectl kustomize` is the same
+# engine, so having either is enough.
 render:
 	@if command -v kustomize >/dev/null 2>&1; then \
-		kustomize build deploy/ >/dev/null && echo "deploy/ renders"; \
+		kustomize build deploy/ >/dev/null && echo "deploy/ renders (kustomize)"; \
+	elif command -v kubectl >/dev/null 2>&1; then \
+		kubectl kustomize deploy/ >/dev/null && echo "deploy/ renders (kubectl)"; \
 	else \
-		echo "kustomize not installed - skipped (kubectl kustomize deploy/ would do the same)"; \
+		echo "error: neither kustomize nor kubectl is installed; deploy/ was NOT verified"; exit 1; \
 	fi
+
+HELM ?= helm
+
+# Renders the chart in the shapes the README tells people to use.
+#
+# `helm lint` alone is not enough: it does not render templates, so a broken helper, or a value that
+# only one branch of an `if` touches, passes lint and fails at install time. Each render below is a
+# case someone will actually type.
+chart:
+	@command -v $(HELM) >/dev/null 2>&1 || { echo "error: $(HELM) not found"; exit 1; }
+	$(HELM) lint charts/byre
+	@$(HELM) template byre charts/byre -n byre >/dev/null && echo "chart renders (lease.store=crd)"
+	@$(HELM) template byre charts/byre -n byre --set lease.store=memory >/dev/null && echo "chart renders (lease.store=memory)"
+	@$(HELM) template byre charts/byre -n byre --skip-crds --set lease.store=memory >/dev/null && echo "chart renders (--skip-crds --set lease.store=memory)"
+	@$(HELM) template byre charts/byre -n byre --set lease.namespace=leases-shared >/dev/null && echo "chart renders (lease.namespace override)"
+	@test -s charts/byre/crds/byreleases.yaml && echo "chart ships the ByreLease CRD" 
 
 image:
 	docker build \
