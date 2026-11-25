@@ -24,7 +24,7 @@ control master open or remembering an identifier: the key it already authenticat
 flowchart LR
     agent["agent<br/>identity = the lease"]
     byre["byre :2222<br/>SSH front end"]
-    lease["lease table in memory<br/>ttl + grace · warm pool"]
+    lease["lease table<br/>a ByreLease per identity<br/>ttl + grace · warm pool"]
     inst["instance :22<br/>a container, a VM, a lab machine —<br/>anything that runs sshd"]
 
     agent -->|"ssh (pubkey)"| byre
