@@ -21,6 +21,15 @@ echo "   instance: $H1"
 echo "== claims now"
 kubectl -n byre get sandboxclaims
 
+echo "== lease table (40-byre-config.yaml sets lease.store: crd)"
+if ! kubectl -n byre get byl 2>/dev/null; then
+    # Not cosmetic: with store: crd a gateway that cannot list byreleases still starts and still
+    # hands out instances, it just records nothing -- so zero leases here means the RBAC in
+    # 30-rbac.yaml is not bound, not that no one holds a lease.
+    echo "FAIL  no ByreLease objects readable; check the byreleases rule in 30-rbac.yaml"
+    exit 1
+fi
+
 echo "== second connection (must be the same instance while the lease holds)"
 H2=$(ssh $OPTS -p "$PORT" -i "$KEY" sandbox@"$ADDR" 'hostname')
 echo "   instance: $H2"
@@ -33,3 +42,12 @@ else
 fi
 
 echo "== lease release is asynchronous: delete happens within ttl+grace"
+
+echo "== the lease should name the instance we just used"
+LEASE_INST=$(kubectl -n byre get byl -o jsonpath='{.items[0].status.instance}' 2>/dev/null || true)
+echo "   lease instance: ${LEASE_INST:-<none>}"
+if [ -n "$LEASE_INST" ] && [ "$LEASE_INST" != "$H1" ]; then
+    echo "FAIL  lease names $LEASE_INST, the connection landed on $H1"
+    exit 1
+fi
+echo "OK  lease and instance agree"

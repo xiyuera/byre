@@ -29,6 +29,13 @@ lease:
   ttl: 360s
   # Reconnect window after a disconnect; absorbs ControlMaster/ControlPersist expiry.
   grace: 60s
+  # Where the lease table lives. `crd` keeps one ByreLease per identity in the namespace below, so
+  # leases survive a restart and `kubectl get byl` shows who holds what; `memory` keeps them in the
+  # process and is only right for a single throwaway gateway. The CRD must exist first -- the
+  # kustomization applies it, but an install that only takes this file needs
+  # `kubectl apply -f crd/byreleases.yaml` beforehand.
+  store: crd
+  namespace: byre-system
   # Warm instances kept ready. Each idle instance costs one pod-worth of memory, or whatever the
   # provisioner's idle cost is. An explicit 0 disables warm capacity — instances are created on demand,
   # which is what a first smoke test wants — and the pool only applies to backends that implement

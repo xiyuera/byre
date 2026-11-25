@@ -2,8 +2,8 @@ apiVersion: v2
 name: byre
 description: A lease-based SSH gateway — one sandbox instance per SSH identity, held for the lease and released when it expires.
 type: application
-version: 0.1.0
-appVersion: "v0.4.0"
+version: 0.2.0
+appVersion: "v0.5.0"
 kubeVersion: ">=1.27.0-0"
 keywords:
   - ssh

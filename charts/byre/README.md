@@ -35,6 +35,44 @@ kubectl -n byre port-forward svc/byre 2222:2222
 ssh -p 2222 -i ~/.ssh/id_ed25519 sandbox@127.0.0.1 hostname
 ```
 
+## Where the lease table lives
+
+`lease.store` picks the backing store:
+
+| value | what it means |
+|---|---|
+| `crd` (default) | One `ByreLease` object per identity, in `lease.namespace`. Survives a gateway restart; readable with `kubectl get byl -n <ns>`; two gateways reading the same namespace agree on who holds what. |
+| `memory` | Kept in the gateway process. A restart loses every lease (the instances stay allocated until their TTL), and more than one replica hands out independent instances for the same identity. |
+
+The CRD (`byreleases.byre.io`, Namespaced, short name `byl`) ships in this chart's
+[`crds/`](crds/byreleases.yaml), so a plain `helm install` creates it. Two consequences worth knowing
+before you upgrade:
+
+- **`helm upgrade` never updates CRDs.** Helm installs `crds/` on the first install and then leaves
+  them alone, by design, because a CRD change can destroy data. If a newer chart version ships a newer
+  CRD, apply it yourself:
+
+  ```sh
+  helm pull oci://ghcr.io/xiyuera/byre --untar   # or take crds/byreleases.yaml from the repo
+  kubectl apply -f byre/crds/byreleases.yaml
+  ```
+
+- **`helm uninstall` does not delete the CRD** — so the `ByreLease` objects survive a reinstall.
+  Remove it deliberately if you mean to: `kubectl delete crd byreleases.byre.io`.
+
+If you cannot create cluster-scoped objects, install with `--skip-crds --set lease.store=memory`.
+That combination is coherent (nothing reference the CRD), and it is what CI uses to render the chart
+without a cluster.
+
+When `lease.store=crd` the chart also renders a second Role and RoleBinding (`<fullname>-leases`) in
+`lease.namespace`, granting `byreleases` and `byreleases/status`. Without it the store's readiness
+check cannot list `byreleases` and the gateway falls back to reading identity off the instance
+annotation — it looks healthy while holding no leases at all.
+
+`lease.namespace` exists because the lease table and the sandboxes it describes need not live
+together: one shared lease namespace with per-team sandbox namespaces is a reasonable layout. Empty
+falls back to `backend.namespace`, and that empty falls back to the release namespace.
+
 ## Sandbox template and pool
 
 `sandbox.enabled` is **false** by default. Turning it on renders a `SandboxTemplate` and a
@@ -53,8 +91,17 @@ helm upgrade byre ./charts/byre -n byre \
 ```
 
 The controller that backs those CRDs (`extensions.agents.x-k8s.io/v1beta1`) is **not**
-installed by this chart — see [the kubernetes starter kit](../../examples/kubernetes-sandbox)
-for what it needs to provide.
+installed by this chart. Install it first:
+
+```sh
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/latest/download/sandbox-with-extensions.yaml
+kubectl -n agent-sandbox-system rollout status deploy/agent-sandbox-controller
+```
+
+Turning `sandbox.enabled=true` without it fails at install time with `no matches for kind
+SandboxTemplate` — which is the honest failure, but it happens after the gateway Deployment is
+already created, so the install half-succeeds. Apply the controller manifest first.
+[The kubernetes starter kit](../../examples/kubernetes-sandbox) has the walkthrough.
 
 ## Values that change the shape
 
@@ -66,6 +113,8 @@ for what it needs to provide.
 | `backend.ssh.hostKeyPolicy` | `accept-new` | `strict` for long-lived hosts, `insecure` for throwaway containers |
 | `lease.ttl` / `lease.grace` | `10m` / `30s` | idle reclaim |
 | `lease.poolSize` | `null` | `0` means "no warm capacity, create on demand" |
+| `lease.store` | `crd` | `crd` \| `memory` — see below |
+| `lease.namespace` | `""` | namespace for `ByreLease` objects; empty = sandbox namespace = release namespace |
 | `replicaCount` | `1` | >1 hands out independent sandboxes per identity; see the note in `values.yaml` |
 | `rbac.create` | `true` | set false when you pre-bind a ServiceAccount |
 | `sandbox.enabled` | `false` | render the template + warm pool |

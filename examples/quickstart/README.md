@@ -76,7 +76,10 @@ docker logs byre-quickstart 2>&1 | grep -i lease
 
 ## What this is not
 
-The gateway holds its lease table in memory. Restart it and every identity is re-provisioned; delete
-an instance behind its back and the table keeps the dead address until the ttl expires. Both are
-known, both are recorded in [ADR-0013](../../docs/adr/0013-lease-state-in-a-crd.md) with the fix
-(lease state in a CRD) and its acceptance criteria. A demo is the wrong place to hide that.
+The Docker quickstart has no cluster to put a CRD in, so it runs the gateway with
+`lease.store: memory`. A restart re-provisions every identity, and an instance deleted behind the
+gateway's back keeps its dead address until the ttl expires.
+
+With a cluster, `lease.store: crd` (the shipped default) puts the table in `ByreLease` objects that
+survive restarts and are readable with `kubectl get byl`. See
+[ADR-0013](../../docs/adr/0013-lease-state-in-a-crd.md) for why the table moved and what it cost.

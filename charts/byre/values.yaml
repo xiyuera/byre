@@ -11,9 +11,11 @@ image:
 
 imagePullSecrets: []
 
-# -- The gateway keeps leases in memory and holds SSH sessions open, so more than one replica
-# would hand out independent sandboxes for the same identity. Raise this only if you also
-# move lease state out of the process.
+# -- Hold SSH sessions open per process; instances are shared through the lease store, sessions are
+# not. With `lease.store: memory` more than one replica hands out independent instances for the same
+# identity; with `lease.store: crd` the leases agree but a client's *open session* still lives in one
+# pod, so a Service that load-balances SSH across replicas needs sticky routing. One replica is the
+# honest default.
 replicaCount: 1
 
 nameOverride: ""
@@ -29,6 +31,23 @@ lease:
   grace: 30s
   # -- Warm instances to keep ready. `null` leaves the gateway default; `0` means "none".
   poolSize: null
+
+  # -- Where the lease table lives.
+  #
+  # `crd` stores one `ByreLease` object per identity in the cluster. The CRD ships in this chart's
+  # `crds/` directory, so a plain install has what it needs. Leases survive a gateway restart, the
+  # state is inspectable with `kubectl get byl -n <ns>`, and two gateways reading the same namespace
+  # agree on who holds what.
+  #
+  # `memory` keeps the table in the process. Restart loses every lease (instances stay allocated
+  # until their TTL), and more than one replica would hand out independent instances for the same
+  # identity -- so it pairs with `replicaCount: 1`. Use it when you cannot create cluster-scoped
+  # objects, or for a throwaway trial.
+  store: crd
+
+  # -- Namespace for ByreLease objects. Empty means `backend.namespace`, and that empty means the
+  # release namespace.
+  namespace: ""
 
 # -- The provisioner. `claims` = instances come from a CRD (the default, pairs with
 # `sandbox.enabled`); `command` = run your own acquire/release/list programs; `workloads` and

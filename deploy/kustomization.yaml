@@ -14,10 +14,12 @@ resources:
   - hostkey-pvc.yaml
   - deployment.yaml
   - service.yaml
-  # The lease table's CRD (ADR-0013). It is cluster-scoped, so applying this kustomization needs
-  # permission to create a CRD -- an operator who only has namespace rights should apply
-  # deploy/crd/byreleases.yaml separately first, once per cluster. kustomize understands
-  # cluster-scoped kinds, so `namespace: byre-system` above does not get stamped onto it.
+  # The lease table's CRD (ADR-0013). Two scopes are in play and they are easy to confuse: the
+  # CustomResourceDefinition object itself is cluster-scoped (so this needs permission to create
+  # CRDs -- an operator with only namespace rights should apply deploy/crd/byreleases.yaml
+  # separately, once per cluster), while the `ByreLease` objects it defines are Namespaced and live
+  # in `lease.namespace` from config.example.yaml. kustomize treats the CRD as cluster-scoped, so
+  # `namespace: byre-system` is not stamped onto it.
   - crd/byreleases.yaml
 
 # The example configuration doubles as the shipped default: one file, no drift.

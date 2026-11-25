@@ -16,6 +16,10 @@ data:
       {{- if not (kindIs "invalid" .Values.lease.poolSize) }}
       pool_size: {{ .Values.lease.poolSize }}
       {{- end }}
+      store: {{ .Values.lease.store }}
+      {{- if eq .Values.lease.store "crd" }}
+      namespace: {{ include "byre.leaseNamespace" . }}
+      {{- end }}
 
     backends:
       - name: {{ .Values.backend.name }}
