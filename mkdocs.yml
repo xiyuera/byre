@@ -98,6 +98,9 @@ plugins:
 # and renders `.mermaid` blocks, including on instant-navigation redraws). An init script of our own
 # ran a second render over already-rendered nodes and produced "Syntax error in text" -- measured, not
 # guessed. Bundled locally rather than via CDN so the site does not break where a CDN is unreachable.
+extra_css:
+  - assets/stylesheets/extra.css
+
 extra_javascript:
   - assets/javascripts/mermaid.min.js
   - assets/javascripts/mermaid-init.js

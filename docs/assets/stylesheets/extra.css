@@ -1,0 +1,25 @@
+/* Site-specific adjustments.
+ *
+ * Everything here addresses something measured on the deployed page rather than a preference:
+ * material's default `h1`/`h2` colour is `rgba(0,0,0,.54)` on a white background, which is ~4.2:1 — under
+ * the 4.5:1 threshold for body-sized text and visibly washed out on the landing page, where the title is
+ * the first thing a visitor reads. `.md-default-fg-color` is the same token the body text uses (0.87 alpha).
+ */
+.md-typeset h1,
+.md-typeset h2 {
+  color: var(--md-default-fg-color);
+}
+
+/* The landing page opens with two buttons; without this they sit flush against the paragraph above. */
+.md-typeset .md-button {
+  margin: 0.4rem 0.4rem 0.4rem 0;
+}
+
+/* Diagrams are authored dark-first (see docs/assets/javascripts/mermaid-init.js). In the light palette the
+ * default mermaid fill is nearly white, which is fine, but the stroke is thin enough to disappear at 200px
+ * wide on a phone. A slightly stronger stroke keeps the boxes readable at small sizes. */
+.byre-mermaid svg .node rect,
+.byre-mermaid svg .node polygon,
+.byre-mermaid svg .node circle {
+  stroke-width: 1.2px;
+}
