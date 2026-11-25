@@ -1,6 +1,8 @@
 # byre
 
-[English](README.md) · **中文**
+[English](README.md) · **中文** · **[文档站 ↗](https://xiyuera.github.io/byre/)**
+
+[![documentation](https://img.shields.io/badge/docs-xiyuera.github.io%2Fbyre-009485?logo=readthedocs&logoColor=white)](https://xiyuera.github.io/byre/)
 
 byre 是给 agent 沙箱用的 SSH 网关层：租约挂在**身份**（客户端的公钥）上，而不是挂在一条连接上，所以一个
 agent 在租约有效期内独占一个实例。
