@@ -1,6 +1,6 @@
 # byre
 
-**面向 agent sandbox 的 SSH 网关。** 客户端的公钥**就是** lease：一个 agent 独占一个实例，直到 lease 过期。
+**面向 agent sandbox 的 SSH 网关。** 客户端的公钥**就是** lease：一个 agent 独占一个 instance，直到 lease 过期。
 
 **English** · **中文**
 
