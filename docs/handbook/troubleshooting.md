@@ -147,7 +147,7 @@ Every client with `StrictHostKeyChecking` now fails. Two causes, one of which is
   container with no volume. The line `generated a new host key and persisted it` at startup is the
   evidence that a *new* key was written; on a restart with durable storage it must not appear.
 
-Deliberate rotation is in [operations.md](operations.md#rotation).
+Deliberate rotation is in [operations.md](operations.md#the-host-key).
 
 ## `-check-config` behaviour
 

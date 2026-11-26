@@ -147,6 +147,12 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+      - name: docs links
+        # `mkdocs build --strict` fails a link to a missing *file*; it says nothing about the
+        # *fragment*. `operations.md#rotation` built green for months while landing readers at the
+        # top of the page, because the target had no such heading. This builds each file's anchor
+        # set the way python-markdown slugs headings and checks every in-site fragment.
+        run: python3 scripts/check-doc-links.py
 
   i18n:
     runs-on: ubuntu-latest

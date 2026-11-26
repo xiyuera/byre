@@ -181,6 +181,8 @@ ownership, not the uid, decides — and that pairing was verified on a real clus
 `docs/acceptance/2026-11-17-deploy.md`. The two numbers should be the same; until the manifest is unified
 on `10001`, describe the container by what the image says and by the `fsGroup` that makes it work.
 
+### The host key
+
 The gateway's **own** SSH host key lives on the `byre-hostkey` PVC (`host_key:
 /var/lib/byre/hostkey/id_ed25519`). On first start the file does not exist and the gateway creates it,
 logging the fingerprint (`generated a new host key and persisted it`). Distribute that fingerprint to
