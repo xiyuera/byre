@@ -30,7 +30,7 @@ client may land elsewhere — the one property the project exists to provide. Th
 wrong for an agent doing multi-step work.
 
 **`claims` is the shape this project was built for.** It is also the only one with recorded cluster runs
-([acceptance runs](../acceptance/index.md)). Warm capacity means the first connection is fast, and the identity lives on
+. Warm capacity means the first connection is fast, and the identity lives on
 the claim, so a restarted gateway re-adopts live leases instead of handing out fresh sandboxes.
 See [Kubernetes](kubernetes.md) for the end-to-end recipe.
 

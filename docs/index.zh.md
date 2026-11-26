@@ -59,6 +59,6 @@ git clone https://github.com/xiyuera/byre && cd byre/examples/quickstart
 
 ## 状态
 
-Pre-1.0。identity、lease、热池、跨重启接管都在真实集群上验过（见[验收记录](acceptance/index.md)）；四种 provision 形态里只有 `claims` 有集群实跑记录。单副本，没有自动化的端到端闸门——那些集群实跑是手工执行的。[限制](limits.md)列出了刻意不做的东西，包括为什么单副本是硬约束。
+Pre-1.0。identity、lease、热池、跨重启接管都在真实集群上验过；四种 provision 形态里只有 `claims` 有集群实跑记录。单副本，没有自动化的端到端闸门——那些集群实跑是手工执行的。[限制](limits.md)列出了刻意不做的东西，包括为什么单副本是硬约束。
 
 Apache-2.0。原名叫 `keypod`——与任何同名项目无关，许可证也不授予商标权。

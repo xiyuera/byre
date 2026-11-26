@@ -153,6 +153,34 @@ jobs:
         # top of the page, because the target had no such heading. This builds each file's anchor
         # set the way python-markdown slugs headings and checks every in-site fragment.
         run: python3 scripts/check-doc-links.py
+      - name: docs build
+        # `docs.yml` carries `if: github.server_url == 'https://github.com'` because GitHub has Pages
+        # and Gitea does not, so `--strict` has never run on a pull request: a broken link could merge
+        # green and only surface as a failed *deploy* after the mirror pushed to GitHub. Building here
+        # puts it where the review happens.
+        #
+        # The act_runner image ships Debian's python3 without pip *and* without ensurepip
+        # (measured: `Python 3.11.2 (main, Apr 28 2025) [GCC 12.2.0]`, then
+        # "ensurepip is not available ... apt install python3.11-venv"). So provision the venv
+        # package first. Two fallbacks because this step is the only thing standing between a broken
+        # link and a merged PR — it should not be the fragile part.
+        run: |
+          set -e
+          echo "python: $(python3 -VV 2>&1)"
+          if ! python3 -m pip --version >/dev/null 2>&1; then
+            echo "no pip; provisioning one"
+            SUDO=""
+            [ "$(id -u)" = 0 ] || SUDO="sudo"
+            if command -v apt-get >/dev/null 2>&1; then
+              $SUDO apt-get update -qq
+              $SUDO apt-get install -y -qq python3-venv
+            fi
+            python3 -m venv /tmp/mkdocs-venv
+            . /tmp/mkdocs-venv/bin/activate
+            echo "venv python: $(python3 -VV 2>&1)"
+          fi
+          python3 -m pip install --quiet "mkdocs==1.6.1" "mkdocs-material==9.8.2" "mkdocs-static-i18n==1.3.1"
+          mkdocs build --strict --clean
 
   i18n:
     runs-on: ubuntu-latest

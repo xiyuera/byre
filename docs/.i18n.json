@@ -1,11 +1,12 @@
 {
   "./README.zh-CN.md": {"source": "./README.md", "digest": "3dce03f1db5afed46332fa05120d6e21db55750c47a680ed892aa95cc3fff7b0"},
-  "./docs/documentation-index.zh.md": {"source": "./docs/documentation-index.md", "digest": "7b63af06b4d46ebcb1d94994436aabf27e71badb1a3b8ba5da32d2ad1fb24147"},
+  "./docs/documentation-index.zh.md": {"source": "./docs/documentation-index.md", "digest": "4d19f672d1616c98ff28cb264083ef02d0c752b265bb4f1e80e72cb3fbd051ad"},
+  "./docs/examples/local-quickstart.zh.md": {"source": "./docs/examples/local-quickstart.md", "digest": "6b78ab360cab97d41742dfd926ae7a1f3461f49369645cc08185aba2fa21bd79"},
   "./docs/getting-started/kubernetes.zh.md": {"source": "./docs/getting-started/kubernetes.md", "digest": "199b1cf6b41476d614d0ae1a0b443a0358bc777fca64ddf66b431183a36b8b6a"},
   "./docs/getting-started/quickstart.zh.md": {"source": "./docs/getting-started/quickstart.md", "digest": "038a07b1ae0ad22bb381db6df11128ca72cead68db33cc39e08450c50e79d80a"},
   "./docs/handbook/architecture.zh.md": {"source": "./docs/handbook/architecture.md", "digest": "6e5da397ed1ba2e46f321bc09a6cb4e820299298c1ba245299efc48d7221f9bc"},
-  "./docs/index.zh.md": {"source": "./docs/index.md", "digest": "9fd73c36e624c6a4580080c625f5ddc459d94a3c2e09f85def9aa4b9ebd76a05"},
-  "./docs/limits.zh.md": {"source": "./docs/limits.md", "digest": "3bfb81197211f639ba86ec5df331e72ef62bbfd80b81430073678230b637ad8d"},
+  "./docs/index.zh.md": {"source": "./docs/index.md", "digest": "47e18261d7a128be26ef0da28a66a8eef1c9898c28d106d11a18064c8ed8cd82"},
+  "./docs/limits.zh.md": {"source": "./docs/limits.md", "digest": "dd3d6cc39e875a1f010994b0648ae1fad07d67d94c5b64635e40ef29530e63a7"},
   "./docs/why-not-a-jump-host.zh.md": {"source": "./docs/why-not-a-jump-host.md", "digest": "e73e3b5c33a85c4c6b880dc96bc5a6f3a060412aa938bd8109e638504dcee4c4"},
   "./examples/local-quickstart/README.zh-CN.md": {"source": "./examples/local-quickstart/README.md", "digest": "6b78ab360cab97d41742dfd926ae7a1f3461f49369645cc08185aba2fa21bd79"}
 }

@@ -1,49 +1,56 @@
 # Documentation index
 
-The site [home page](index.md) is the front door: what byre is, a five-minute Quick start, and how the
-four provisioning shapes differ. This page is the map for everything past that point.
+The [home page](index.md) is the front door: what byre is, a five-minute Quick start, and how the four
+provisioning shapes differ. This page is the map for everything past that point.
+
+## Getting started
+
+| page | what it answers |
+|---|---|
+| [Quick start](getting-started/quickstart.md) | the smallest working gateway, in five minutes |
+| [Choose a backend](getting-started/backends.md) | which of the four provisioning shapes fits your hosts |
+| [Kubernetes](getting-started/kubernetes.md) | sandboxes created on demand, end to end |
 
 ## Handbook
 
-| document | what it answers |
+| page | what it answers |
 |---|---|
-| [handbook/architecture.md](handbook/architecture.md) | how the pieces fit — identity, lease, pool, backends, readiness — and why the four obvious repairs fail |
-| [handbook/backends.md](handbook/backends.md) | the four provisions in detail: which one to pick, every field, the readiness rule, failure behaviour, and the `command` contract |
-| [handbook/operations.md](handbook/operations.md) | running it: first install, the grant that is not in the overlay, host-key rotation, metrics, flags, upgrading, uninstall |
-| [handbook/troubleshooting.md](handbook/troubleshooting.md) | what each failure looks like from the client and from the gateway log, and what to check first |
+| [Architecture](handbook/architecture.md) | how the pieces fit — identity, lease, pool, backends, readiness — and why the four obvious repairs fail |
+| [Backends](handbook/backends.md) | the four provisions in detail: which one to pick, every field, the readiness rule, failure behaviour, and the `command` contract |
+| [Operations](handbook/operations.md) | running it: first install, the grant that is not in the overlay, host-key rotation, metrics, flags, upgrading, uninstall |
+| [Troubleshooting](handbook/troubleshooting.md) | what each failure looks like from the client and from the gateway log, and what to check first |
 
-## Runnable examples
-
-These are files in the repository, not pages of this site: each link below leaves the site for GitHub.
+## Examples
 
 | example | shape | what it is |
 |---|---|---|
-| [examples/local-quickstart/](https://github.com/xiyuera/byre/blob/main/examples/local-quickstart/README.md) (in the repo) | `endpoints` | the Quick start as a file: one machine, no cluster |
-| [examples/static-endpoints/](https://github.com/xiyuera/byre/blob/main/examples/static-endpoints/README.md) (in the repo) | `endpoints` | a fixed set of lab hosts |
-| [examples/pod-image/](https://github.com/xiyuera/byre/blob/main/examples/pod-image/README.md) (in the repo) | `workloads` | a minimal sshd image and the backend that creates pods from it |
-| [examples/kubernetes-sandbox/](https://github.com/xiyuera/byre/blob/main/examples/kubernetes-sandbox/README.md) (in the repo) | `claims` | a template, a warm pool, the backend that claims from them, and the RBAC + deployment to run it |
-| [examples/docker-sandbox/](https://github.com/xiyuera/byre/blob/main/examples/docker-sandbox/README.md) (in the repo) | `command` | the whole gateway in one process, sandboxes as docker containers — no cluster at all |
-| [charts/byre/](https://github.com/xiyuera/byre/blob/main/charts/byre/README.md) (in the repo) | `claims` | the Kubernetes shape as a Helm chart, template and warm pool included |
+| [Static endpoints](examples/static-endpoints.md) | `endpoints` | a fixed set of lab hosts, leased one identity at a time |
+| [Local quickstart](examples/local-quickstart.md) | `endpoints` | the Quick start as a file: one machine, no cluster |
+| [Any image that speaks SSH](examples/pod-image.md) | `workloads` | a minimal sshd image and the backend that creates pods from it |
+| [Kubernetes starter kit](examples/kubernetes-sandbox.md) | `claims` | a template, a warm pool, the backend that claims from them, and the RBAC + deployment to run it |
+| [Docker starter kit](examples/docker-sandbox.md) | `command` | the whole gateway in one process, sandboxes as docker containers — no cluster at all |
+| [Helm chart](examples/helm-chart.md) | `claims` | the Kubernetes shape as a chart, CRD and warm pool included |
 
-## Decisions and records
+## Design decisions
 
-| document | what it answers |
+| page | what it answers |
 |---|---|
-| [adr/](adr/index.md) | each decision, with the conditions under which it would be reversed |
-| [acceptance/](acceptance/index.md) | what was verified on a real cluster, with the commands and the outputs |
-| [roadmap.md](roadmap.md) | what is deliberately absent from v1, in the order it would arrive |
-| [release.md](release.md) | when to cut a version, what the pipeline produces |
-| [tag-map.md](tag-map.md) | what each tag points at after the history rewrite, and the two published commit hashes that no longer exist |
-| [contributing-from-agents.md](contributing-from-agents.md) | the account-per-role model, credential handling and token discipline for agent contributors |
-| [integrations/](integrations/README.md) | how a host runtime (agent platform, CI) talks to the gateway |
-| [rename-to-byre.md](rename-to-byre.md) | the name history, the collisions, and the cutover that is still pending |
-| [i18n.md](i18n.md) | which pages are translated, and how the checker decides a translation is stale |
+| [Decision records](adr/index.md) | each decision, with the conditions under which it would be reversed |
+| [Roadmap](roadmap.md) | what is deliberately absent from v1, in the order it would arrive |
+| [Limits](limits.md) | what is known to be wrong or absent, stated plainly |
+| [Integrations](integrations/README.md) | how a host runtime (agent platform, CI) talks to the gateway |
 
-Start with `handbook/architecture.md` if you are reading the code, `handbook/operations.md` if you are
-running it, and `handbook/troubleshooting.md` if it is running and does not work.
+## Contributing
 
-The home page, Quick start, Kubernetes, Architecture, Limits and Why not a jump host have a Chinese version
-on the site, as does this page. Everything else — `handbook/backends.md`, `handbook/operations.md`,
-`handbook/troubleshooting.md`, `release.md`, `i18n.md`, `integrations/` and four of the five examples — is
-English only today and falls back to English under `/zh/`; [`i18n.md`](i18n.md) is the list, and
-`scripts/check-i18n.sh` is how it stays visible.
+[Contributing](contributing.md) covers the branch and the merge: what to run before opening a pull
+request, and what the release process expects of a change.
+
+Start with [Architecture](handbook/architecture.md) if you are reading the code,
+[Operations](handbook/operations.md) if you are running it, and
+[Troubleshooting](handbook/troubleshooting.md) if it is running and does not work.
+
+## Translation status
+
+The home page, Quick start, Kubernetes, Architecture, Limits, Why not a jump host and this page have a
+Chinese version under `/zh/`. Everything else falls back to English rather than 404ing — a page that
+exists in one language is never a broken link in the other.
