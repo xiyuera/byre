@@ -157,9 +157,20 @@ jobs:
         # `docs.yml` carries `if: github.server_url == 'https://github.com'` because GitHub has Pages
         # and Gitea does not, so `--strict` has never run on a pull request: a broken link could merge
         # green and only surface as a failed *deploy* after the mirror pushed to GitHub. Building here
-        # puts it where the review happens. Cheap — the site is ~50 pages and takes under three seconds
-        # once the theme is installed.
+        # puts it where the review happens.
+        #
+        # The act_runner image ships python3 without pip (measured: `/usr/bin/python3: No module named
+        # pip`), so create a venv — which seeds its own pip — instead of assuming one. The debug lines
+        # stay: whoever reads a red lint next needs to know which interpreter it got.
         run: |
+          set -e
+          echo "python: $(python3 -VV 2>&1)"
+          if ! python3 -m pip --version >/dev/null 2>&1; then
+            echo "no pip on the runner interpreter; creating a venv"
+            python3 -m venv /tmp/mkdocs-venv
+            . /tmp/mkdocs-venv/bin/activate
+            python3 -VV
+          fi
           python3 -m pip install --quiet "mkdocs==1.6.1" "mkdocs-material==9.8.2" "mkdocs-static-i18n==1.3.1"
           mkdocs build --strict --clean
 
