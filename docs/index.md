@@ -67,7 +67,7 @@ released.
 ## Status
 
 Pre-1.0. Identity, lease, warm pool and adoption across restarts are verified on a real cluster
-([acceptance runs](acceptance/index.md)); of the four provisioning shapes only `claims` has a cluster run.
+; of the four provisioning shapes only `claims` has a cluster run.
 Single replica, and no automated end-to-end gate — the cluster runs were executed by hand.
 [Limits](limits.md) lists what is deliberately absent, including why one replica is a hard constraint.
 

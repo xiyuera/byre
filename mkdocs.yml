@@ -118,22 +118,29 @@ plugins:
             Home: 首页
             Getting started: 开始使用
             Quick start: 快速开始
-            Choose a backend: 选择后端
+            Choose a backend: 选择 backend
             Kubernetes: Kubernetes
             Handbook: 手册
             Architecture: 架构
-            Backends in detail: 后端详解
+            Backends in detail: backend 详解
             Operations: 运维
             Troubleshooting: 排错
+            Examples: 示例
+            Overview: 总览
+            Static endpoints: 静态 endpoints
+            Local quickstart: 本机快速开始
+            Any image that speaks SSH: 任何会 SSH 的镜像
+            Kubernetes starter kit: Kubernetes starter kit
+            Docker starter kit: Docker starter kit
+            Helm chart: Helm chart
             Why not a jump host: 为什么不是跳板机
             Limits: 限制
             Reference: 参考
             Documentation index: 文档索引
             Decision records: 决策记录
-            Acceptance runs: 验收记录
             Integrations: 集成
             Roadmap: 路线图
-            Release process: 发布流程
+            Contributing: 参与贡献
 
 # Mermaid is bundled rather than pulled from a CDN: the toolchain already treats every diagram as a
 # mermaid fence, and a docs site that goes blank when a CDN is unreachable is worse than a 2.5 MB asset
@@ -173,12 +180,19 @@ nav:
       - Backends in detail: handbook/backends.md
       - Operations: handbook/operations.md
       - Troubleshooting: handbook/troubleshooting.md
+  - Examples:
+      - Overview: examples/index.md
+      - Static endpoints: examples/static-endpoints.md
+      - Local quickstart: examples/local-quickstart.md
+      - Any image that speaks SSH: examples/pod-image.md
+      - Kubernetes starter kit: examples/kubernetes-sandbox.md
+      - Docker starter kit: examples/docker-sandbox.md
+      - Helm chart: examples/helm-chart.md
   - Why not a jump host: why-not-a-jump-host.md
   - Limits: limits.md
   - Reference:
       - Documentation index: documentation-index.md
       - Decision records: adr/index.md
-      - Acceptance runs: acceptance/index.md
       - Integrations: integrations/README.md
       - Roadmap: roadmap.md
-      - Release process: release.md
+  - Contributing: contributing.md

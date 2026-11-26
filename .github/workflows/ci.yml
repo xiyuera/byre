@@ -153,6 +153,15 @@ jobs:
         # top of the page, because the target had no such heading. This builds each file's anchor
         # set the way python-markdown slugs headings and checks every in-site fragment.
         run: python3 scripts/check-doc-links.py
+      - name: docs build
+        # `docs.yml` carries `if: github.server_url == 'https://github.com'` because GitHub has Pages
+        # and Gitea does not, so `--strict` has never run on a pull request: a broken link could merge
+        # green and only surface as a failed *deploy* after the mirror pushed to GitHub. Building here
+        # puts it where the review happens. Cheap — the site is ~50 pages and takes under three seconds
+        # once the theme is installed.
+        run: |
+          python3 -m pip install --quiet "mkdocs==1.6.1" "mkdocs-material==9.8.2" "mkdocs-static-i18n==1.3.1"
+          mkdocs build --strict --clean
 
   i18n:
     runs-on: ubuntu-latest

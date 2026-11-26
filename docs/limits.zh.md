@@ -18,7 +18,7 @@ lease 表可以搬出进程——`lease.store: crd` 把它放在 etcd 里的一�
 
 ## 没有自动化的端到端闸门
 
-[验收记录](acceptance/index.md)里的那些集群实跑是手工执行并记录的。harness 是 `BYRE_CFG=config.yaml BYRE_KEY=<客户端密钥> test/e2e/run.sh [--ttl-ok]`；它对着一个已经在跑的网关断言，缺这两个变量时以退出码 2 结束。基于 `kind` 的 CI 实跑是路线图里的一项。
+那些集群实跑是手工执行并记录的。harness 是 `BYRE_CFG=config.yaml BYRE_KEY=<客户端密钥> test/e2e/run.sh [--ttl-ok]`；它对着一个已经在跑的网关断言，缺这两个变量时以退出码 2 结束。基于 `kind` 的 CI 实跑是路线图里的一项。
 
 ## `endpoints` 扛不住重启
 

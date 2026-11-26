@@ -28,7 +28,7 @@ capacity behind rather than destroying live leases. Printing the annotation in `
 
 ## No automated end-to-end gate
 
-The cluster runs in [acceptance runs](acceptance/index.md) were executed and recorded by hand. The harness is
+The cluster runs were executed and recorded by hand. The harness is
 `BYRE_CFG=config.yaml BYRE_KEY=<client key> test/e2e/run.sh [--ttl-ok]`; it asserts against a gateway that
 is already running, and without those two variables it exits 2. A `kind`-based CI run is a roadmap item.
 
