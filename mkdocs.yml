@@ -89,6 +89,51 @@ hooks:
 
 plugins:
   - search
+  # One tree, two languages, distinguished by a BCP 47 suffix (`limits.md` / `limits.zh.md`).
+  # `suffix` rather than a mirrored `zh/` tree: the same reason docs/i18n.md gives for the
+  # repository-level pairs -- a file added on one side has no obvious counterpart to check against.
+  #
+  # The locale is `zh`, not `zh-CN`: mkdocs-material only ships `partials/languages/zh.html`, and
+  # `zh-CN` fails the build at template time with `TemplateNotFound`. `.zh.md` is therefore the
+  # suffix the site pairs on, which is *not* the same suffix the repository-level check uses
+  # (`.zh-CN.md`, scripts/check-i18n.sh) -- the two are separate mechanisms with separate rules,
+  # and both are listed in docs/i18n.md.
+  #
+  # `fallback_to_default` is what makes a partial translation honest rather than broken: a page
+  # with no Chinese version is served in English under /zh/ instead of 404ing.
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: zh
+          name: 中文
+          build: true
+          nav_translations:
+            Home: 首页
+            Getting started: 开始使用
+            Quick start: 快速开始
+            Choose a backend: 选择后端
+            Kubernetes: Kubernetes
+            Handbook: 手册
+            Architecture: 架构
+            Backends in detail: 后端详解
+            Operations: 运维
+            Troubleshooting: 排错
+            Why not a jump host: 为什么不是跳板机
+            Limits: 限制
+            Reference: 参考
+            Documentation index: 文档索引
+            Decision records: 决策记录
+            Acceptance runs: 验收记录
+            Integrations: 集成
+            Roadmap: 路线图
+            Release process: 发布流程
 
 # Mermaid is bundled rather than pulled from a CDN: the toolchain already treats every diagram as a
 # mermaid fence, and a docs site that goes blank when a CDN is unreachable is worse than a 2.5 MB asset

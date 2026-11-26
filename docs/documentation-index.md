@@ -1,7 +1,7 @@
 # Documentation index
 
-The repository [README](https://github.com/xiyuera/byre/blob/main/README.md) is the front door: what byre is, a five-minute Quick start, and
-how the four provisioning shapes differ. This page is the map for everything past that point.
+The site [home page](index.md) is the front door: what byre is, a five-minute Quick start, and how the
+four provisioning shapes differ. This page is the map for everything past that point.
 
 ## Handbook
 
@@ -14,14 +14,16 @@ how the four provisioning shapes differ. This page is the map for everything pas
 
 ## Runnable examples
 
+These are files in the repository, not pages of this site: each link below leaves the site for GitHub.
+
 | example | shape | what it is |
 |---|---|---|
-| [examples/local-quickstart/](https://github.com/xiyuera/byre/blob/main/examples/local-quickstart/README.md) | `endpoints` | the README's Quick start as a file: one machine, no cluster |
-| [examples/static-endpoints/](https://github.com/xiyuera/byre/blob/main/examples/static-endpoints/README.md) | `endpoints` | a fixed set of lab hosts |
-| [examples/pod-image/](https://github.com/xiyuera/byre/blob/main/examples/pod-image/README.md) | `workloads` | a minimal sshd image and the backend that creates pods from it |
-| [examples/kubernetes-sandbox/](https://github.com/xiyuera/byre/blob/main/examples/kubernetes-sandbox/README.md) | `claims` | a template, a warm pool, the backend that claims from them, and the RBAC + deployment to run it |
-| [examples/docker-sandbox/](https://github.com/xiyuera/byre/blob/main/examples/docker-sandbox/README.md) | `command` | the whole gateway in one process, sandboxes as docker containers — no cluster at all |
-| [charts/byre/](https://github.com/xiyuera/byre/blob/main/charts/byre/README.md) | `claims` | the Kubernetes shape as a Helm chart, template and warm pool included |
+| [examples/local-quickstart/](https://github.com/xiyuera/byre/blob/main/examples/local-quickstart/README.md) (in the repo) | `endpoints` | the Quick start as a file: one machine, no cluster |
+| [examples/static-endpoints/](https://github.com/xiyuera/byre/blob/main/examples/static-endpoints/README.md) (in the repo) | `endpoints` | a fixed set of lab hosts |
+| [examples/pod-image/](https://github.com/xiyuera/byre/blob/main/examples/pod-image/README.md) (in the repo) | `workloads` | a minimal sshd image and the backend that creates pods from it |
+| [examples/kubernetes-sandbox/](https://github.com/xiyuera/byre/blob/main/examples/kubernetes-sandbox/README.md) (in the repo) | `claims` | a template, a warm pool, the backend that claims from them, and the RBAC + deployment to run it |
+| [examples/docker-sandbox/](https://github.com/xiyuera/byre/blob/main/examples/docker-sandbox/README.md) (in the repo) | `command` | the whole gateway in one process, sandboxes as docker containers — no cluster at all |
+| [charts/byre/](https://github.com/xiyuera/byre/blob/main/charts/byre/README.md) (in the repo) | `claims` | the Kubernetes shape as a Helm chart, template and warm pool included |
 
 ## Decisions and records
 
@@ -40,5 +42,8 @@ how the four provisioning shapes differ. This page is the map for everything pas
 Start with `handbook/architecture.md` if you are reading the code, `handbook/operations.md` if you are
 running it, and `handbook/troubleshooting.md` if it is running and does not work.
 
-The handbook pages, `release.md`, `i18n.md`, `integrations/` and the three shape examples are English
-only today; [`i18n.md`](i18n.md) is the list, and `scripts/check-i18n.sh` is how it stays visible.
+The home page, Quick start, Kubernetes, Architecture, Limits and Why not a jump host have a Chinese version
+on the site, as does this page. Everything else — `handbook/backends.md`, `handbook/operations.md`,
+`handbook/troubleshooting.md`, `release.md`, `i18n.md`, `integrations/` and four of the five examples — is
+English only today and falls back to English under `/zh/`; [`i18n.md`](i18n.md) is the list, and
+`scripts/check-i18n.sh` is how it stays visible.

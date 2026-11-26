@@ -3,7 +3,7 @@
 **The SSH gateway for agent sandboxes.** The client's public key *is* the lease: one agent keeps one
 instance exclusively until the lease expires.
 
-**English** · [中文](https://github.com/xiyuera/byre/blob/main/README.zh-CN.md)
+**English** · **中文**
 
 [Start in 30 seconds](getting-started/quickstart.md){ .md-button .md-button--primary }
 [Read the design](handbook/architecture.md){ .md-button }

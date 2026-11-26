@@ -13,13 +13,24 @@ cd "$(dirname "$0")/.." || exit 2
 manifest="docs/.i18n.json"
 
 digest() { sha256sum "$1" | cut -d' ' -f1; }
-pairs() { find . -name '*.zh-CN.md' -not -path './.git/*' | sort; }
+# Two suffixes are in play and both are this script's business:
+#   .zh-CN.md  repository pairs (README.md / README.zh-CN.md)
+#   .zh.md     site pairs built into /zh/ -- mkdocs-material has no `zh-CN` language partial, so the site
+#              locale is `zh` and the file suffix follows it (see docs/i18n.md).
+pairs() { find . \( -name '*.zh-CN.md' -o -name '*.zh.md' \) -not -path './.git/*' | sort; }
+source_of() {
+  case "$1" in
+    *.zh-CN.md) printf '%s.md\n' "${1%.zh-CN.md}" ;;
+    *.zh.md)    printf '%s.md\n' "${1%.zh.md}" ;;
+    *)          return 1 ;;
+  esac
+}
 
 if [ "${1:-}" = "--update" ]; then
   {
     printf '{\n'; first=1
     for zh in $(pairs); do
-      en="${zh%.zh-CN.md}.md"
+      en=$(source_of "$zh") || { echo "unrecognised translation suffix: $zh" >&2; exit 2; }
       [ -f "$en" ] || { echo "no English source for $zh" >&2; exit 2; }
       [ $first -eq 1 ] || printf ',\n'; first=0
       printf '  "%s": {"source": "%s", "digest": "%s"}' "$zh" "$en" "$(digest "$en")"
@@ -47,8 +58,10 @@ print(f"checked={len(man)} stale={len(stale)}")
 for zh,src,why in stale: print(f"  STALE {zh} <- {src}: {why}")
 tracked={'README.md','architecture.md','operations.md','release.md','i18n.md'}
 for p in sorted(pathlib.Path('.').rglob('*.md')):
-    if '.git' in p.parts or p.name.endswith('.zh-CN.md'): continue
+    if '.git' in p.parts or p.name.endswith(('.zh-CN.md','.zh.md')): continue
     if p.name not in tracked: continue
-    if not pathlib.Path(str(p).replace('.md','.zh-CN.md')).exists(): print(f"  UNTRANSLATED {p}")
+    # Either suffix counts as "translated": the site pairs on .zh.md, the repository pairs on .zh-CN.md.
+    if not any((p.parent / (p.stem + s)).exists() for s in ('.zh-CN.md', '.zh.md')):
+        print(f"  UNTRANSLATED {p}")
 sys.exit(1 if stale else 0)
 PY
