@@ -1,19 +1,303 @@
 /* Site-specific adjustments.
  *
- * Everything here addresses something measured on the deployed page rather than a preference:
- * material's default `h1`/`h2` colour is `rgba(0,0,0,.54)` on a white background, which is ~4.2:1 — under
- * the 4.5:1 threshold for body-sized text and visibly washed out on the landing page, where the title is
- * the first thing a visitor reads. `.md-default-fg-color` is the same token the body text uses (0.87 alpha).
+ * Everything here addresses something measured on the deployed page rather than a preference.
+ * Measurements that drove each block are in the comment above it.
+ *
+ * The palette is overridden in CSS rather than in mkdocs.yml's `palette:` keys because material's
+ * named palettes are a fixed set: `teal` is #009688, which puts white text at ~3.6:1 — under the 4.5:1
+ * threshold for body-sized text. Every customisation below has to work for both schemes, so the tokens
+ * are declared once per scheme and everything else consumes them.
  */
+
+/* ── design tokens ─────────────────────────────────────────────────────────── */
+
+[data-md-color-scheme="default"] {
+  --byre-brand: #00695c;          /* 6.0:1 on white — safe for links and button labels */
+  --byre-brand-strong: #004d40;   /* active states */
+  --byre-brand-soft: #e6f4f1;     /* nav active background */
+  --byre-ink: #0f172a;
+  --byre-muted: #64748b;
+  --byre-line: #e2e8f0;
+  --byre-surface: #f8fafc;
+
+  --md-primary-fg-color: #00695c;
+  --md-primary-fg-color--light: #00897b;
+  --md-primary-fg-color--dark: #004d40;
+  --md-accent-fg-color: #00695c;
+  --md-typeset-a-color: #00695c;
+}
+
+[data-md-color-scheme="slate"] {
+  --byre-brand: #4dd0c4;          /* 8.1:1 on #1e2129 — the dark scheme needs the light end */
+  --byre-brand-strong: #80cbc4;
+  --byre-brand-soft: rgba(77, 208, 196, 0.12);
+  --byre-ink: #e6edf3;
+  --byre-muted: #8b98a9;
+  --byre-line: #30363d;
+  --byre-surface: #22272e;
+
+  --md-primary-fg-color: #00796b;
+  --md-primary-fg-color--light: #009688;
+  --md-primary-fg-color--dark: #004d40;
+  --md-accent-fg-color: #4dd0c4;
+  --md-typeset-a-color: #4dd0c4;
+}
+
+/* ── typography ────────────────────────────────────────────────────────────── */
+
+/* Measured: h1 and h2 computed to `font-weight: 300`. At 32px/25px a 300 weight reads as washed out
+ * next to the bolded lead paragraph, so the visual hierarchy inverted — the body was heavier than the
+ * headings. Material's own scale is fine; only the weight and the tracking needed a decision. */
 .md-typeset h1,
 .md-typeset h2 {
   color: var(--md-default-fg-color);
+  font-weight: 700;
+  letter-spacing: -0.015em;
 }
 
-/* The landing page opens with two buttons; without this they sit flush against the paragraph above. */
-.md-typeset .md-button {
-  margin: 0.4rem 0.4rem 0.4rem 0;
+.md-typeset h1 {
+  letter-spacing: -0.03em;
+  line-height: 1.12;
 }
+
+.md-typeset h2 {
+  margin-top: 2.6rem;
+  line-height: 1.25;
+}
+
+.md-typeset h3 {
+  font-weight: 650;
+  letter-spacing: -0.005em;
+}
+
+/* Measured: the content column is 688px wide at 16px, which is ~85 characters per line for prose.
+ * Comfortable technical reading is 60–72ch. Tables, diagrams and code keep the full width — they are
+ * scanned, not read line by line, and narrowing them causes horizontal scrolling on a laptop. */
+.md-typeset > p,
+.md-typeset > ul,
+.md-typeset > ol,
+.md-typeset > blockquote {
+  max-width: 68ch;
+}
+
+.md-typeset p {
+  line-height: 1.7;
+}
+
+/* ── landing hero ──────────────────────────────────────────────────────────── */
+
+/* Without this the page opens with `<h1>byre</h1>` and then a fully bolded paragraph that mixes the
+ * product category with the mechanism — the first thing a visitor reads is a brand name that explains
+ * nothing. The lead splits into a tagline (what it is) and a muted line (how it works). */
+.md-typeset .hero {
+  padding: 0.25rem 0 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.md-typeset .hero__kicker {
+  margin: 0 0 0.7rem;
+  color: var(--byre-brand);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  max-width: none;
+}
+
+.md-typeset .hero h1 {
+  margin: 0 0 0.8rem;
+  font-size: clamp(2.2rem, 4.2vw, 3rem);
+}
+
+.md-typeset .hero__lead {
+  max-width: 58ch;
+  margin: 0 0 1.4rem;
+  font-size: 1.2rem;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--byre-ink);
+}
+
+.md-typeset .hero__lead span {
+  display: block;
+  margin-top: 0.6rem;
+  font-size: 0.95rem;
+  font-weight: 400;
+  line-height: 1.65;
+  color: var(--byre-muted);
+}
+
+.md-typeset .hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  align-items: center;
+}
+
+/* ── buttons ───────────────────────────────────────────────────────────────── */
+
+/* Measured: three buttons all rendered as the same teal outline, so the primary action carried no more
+ * weight than "read the design" or the GitHub link. One solid, one bordered, one quiet. */
+.md-typeset .md-button {
+  margin: 0;
+  min-height: 2.6rem;
+  padding: 0 1.05rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 120ms, border-color 120ms, color 120ms;
+}
+
+.md-typeset .md-button--primary {
+  background: var(--byre-brand);
+  border-color: var(--byre-brand);
+  color: #fff;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary {
+  color: #08131a;
+}
+
+.md-typeset .md-button:not(.md-button--primary) {
+  background: transparent;
+  border-color: var(--byre-line);
+  color: var(--byre-ink);
+}
+
+.md-typeset .md-button:not(.md-button--primary):hover {
+  background: var(--byre-brand-soft);
+  border-color: var(--byre-brand);
+  color: var(--byre-brand);
+}
+
+/* The GitHub button is a "look at the source" affordance, not a call to action. */
+.md-typeset .md-button--github {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: var(--byre-muted) !important;
+  padding-left: 0.35rem;
+  padding-right: 0.35rem;
+}
+
+.md-typeset .md-button--github:hover {
+  color: var(--byre-brand) !important;
+}
+
+/* All buttons flush against the paragraph above them without this. */
+.md-typeset .hero__actions + p,
+.md-typeset .md-button + .md-button {
+  margin-left: 0;
+}
+
+/* ── navigation ────────────────────────────────────────────────────────────── */
+
+/* Active state was colour-only: `Home` in teal, everything else grey. Colour alone is not a state and
+ * fails for colour-vision differences. Background + inset bar + weight, so it survives greyscale. */
+.md-nav__link {
+  border-radius: 6px;
+  padding: 0.32rem 0.5rem;
+  line-height: 1.4;
+}
+
+.md-nav__link:hover {
+  background: var(--byre-surface);
+}
+
+.md-nav__link--active,
+.md-nav__item--active > .md-nav__link {
+  background: var(--byre-brand-soft);
+  color: var(--byre-brand-strong);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--byre-brand);
+}
+
+/* Section headers in the sidebar (Getting started / Handbook / Examples / Reference) read as links at
+ * the same weight. Uppercase micro-caps make them structural without shouting. */
+.md-nav--primary .md-nav__title,
+.md-nav--primary .md-nav__item--section > .md-nav__link {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--byre-muted);
+}
+
+.md-nav__item--section {
+  margin-top: 1rem;
+}
+
+/* Table of contents: the current section needs a marker that is not colour. */
+.md-nav--secondary .md-nav__link {
+  padding-left: 0.7rem;
+  border-left: 2px solid transparent;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.md-nav--secondary .md-nav__link--active {
+  border-left-color: var(--byre-brand);
+  color: var(--byre-brand);
+  font-weight: 600;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* ── code ──────────────────────────────────────────────────────────────────── */
+
+/* Measured: `pre` computed to a transparent background and `border-radius: 0` — blocks sat flush
+ * against the page with nothing marking where they start and end except the syntax colours. */
+.md-typeset pre > code {
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+  line-height: 1.6;
+}
+
+.md-typeset pre {
+  border: 1px solid var(--byre-line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.md-typeset code {
+  font-size: 0.86em;
+}
+
+/* Inline code should not compete with a full block. */
+.md-typeset :not(pre) > code {
+  background: var(--byre-surface);
+  border: 1px solid var(--byre-line);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+/* ── tables ────────────────────────────────────────────────────────────────── */
+
+/* Measured: `border-collapse: separate`, which with material's default borders leaves doubled lines and
+ * a visible gap at every cell corner. */
+.md-typeset table:not([class]) {
+  border-collapse: collapse;
+  border: 1px solid var(--byre-line);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 0.86rem;
+}
+
+.md-typeset table:not([class]) th {
+  font-weight: 700;
+  background: var(--byre-surface);
+  border-bottom: 1px solid var(--byre-line);
+}
+
+.md-typeset table:not([class]) td {
+  border-top: 1px solid var(--byre-line);
+  vertical-align: top;
+}
+
+/* ── diagrams ──────────────────────────────────────────────────────────────── */
 
 /* Diagrams are authored dark-first (see docs/assets/javascripts/mermaid-init.js). In the light palette the
  * default mermaid fill is nearly white, which is fine, but the stroke is thin enough to disappear at 200px
@@ -22,4 +306,37 @@
 .byre-mermaid svg .node polygon,
 .byre-mermaid svg .node circle {
   stroke-width: 1.2px;
+}
+
+.md-typeset .byre-mermaid {
+  border: 1px solid var(--byre-line);
+  border-radius: 10px;
+  padding: 1rem;
+  background: var(--byre-surface);
+  overflow-x: auto;
+  max-width: none;
+}
+
+/* ── header ────────────────────────────────────────────────────────────────── */
+
+/* A flat saturated bar is what makes a material site look like every other material site. A hairline
+ * rule under a slightly deepened bar keeps the brand colour without the slab. */
+.md-header {
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.1);
+}
+
+.md-search__form {
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+.md-search__form:hover {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+}
+
+/* Two visible scrollbars on a desktop (sidebar + page) is noise; the sidebar keeps its affordance
+ * through the fade-out edge instead. */
+.md-sidebar__scrollwrap {
+  scrollbar-width: thin;
+  scrollbar-color: var(--byre-line) transparent;
 }

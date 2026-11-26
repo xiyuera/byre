@@ -1,3 +1,7 @@
+---
+description: Install byre as one binary or a container, point it at localhost:22, and watch a lease survive a reconnect. The smallest working gateway, in about five minutes.
+---
+
 # Quick start
 
 Two ways in. The first needs nothing but Docker; the second needs nothing but a machine you can already

@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+
+# Two language trees, both indexable: the English pages and /zh/. A translated page and its source
+# are different URLs with different content, which is what a search engine wants.
+Sitemap: https://xiyuera.github.io/byre/sitemap.xml

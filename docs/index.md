@@ -1,13 +1,29 @@
-# byre
+---
+jsonld: true
+title: SSH gateway for agent sandboxes
+description: A lease-based SSH gateway for AI agent sandboxes. The client's public key is the lease, so an agent's four SSH connections land on the same instance for as long as the lease holds.
+---
 
-**The SSH gateway for agent sandboxes.** The client's public key *is* the lease: one agent keeps one
-instance exclusively until the lease expires.
+<div class="hero" markdown>
 
-**English** · **中文**
+<p class="hero__kicker">Open source · Apache-2.0</p>
+
+<h1>byre</h1>
+
+<p class="hero__lead">
+The SSH gateway for agent sandboxes.
+<span>The client's public key <em>is</em> the lease: one agent keeps one instance exclusively until the lease expires.</span>
+</p>
+
+<div class="hero__actions" markdown>
 
 [Start in 30 seconds](getting-started/quickstart.md){ .md-button .md-button--primary }
 [Read the design](handbook/architecture.md){ .md-button }
-[GitHub](https://github.com/xiyuera/byre){ .md-button }
+[GitHub](https://github.com/xiyuera/byre){ .md-button .md-button--github }
+
+</div>
+
+</div>
 
 ---
 

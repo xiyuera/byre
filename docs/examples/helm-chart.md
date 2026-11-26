@@ -1,3 +1,7 @@
+---
+description: "Install byre with Helm: the chart ships the ByreLease CRD, a SandboxTemplate and a warm pool. Values for the lease store, TTL, grace and pool size."
+---
+
 # byre Helm chart
 
 The gateway plus, optionally, the sandbox template and warm pool it leases from.

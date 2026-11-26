@@ -1,3 +1,7 @@
+---
+description: "Why byre keys allocation on the client's public key: identity, lease, warm pool, adoption across restarts, and the four obvious repairs that do not work."
+---
+
 # Architecture
 
 ## 1. Shape

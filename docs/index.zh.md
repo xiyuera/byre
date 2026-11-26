@@ -1,12 +1,29 @@
-# byre
+---
+jsonld: true
+title: 面向 agent sandbox 的 SSH 网关
+description: 基于租约的 SSH 网关，给 AI agent 的沙箱用。客户端的公钥就是 lease，所以一个 agent 的四条 SSH 连接会在租约有效期内落在同一个 instance 上。
+---
 
-**面向 agent sandbox 的 SSH 网关。** 客户端的公钥**就是** lease：一个 agent 独占一个 instance，直到 lease 过期。
+<div class="hero" markdown>
 
-**English** · **中文**
+<p class="hero__kicker">开源 · Apache-2.0</p>
+
+<h1>byre</h1>
+
+<p class="hero__lead">
+面向 agent sandbox 的 SSH 网关。
+<span>客户端的公钥<em>就是</em> lease：一个 agent 独占一个 instance，直到 lease 过期。</span>
+</p>
+
+<div class="hero__actions" markdown>
 
 [30 秒上手](getting-started/quickstart.md){ .md-button .md-button--primary }
 [读设计](handbook/architecture.md){ .md-button }
-[GitHub](https://github.com/xiyuera/byre){ .md-button }
+[GitHub](https://github.com/xiyuera/byre){ .md-button .md-button--github }
+
+</div>
+
+</div>
 
 ---
 

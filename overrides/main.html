@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{#
+  Everything a crawler or a link unfurler needs that mkdocs-material does not emit by default:
+  Open Graph, Twitter cards, and a JSON-LD SoftwareApplication block.
+
+  mkdocs already gives us <title>, <meta name="description"> and <link rel="canonical"> from
+  site_url. What it does not give us: a per-page description (all pages inherit site_description
+  today), any og:* or twitter:* tags, and structured data. Without og:image a shared link is a bare
+  URL; without JSON-LD a search engine has to guess this is a software project rather than a blog.
+#}
+
+{% block extrahead %}
+  {{ super() }}
+
+  {%- set page_title = (page.meta.title if page and page.meta and page.meta.title else (page.title if page and page.title else config.site_name)) -%}
+  {%- set full_title = page_title if page_title == config.site_name else page_title ~ " — " ~ config.site_name -%}
+  {%- set page_desc = page.meta.description if page and page.meta and page.meta.description else config.site_description -%}
+  {%- set og_image = (config.site_url ~ "assets/images/landing.png") if config.site_url else "" -%}
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="{{ config.site_name }}">
+  <meta property="og:title" content="{{ full_title }}">
+  <meta property="og:description" content="{{ page_desc }}">
+  {%- if page and page.canonical_url %}
+  <meta property="og:url" content="{{ page.canonical_url }}">
+  {%- endif %}
+  {%- if og_image %}
+  <meta property="og:image" content="{{ og_image }}">
+  <meta property="og:image:alt" content="The byre documentation site">
+  {%- endif %}
+  {%- if page and page.canonical_url and '/zh/' in page.canonical_url %}
+  <meta property="og:locale" content="zh_CN">
+  {%- else %}
+  <meta property="og:locale" content="en_US">
+  {%- endif %}
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ full_title }}">
+  <meta name="twitter:description" content="{{ page_desc }}">
+  {%- if og_image %}
+  <meta name="twitter:image" content="{{ og_image }}">
+  {%- endif %}
+
+  {#
+    Only on the home page of each language: repeating a SoftwareApplication block on fifty pages is
+    noise, and the canonical entity is the product, not each manual page. `page.is_homepage` covers the
+    English root; the i18n plugin's `zh/index.md` is not a homepage by mkdocs's definition, so it is
+    matched by source path.
+  #}
+  {%- if page and (page.meta.jsonld if page.meta else False) %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "byre",
+    "alternateName": "byre SSH gateway",
+    "description": {{ page_desc | tojson }},
+    "url": {{ config.site_url | tojson }},
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Linux, macOS",
+    "runtimePlatform": "Docker, Kubernetes",
+    "isAccessibleForFree": true,
+    "license": "https://www.apache.org/licenses/LICENSE-2.0",
+    "codeRepository": "https://github.com/xiyuera/byre",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    }
+  }
+  </script>
+  {%- endif %}
+{% endblock %}

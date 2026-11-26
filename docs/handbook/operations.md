@@ -1,3 +1,7 @@
+---
+description: "Running byre: first install, the cluster permission that is not in the overlay, host-key rotation, metrics, flags, safe upgrades and uninstall."
+---
+
 # Operations
 
 This is the runbook: it assumes you have read the README's Quick start and now want to run byre for real.

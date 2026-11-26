@@ -1,3 +1,7 @@
+---
+description: "Five-second start: clone the repository, bring the gateway up with one command, and watch two SSH connections land on the same leased instance."
+---
+
 # Five-second start
 
 ```sh
