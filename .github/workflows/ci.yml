@@ -147,40 +147,39 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
-      - name: docs links
-        # `mkdocs build --strict` fails a link to a missing *file*; it says nothing about the
-        # *fragment*. `operations.md#rotation` built green for months while landing readers at the
-        # top of the page, because the target had no such heading. This builds each file's anchor
-        # set the way python-markdown slugs headings and checks every in-site fragment.
-        run: python3 scripts/check-doc-links.py
-      - name: docs build
-        # `docs.yml` carries `if: github.server_url == 'https://github.com'` because GitHub has Pages
-        # and Gitea does not, so `--strict` has never run on a pull request: a broken link could merge
-        # green and only surface as a failed *deploy* after the mirror pushed to GitHub. Building here
-        # puts it where the review happens.
-        #
+      - name: python with pip
         # The act_runner image ships Debian's python3 without pip *and* without ensurepip
         # (measured: `Python 3.11.2 (main, Apr 28 2025) [GCC 12.2.0]`, then
-        # "ensurepip is not available ... apt install python3.11-venv"). So provision the venv
-        # package first. Two fallbacks because this step is the only thing standing between a broken
-        # link and a merged PR — it should not be the fragile part.
+        # "ensurepip is not available ... apt install python3.11-venv"). Provision the venv package
+        # first, then build the docs inside the venv — which also gives `check-doc-links.py` its yaml.
+        # The interpreter is echoed either way so a red run names its cause.
         run: |
           set -e
           echo "python: $(python3 -VV 2>&1)"
           if ! python3 -m pip --version >/dev/null 2>&1; then
-            echo "no pip; provisioning one"
             SUDO=""
             [ "$(id -u)" = 0 ] || SUDO="sudo"
             if command -v apt-get >/dev/null 2>&1; then
               $SUDO apt-get update -qq
               $SUDO apt-get install -y -qq python3-venv
             fi
-            python3 -m venv /tmp/mkdocs-venv
-            . /tmp/mkdocs-venv/bin/activate
-            echo "venv python: $(python3 -VV 2>&1)"
           fi
-          python3 -m pip install --quiet "mkdocs==1.6.1" "mkdocs-material==9.8.2" "mkdocs-static-i18n==1.3.1"
-          mkdocs build --strict --clean
+          python3 -m venv /tmp/docs-venv
+          /tmp/docs-venv/bin/pip install --quiet --retries 5 --timeout 60 \
+              "mkdocs==1.6.1" "mkdocs-material==9.8.2" "mkdocs-static-i18n==1.3.1"
+          echo "/tmp/docs-venv/bin" >> "$GITHUB_PATH"
+          /tmp/docs-venv/bin/python -c "import yaml, mkdocs; print('venv ready:', mkdocs.__version__)"
+      - name: docs links and front matter
+        # Two failure modes `mkdocs build --strict` cannot see:
+        #   1. a link whose *fragment* does not exist (`operations.md#rotation` with no such heading)
+        #   2. front matter that does not parse — the block is dropped and the page silently inherits
+        #      the site-wide meta description
+        run: python3 scripts/check-doc-links.py
+      - name: docs build
+        # `docs.yml` carries `if: github.server_url == 'https://github.com'` because Gitea has no
+        # Pages, so `--strict` would otherwise never run on a pull request: a broken link could merge
+        # green and only surface as a failed *deploy*, after the mirror pushed to GitHub.
+        run: mkdocs build --strict --clean
 
   i18n:
     runs-on: ubuntu-latest
@@ -228,10 +227,10 @@ jobs:
             *) a=amd64 ;;
           esac
           mkdir -p /tmp/tools
-          curl -sSL --retry 3 -m 180 -o /tmp/tools/kubectl \
+          curl -sSL --retry 5 --retry-delay 2 --retry-all-errors -m 180 -o /tmp/tools/kubectl \
             "https://dl.k8s.io/release/v1.31.4/bin/linux/${a}/kubectl"
           chmod +x /tmp/tools/kubectl
-          curl -sSL --retry 3 -m 180 \
+          curl -sSL --retry 5 --retry-delay 2 --retry-all-errors -m 180 \
             "https://mirrors.huaweicloud.com/helm/v3.16.3/helm-v3.16.3-linux-${a}.tar.gz" \
             | tar xz -C /tmp/tools
           /tmp/tools/kubectl version --client

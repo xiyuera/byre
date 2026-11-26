@@ -21,6 +21,8 @@ import sys
 import unicodedata
 from pathlib import Path
 
+import yaml
+
 FENCE = re.compile(r"^\s*(```|~~~)")
 HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 # [text](target) and [text](target "title"); also <a href="target">
@@ -115,6 +117,24 @@ def main() -> int:
         print(f"error: no markdown under {root}", file=sys.stderr)
         return 2
 
+    # Front matter that does not parse is dropped *silently*: the page renders, `--strict` is happy, and
+    # the only symptom is that the meta description and the OG tags fall back to the site-wide default.
+    # Measured: three pages had `description: ... word: more ...` — an unquoted colon-space ends the
+    # scalar, YAML errors, mkdocs ignores the block, and the page ships with the generic description.
+    bad_meta: list[tuple[Path, str]] = []
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if not text.startswith("---\n"):
+            continue
+        head, _, _ = text[4:].partition("\n---\n")
+        if not head:
+            continue
+        try:
+            yaml.safe_load(head)
+        except yaml.YAMLError as exc:
+            first = str(exc).splitlines()[0]
+            bad_meta.append((path.relative_to(root), first))
+
     # Key by resolved absolute path so a link written from anywhere matches the same file.
     root_abs = root.resolve()
     texts = {p.resolve(): p.read_text(encoding="utf-8", errors="replace") for p in files}
@@ -149,6 +169,16 @@ def main() -> int:
     if args.verbose:
         print(f"checked {checked} in-site fragment link(s) across {len(files)} file(s)")
 
+    if bad_meta:
+        print(f"\n{len(bad_meta)} page(s) have front matter that does not parse:\n")
+        for path, first in bad_meta:
+            print(f"  {path}\n    {first}")
+        print(
+            "\nA page whose front matter fails to parse still builds. Its meta description and OG tags\n"
+            "silently fall back to the site-wide default, which is why this is checked here: --strict\n"
+            "has nothing to say about it. Quote the value, or escape the `: ` that ended it."
+        )
+
     if broken:
         print(f"\n{len(broken)} link(s) point at a fragment that does not exist:\n")
         for src, target, dest in broken:
@@ -157,6 +187,9 @@ def main() -> int:
             "\nA reader who follows one of these lands at the top of the page. mkdocs --strict\n"
             "does not catch this: it validates files, not fragments."
         )
+        return 1
+
+    if bad_meta:
         return 1
 
     print(f"ok: {checked} in-site fragment link(s) resolve across {len(files)} file(s)")
