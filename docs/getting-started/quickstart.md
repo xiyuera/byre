@@ -23,7 +23,7 @@ Both print the same hostname. That is the product. Wait out the 120-second ttl a
 released — connect again and you get a different one, which is the lease ending rather than a bug.
 
 What that directory contains and how to move from it to a real deployment is in
-[`examples/quickstart/README.md`](https://github.com/xiyuera/byre/blob/main/examples/quickstart/README.md).
+[`examples/quickstart/README.md`](../examples/quickstart.md).
 
 ## Five minutes, without Docker
 

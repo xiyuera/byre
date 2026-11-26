@@ -45,7 +45,7 @@ ssh -p 2222 -i ~/.ssh/id_ed25519 sandbox@127.0.0.1 hostname
 | `memory` | Kept in the gateway process. A restart loses every lease (the instances stay allocated until their TTL), and more than one replica hands out independent instances for the same identity. |
 
 The CRD (`byreleases.byre.io`, Namespaced, short name `byl`) ships in this chart's
-[`crds/`](https://github.com/xiyuera/byre/blob/main/charts/byre/crds/byreleases.yaml), so a plain `helm install` creates it. Two consequences worth knowing
+[`crds/`](../assets/files/byreleases.yaml), so a plain `helm install` creates it. Two consequences worth knowing
 before you upgrade:
 
 - **`helm upgrade` never updates CRDs.** Helm installs `crds/` on the first install and then leaves

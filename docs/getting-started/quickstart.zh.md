@@ -19,7 +19,7 @@ ssh -o StrictHostKeyChecking=no -p 2222 -i ./keys/id_ed25519 sandbox@127.0.0.1 h
 
 两次打印同一个 hostname。这就是这个产品。等过 120 秒的 ttl，instance 就被释放——再连一次你拿到的是另一个，那是 lease 到期，不是 bug。
 
-那个目录里有什么、怎么从它走到真实部署，在 [`examples/quickstart/README.md`](https://github.com/xiyuera/byre/blob/main/examples/quickstart/README.md)（在仓库里，不在本站）。
+那个目录里有什么、怎么从它走到真实部署，在 [`examples/quickstart/README.md`](../examples/quickstart.md)（在仓库里，不在本站）。
 
 ## 五分钟，不用 Docker
 

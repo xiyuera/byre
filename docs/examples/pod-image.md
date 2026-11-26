@@ -23,7 +23,7 @@ byre-specific: any image that runs `sshd` and trusts the pool key works.
 ## Backend
 
 This is a **fragment**: it goes under `backends:` in a complete configuration, which also needs `listen`,
-`host_key` and an `identities:` list (see [`../local-quickstart/config.yaml`](https://github.com/xiyuera/byre/blob/main/examples/local-quickstart/config.yaml)).
+`host_key` and an `identities:` list (see [`../local-quickstart/config.yaml`](../assets/files/config.yaml)).
 
 ```yaml
 backends:
