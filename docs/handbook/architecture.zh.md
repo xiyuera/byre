@@ -27,7 +27,8 @@ flowchart TB
     driver -->|"ssh（池密钥）"| inst
 ```
 
-两个监听器，没有持久化，没有外部服务。状态活在内存里，加上 instance 上的 annotation。
+两个监听器，没有外部服务。lease 状态默认活在内存里；配了 `lease.store: crd` 之后存进 `ByreLease`
+对象，跨重启与跨副本存活（ADR-0013）。
 
 ## 2. 连接处理
 

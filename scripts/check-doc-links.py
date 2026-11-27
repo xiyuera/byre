@@ -156,6 +156,14 @@ def main() -> int:
                 dest = (path.parent / where).resolve()
                 if dest.is_dir():
                     dest = dest / "index.md"
+                # A Chinese page links to `operations.md`, but the i18n plugin rewrites that to the
+                # Chinese page at build time — so the fragment has to resolve against the Chinese
+                # headings, not the English ones. Without this, a correctly translated anchor looks
+                # broken and a stale English one looks fine.
+                if path.name.endswith(".zh.md") and dest.suffix == ".md" and not dest.name.endswith(".zh.md"):
+                    sibling = dest.with_name(dest.stem + ".zh.md")
+                    if sibling.exists():
+                        dest = sibling
                 if not dest.exists() or dest not in anchors:
                     continue  # outside docs_dir, or a file mkdocs will report itself
             else:

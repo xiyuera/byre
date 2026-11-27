@@ -56,6 +56,9 @@ unless it also needs a new *shape*.
 
 - A web UI. The audience is automation; a UI would add an auth surface larger than the product.
 - Per-identity quotas and billing. Belongs to a scheduler, not to a transport.
-- Persistent home directories per identity. It contradicts "instances are disposable"; clients that need
-  it should sync state themselves, as the reference client does.
+- Persistent home directories per identity. **Implemented** — `volumes:` in the config gives each
+  identity a claim named after its stable name (labelled `byre.io/home`), so rotating a key reattaches
+  the same home instead of losing it. It rules out the warm pool for that backend: a pooled pod is
+  created before its identity is known, and a pod's volumes are fixed at creation time. That trade is
+  the reason it stayed off the roadmap for so long, not a reason it cannot exist.
 - Reimplementing SSH in a browser or a custom protocol. Standard SSH is the contract.
