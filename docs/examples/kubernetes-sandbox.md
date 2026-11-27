@@ -1,3 +1,7 @@
+---
+description: "The complete Kubernetes recipe for byre: template, warm pool, claims backend, RBAC, deployment, and the verification steps that prove it works."
+---
+
 # Kubernetes starter kit
 
 byre in front of a Kubernetes-native sandbox controller. The gateway turns "this SSH key

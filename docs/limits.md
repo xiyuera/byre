@@ -1,3 +1,7 @@
+---
+description: What byre deliberately does not do — single replica, no automated end-to-end gate, no multi-tenant isolation — and what is known to be broken.
+---
+
 # Limits and things known to be wrong
 
 Written down rather than discovered in production. If one of these blocks you, that is worth an issue.

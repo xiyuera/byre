@@ -13,7 +13,7 @@
    are how "it worked yesterday" bugs start.
 
 Those four are about the code. How contributors treat each other is
-[`CODE_OF_CONDUCT.md`](https://github.com/xiyuera/byre/blob/main/CODE_OF_CONDUCT.md) — Contributor Covenant 2.1, with a Chinese summary at the
+[`CODE_OF_CONDUCT.md`](code-of-conduct.md) — Contributor Covenant 2.1, with a Chinese summary at the
 end of it.
 
 ## How a change reaches `main`
@@ -47,7 +47,7 @@ account that owns, and a branch pushes as whoever runs it. This PR is the
 example — owned by `xiyuera`, pushed from `ops/git-merge-gate`.
 
 Account names, credential files, token scopes and the per-role commit identity
-are all in [docs/contributing-from-agents.md](https://github.com/xiyuera/byre/blob/main/docs-internal/contributing-from-agents.md);
+are recorded in the repository's agent-contributor notes;
 this file covers the branch and the merge, that one covers who is behind them.
 
 The point of the prefix is that `git branch -r` answers "who is working on
@@ -433,7 +433,7 @@ A commit passes when its message carries a `Signed-off-by:` line naming the addr
 was authored with. `-s` writes that line from the author identity, so what this mostly catches is not
 a forgotten flag but an identity that answers to nobody: `x <x@x>`, the shared placeholder account
 the first commits used, or a branch whose commits were made under two different addresses. Commit as
-the role account described in [contributing-from-agents.md](https://github.com/xiyuera/byre/blob/main/docs-internal/contributing-from-agents.md), let
+the role account described in the agent-contributor notes, let
 `-s` write the trailer, and do not override the identity with `-c user.name=` or `-c user.email=`.
 
 The range is what the run added, not the whole history. A pull request run is based on the merge

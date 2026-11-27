@@ -1,3 +1,7 @@
+---
+description: What each byre failure looks like from the client and from the gateway log, and which one to check first. Ordered by how often each one is the cause.
+---
+
 # Troubleshooting
 
 Work down this list in order. Each step answers one question and narrows the next: did the client

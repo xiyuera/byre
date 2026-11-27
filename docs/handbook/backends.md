@@ -1,3 +1,7 @@
+---
+description: Every field of the four provisioning backends, the readiness rule, what each one does when it fails, and the contract a `command` backend must honour.
+---
+
 # Backends
 
 A backend is one way of obtaining an instance and one way of reaching it. Pick the shape first, then fill

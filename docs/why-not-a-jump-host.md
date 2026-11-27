@@ -1,3 +1,7 @@
+---
+description: A plain jump host hands each SSH connection to a free instance; byre binds the whole session to an identity. What that changes, and what it costs.
+---
+
 # Why not a plain jump host
 
 A jump host forwards a connection to a target. Handing out an instance per *connection* looks like the same

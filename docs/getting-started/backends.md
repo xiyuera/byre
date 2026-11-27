@@ -1,3 +1,7 @@
+---
+description: The four provisioning shapes byre supports — endpoints, workloads, claims and command — and how to tell which one your hosts need.
+---
+
 # Choose a backend
 
 byre never creates instances itself. It asks a **backend** for an instance and gets back an

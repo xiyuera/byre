@@ -1,3 +1,7 @@
+---
+description: 在 Kubernetes 上端到端跑 byre：SandboxTemplate、热池、claims backend、RBAC 与 ByreLease CRD。按需创建 sandbox，跨重启接管。
+---
+
 # Kubernetes：按需创建 sandbox
 
 这里跑着两个互相独立的部件，它们也各自独立地坏：

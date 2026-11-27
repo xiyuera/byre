@@ -4,7 +4,7 @@ For machines that are always on: lab boxes, build runners, a single beefy host. 
 create or destroy anything here — it leases the endpoint to one identity at a time and hands it back.
 
 This block is a **fragment**: it goes under `backends:` in a complete configuration, which also needs
-`listen`, `host_key` and an `identities:` list (see [`../local-quickstart/config.yaml`](https://github.com/xiyuera/byre/blob/main/examples/local-quickstart/config.yaml)).
+`listen`, `host_key` and an `identities:` list (see [`../local-quickstart/config.yaml`](../assets/files/config.yaml)).
 Run on its own it exits 2 with `at least one identity is required`.
 
 ```yaml

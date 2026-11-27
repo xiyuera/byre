@@ -23,6 +23,10 @@ site_dir: site
 theme:
   name: material
   language: en
+  # `overrides/` adds the head tags mkdocs-material does not emit: og:*, twitter:*, and the JSON-LD
+  # SoftwareApplication block. Everything else in the theme is stock — see assets/stylesheets/extra.css
+  # for why the palette is overridden in CSS rather than here.
+  custom_dir: overrides
   logo: assets/logo.svg
   favicon: assets/logo.svg
   palette:

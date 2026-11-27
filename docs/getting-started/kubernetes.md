@@ -1,3 +1,7 @@
+---
+description: "Run byre on Kubernetes end to end: SandboxTemplate, warm pool, claims backend, RBAC and the ByreLease CRD. Sandboxes created on demand and adopted across restarts."
+---
+
 # Kubernetes: sandboxes created on demand
 
 Two independent pieces run here, and they fail separately:
