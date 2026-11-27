@@ -27,7 +27,8 @@ flowchart TB
     driver -->|"ssh (pool key)"| inst
 ```
 
-Two listeners, no persistence, no external services. State lives in memory plus instance annotations.
+Two listeners, no external services. Lease state lives in memory by default, or in `ByreLease` objects
+spanning restarts and replicas when `lease.store: crd` (ADR-0013).
 
 ## 2. Connection handling
 

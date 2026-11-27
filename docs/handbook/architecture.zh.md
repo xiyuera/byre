@@ -1,5 +1,5 @@
 ---
-description: byre 为什么把分配绑在客户端公钥上：identity、lease、热池、跨重启接管，以及四种看起来显然却不成立的修法。
+description: "byre 为什么把分配绑在客户端公钥上：identity 与 lease 的归属、热池与就绪判定、旧实例跨重启被接管，以及四种看起来显然却不成立的修法。读完这一页，后面每一处设计取舍的原因都能对上；如果你只打算读一页，就读这一页。"
 ---
 
 # 架构
@@ -27,7 +27,8 @@ flowchart TB
     driver -->|"ssh（池密钥）"| inst
 ```
 
-两个监听器，没有持久化，没有外部服务。状态活在内存里，加上 instance 上的 annotation。
+两个监听器，没有外部服务。lease 状态默认活在内存里；配了 `lease.store: crd` 之后存进 `ByreLease`
+对象，跨重启与跨副本存活（ADR-0013）。
 
 ## 2. 连接处理
 
