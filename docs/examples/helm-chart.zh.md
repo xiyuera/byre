@@ -1,10 +1,10 @@
 ---
-description: "用 Helm 安装 byre：chart 会带上 ByreLease CRD，可选地还会带上一个 SandboxTemplate 与热 pool。必须自己设置的两个 values 是 pool 密钥与谁可以连接，另外还要选 lease 存储（crd 或 memory）、TTL、grace 和 pool 大小。"
+description: "用 Helm 安装 byre：chart 会带上 ByreLease CRD，可选地还会带上一个 SandboxTemplate 与热池。必须自己设置的两个 values 是 pool 密钥与谁可以连接，另外还要选 lease 存储（crd 或 memory）、TTL、grace 和 pool 大小。"
 ---
 
 # byre Helm chart
 
-gateway，外加（可选的）它从中取 lease 的 sandbox 模板与热 pool。
+gateway，外加（可选的）它从中取 lease 的 sandbox 模板与热池。
 
 ```sh
 helm install byre ./charts/byre -n byre --create-namespace
@@ -116,7 +116,7 @@ SandboxTemplate` 失败——这是诚实的失败，但它发生在 gateway Dep
 | `lease.namespace` | `""` | `ByreLease` 对象的 namespace；空 = sandbox namespace = release namespace |
 | `replicaCount` | `1` | 大于 1 时同一个 identity 会拿到彼此独立的 sandbox；见 `values.yaml` 里的说明 |
 | `rbac.create` | `true` | 预先绑定了 ServiceAccount 时设为 false |
-| `sandbox.enabled` | `false` | 渲染模板与热 pool |
+| `sandbox.enabled` | `false` | 渲染模板与热池 |
 | `extraVolumes` / `extraVolumeMounts` | `[]` | 例如给 host key 一个 PVC，让它跨重启存活 |
 
 `values.yaml` 里的每个 value 都有内联文档；模板里没有任何硬编码。

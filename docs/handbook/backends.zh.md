@@ -11,11 +11,11 @@ backend 是获得 instance 的一种方式，也是到达它的一种方式。�
 | 手上有什么 | `provision` | 原因 |
 |---|---|---|
 | 已经在跑 `sshd` 的主机（lab、构建机、一台大机器） | `endpoints` | 什么都不创建；gateway 只决定谁拿哪台主机 |
-| 有 claim 形状 CRD 和/或热 pool 的集群 | `claims` | controller 负责创建和删除；byre 只负责请求 |
+| 有 claim 形状 CRD 和/或热池 的集群 | `claims` | controller 负责创建和删除；byre 只负责请求 |
 | 一个集群加一个跑 `sshd` 的镜像，没有 CRD | `workloads` | byre 为每个 lease 创建一个 Pod 并删除它 |
 | 云主机、Incus/LXD、CMDB —— 任何藏在 CLI 后面的东西 | `command` | 你的程序负责 provision 并描述 instance |
 
-| `provision` | 能否活过 gateway 重启 | 有无热 pool | 是否需要集群访问 | 是否在真实集群上测过 |
+| `provision` | 能否活过 gateway 重启 | 有无热池 | 是否需要集群访问 | 是否在真实集群上测过 |
 |---|---|---|---|---|
 | `endpoints` | 否 —— 归属关系在内存里 | 无（未实现 `Create`） | 否 | 是 |
 | `workloads` | 是 —— pod 上的 identity annotation | 有 | 需要（create/delete/patch pod） | 用假客户端跑的单元测试 |
@@ -181,7 +181,7 @@ pod 以 `restartPolicy: Never` 创建，只有一个名为 `instance` 的容器�
 一个在 `ready_timeout` 之内始终没有应答的 claim，会在 acquire 失败之前被删除。
 
 这是唯一有真实集群运行记录的形状（`docs/acceptance/`）。
-它针对的部署用的是 `extensions.agents.x-k8s.io` 的 `SandboxClaim` 加热 pool ——
+它针对的部署用的是 `extensions.agents.x-k8s.io` 的 `SandboxClaim` 加热池 ——
 `api_group: extensions.agents.x-k8s.io`、`resource: sandboxclaims`、
 `object_kind: SandboxClaim`，
 `api_version` 取决于你的集群提供什么（`kubectl api-resources | grep sandboxclaims`）。

@@ -1,6 +1,5 @@
 ---
-description: 在 Kubernetes 上端到端跑 byre：SandboxTemplate、热池、claims backend、RBAC 与 ByreLease CRD。按需创建 sandbox，跨重启接管。
----
+description: "在 Kubernetes 上端到端跑 byre 的完整配方：SandboxTemplate、热池、claims backend、RBAC 与 ByreLease CRD 逐项装配，每一步都给出验证命令。sandbox 按需创建、跨重启被接管；跑完能确认真的是这个形状，而不是只有看起来像，页尾还列了常见的装配错误。"---
 
 # Kubernetes：按需创建 sandbox
 

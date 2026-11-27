@@ -1,8 +1,7 @@
 ---
 jsonld: true
 title: 面向 agent sandbox 的 SSH 网关
-description: 基于租约的 SSH 网关，给 AI agent 的沙箱用。客户端的公钥就是 lease，所以一个 agent 的四条 SSH 连接会在租约有效期内落在同一个 instance 上。
----
+description: "一个基于 lease 的 AI agent 沙箱 SSH 网关。客户端的公钥就是租约，所以一个 agent 的四条 SSH 连接只要租约还在，就会落到同一个 instance 上；断开重连不会换成另一个环境。单副本，状态可存进 CRD，和任何有 sshd 的机器都能对接。"---
 
 <div class="hero" markdown>
 
