@@ -366,7 +366,9 @@ reused on purpose: two clients could point at two different clusters.
    store's `identityNames`.
 3. **Restart.** The startup log reports `adopted: N` for N live leases, and a reconnect from the same
    identity returns the **same** `spec.instance`. This is the whole point; before ADR-0013 this step
-   cold-started everyone.
+   cold-started everyone. A lease that only its annotation knew about gets its `ByreLease` written at
+   this moment, so `kubectl get byreleases` shows one row per adopted lease immediately; if that write
+   fails, `byre_leases_unpersisted` says so and the sweep retries it (ADR-0015).
 4. **Delete an instance object.** Within seconds `kubectl get byreleases` loses that row and the next
    connection gets a fresh instance, without a restart. This exercises the watch (part 4).
 
@@ -427,6 +429,7 @@ One line per event, JSON. The messages below are the ones the binary actually em
 {"level":"WARN","msg":"stale-binding","identity":"a1b2c3d4e5f60718","backend":"k8s-claims","instance":"byre-4k2p9","reason":"instance no longer exists","cause":"...","action":"lease dropped; the next connection provisions a replacement"}
 {"level":"WARN","msg":"cannot reach instance","identity":"a1b2c3d4e5f60718","instance":"byre-4k2p9","error":"dial ..."}
 {"level":"INFO","msg":"lease replaced after the instance disappeared","identity":"a1b2c3d4e5f60718","backend":"k8s-claims","old_instance":"byre-4k2p9","new_instance":"byre-7xw2m"}
+{"level":"INFO","msg":"lease address refreshed","identity":"a1b2c3d4e5f60718","backend":"k8s-claims","instance":"byre-4k2p9","old":"sandbox-2b47c.ns.svc:22","new":"sandbox-vk77n.ns.svc:22"}
 {"level":"WARN","msg":"instance discarded at adoption","backend":"k8s-claims","instance":"byre-warm1","reason":"no identity annotation (stale warm capacity)"}
 ```
 
@@ -449,6 +452,7 @@ reconstruct a key.
 | `unable to authenticate` after a key change | new fingerprint not in `identities` | add it (append), reload |
 | startup exits with a long error list | configuration violations | fix every listed item; do not "fix one and retry" |
 | instance exists in the cluster but nothing references it | an `Acquire` returned an unusable instance, or adoption found a duplicate identity annotation | check `byre_instances_discarded`; the driver should have released it — file a bug if it did not |
+| claim (or pod) is READY, but every reconnect dies with `Broken pipe` and no instance is ever replaced | the object behind the claim was deleted and rebuilt under a new name, so the lease's cached address no longer resolves; `Alive` sees only the claim | upgrade to a build with the address refresh (ADR-0015). Check with `kubectl get sandboxclaim <name> -o jsonpath='{.status.sandbox.serviceFQDN}'` against the address in the gateway's `session open` line; they differ when this is happening, and `lease address refreshed` marks the recovery |
 
 ## Restarting or upgrading safely
 

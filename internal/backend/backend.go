@@ -127,6 +127,24 @@ type Liveness interface {
 	Alive(ctx context.Context, in Instance) error
 }
 
+// Refresher is implemented by drivers whose instance can be replaced behind a stable handle, so the
+// address an instance was created with is not necessarily the address to dial now.
+//
+// It exists because a lease is remembered per identity and reused for every reconnect, and a claim is a
+// durable name for something a controller may rebuild: deleting the object a claim selected and letting
+// the controller create a replacement leaves the claim — and therefore the lease — valid, while the
+// endpoint in status moves to the new object. Liveness cannot answer that question, because the claim
+// never disappeared; without this, every reconnect is dialled at a name that no longer resolves, until
+// the lease expires.
+//
+// Refresh returns the instance as it is now, with the same ID, or an error. An error wrapping
+// ErrInstanceGone means the handle itself is gone and the lease must be dropped; any other error is
+// "unknown", and the caller keeps the address it has, because replacing a working address with nothing
+// would cut off a client that may be fine.
+type Refresher interface {
+	Refresh(ctx context.Context, in Instance) (Instance, error)
+}
+
 // DeletionWatcher is implemented by drivers that can report an instance disappearing as it happens.
 //
 // It exists because Alive() runs on specific paths only: an object deleted while a client is idle

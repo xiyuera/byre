@@ -259,6 +259,50 @@ func (m *Manager) persist(ctx context.Context, e Entry) error {
 	})
 }
 
+// recordAdopted writes the row for a lease that was taken over from its annotation alone.
+//
+// An existing row is not a failure. Adoption lists objects and then writes, so another replica can
+// record the same identity in between: if the row it wrote names the instance we adopted, the binding
+// is already correct and nothing is left to do. If it names a different instance, the store wins
+// (ADR-0013) -- this lease is the leftover, and returning an error is what marks it unpersisted, which
+// is precisely the condition the gauge reports.
+func (m *Manager) recordAdopted(ctx context.Context, e Entry) error {
+	err := m.persist(ctx, e)
+	if err == nil || !errors.Is(err, ErrBindingExists) {
+		return err
+	}
+	b, ok, listErr := m.storedBinding(ctx, e.Identity)
+	if listErr != nil {
+		return fmt.Errorf("%w (and the table could not be re-read: %v)", err, listErr)
+	}
+	if ok && b.Instance == e.Instance.ID {
+		return nil
+	}
+	return fmt.Errorf("%w: the table binds %s to %q", err, shortIdentity(e.Identity), b.Instance)
+}
+
+// storedBinding reads one binding back from the store. It exists for the adoption race above: the
+// store's Put cannot report *what* it found, and the answer decides whether a lease is recorded or
+// merely stranded.
+func (m *Manager) storedBinding(ctx context.Context, identity string) (StoredBinding, bool, error) {
+	m.mu.Lock()
+	store := m.store
+	m.mu.Unlock()
+	if store == nil {
+		return StoredBinding{}, false, nil
+	}
+	all, err := store.List(ctx)
+	if err != nil {
+		return StoredBinding{}, false, err
+	}
+	for _, b := range all {
+		if b.Identity == identity {
+			return b, true, nil
+		}
+	}
+	return StoredBinding{}, false, nil
+}
+
 // forget removes a binding. No store means in-memory only, which is not an error.
 func (m *Manager) forget(ctx context.Context, identity string) error {
 	m.mu.Lock()
@@ -391,8 +435,17 @@ func (m *Manager) Acquire(ctx context.Context, identity, backendName string) (En
 								"action", "lease kept; an inconclusive probe is not a deletion")
 						}
 					}
+					// The instance exists, but existing is not the whole question: a claim can outlive
+					// the sandbox it selected, and the replacement has a new address under the same
+					// claim. Refresh before handing the lease out, so a reconnect is not dialled at a
+					// name that stopped resolving while the lease was idle.
+					fresh, stale, refreshErr := m.refreshAddr(ctx, &snap)
+					if stale {
+						m.dropStale(identity, snap.Instance.ID, "instance no longer exists (address refresh)", refreshErr)
+						continue
+					}
 					metrics.ObserveAcquire(backendName, "reuse")
-					return snap, nil
+					return fresh, nil
 				}
 
 				// The object is gone. Drop the row — only if the table still points at this very
@@ -587,6 +640,75 @@ func (m *Manager) instanceGone(ctx context.Context, e *Entry) (bool, error) {
 	default:
 		return false, err
 	}
+}
+
+// refreshAddr asks a driver that implements backend.Refresher for the instance's current address and
+// updates the live lease in place when it moved.
+//
+// This runs after Alive said the instance exists, and it exists because existence is not enough for a
+// claim: the claim is a stable name for an object a controller may rebuild under a new name, so the
+// address cached at creation outlives the process it pointed at while the claim itself never
+// disappears. The lease is *not* dropped in that case — the claim is still this identity's handle, and
+// its files are behind it — so the row's address is corrected under the same instance ID, no object is
+// released, and byre_lease_dead_instance_total stays where it was.
+//
+// Three outcomes, mirroring instanceGone:
+//   - an address (possibly unchanged): the entry to hand out;
+//   - ErrInstanceGone: the handle went away between the liveness check and this read. Reported so the
+//     caller drops the row and provisions, exactly as a gone liveness check would;
+//   - any other error, including "the claim advertises no address yet": unknown. The cached address is
+//     kept and counted, because the replacement may simply not be ready.
+//
+// The table is only updated when it still points at this very instance, so a refresh that raced a
+// replacement cannot stamp an old address onto a new lease.
+func (m *Manager) refreshAddr(ctx context.Context, e *Entry) (Entry, bool, error) {
+	drv := m.driver(e.Backend)
+	if drv == nil {
+		return *e, false, nil
+	}
+	rf, ok := drv.(backend.Refresher)
+	if !ok {
+		return *e, false, nil
+	}
+
+	pctx, cancel := context.WithTimeout(ctx, m.livenessTimeout)
+	defer cancel()
+	fresh, err := rf.Refresh(pctx, e.Instance)
+	if err != nil {
+		if errors.Is(err, backend.ErrInstanceGone) {
+			return *e, true, err
+		}
+		m.livenessErrors.Add(1)
+		if log := m.log(); log != nil {
+			log.Warn("instance address unknown; keeping the cached address",
+				"identity", shortIdentity(e.Identity), "backend", e.Backend,
+				"instance", e.Instance.ID, "addr", e.Instance.Addr, "error", err,
+				"action", "lease kept; the next reconnect asks again")
+		}
+		return *e, false, nil
+	}
+	if fresh.Addr == e.Instance.Addr {
+		return *e, false, nil
+	}
+
+	m.mu.Lock()
+	cur, ok := m.byIdentity[e.Identity]
+	if !ok || cur.state != stateLeased || cur.Instance.ID != e.Instance.ID {
+		m.mu.Unlock()
+		return *e, false, nil
+	}
+	old := cur.Instance.Addr
+	cur.Instance.Addr = fresh.Addr
+	out := *cur
+	m.mu.Unlock()
+
+	if log := m.log(); log != nil {
+		log.Info("lease address refreshed",
+			"identity", shortIdentity(e.Identity), "backend", e.Backend,
+			"instance", e.Instance.ID, "old", old, "new", fresh.Addr,
+			"action", "lease kept; the instance was replaced behind a stable name")
+	}
+	return out, false, nil
 }
 
 // dropStale forgets a lease whose instance no longer exists, and says so once.
@@ -1068,41 +1190,17 @@ func (m *Manager) Recover(ctx context.Context) (int, error) {
 	}
 
 	known := make(map[string]StoredBinding, len(bindings))
-	hadRow := make(map[string]bool, len(bindings))
 	for _, b := range bindings {
 		if b.Identity == "" {
 			continue
 		}
 		known[b.Identity] = b
-		hadRow[b.Identity] = true
 	}
 
+	// adopt records a row for every lease it takes over from its annotation alone, so the two sources
+	// converge here: what the store already knew is not rewritten, and what only the annotations knew
+	// becomes durable.
 	adopted, firstErr := m.adopt(ctx, known)
-
-	// An instance recovered from its annotation alone has no row yet: the store had never heard of it,
-	// because it predates the store or the write was lost. Write one now -- otherwise every restart
-	// re-derives it from scratch, and a second replica never sees it at all.
-	m.mu.Lock()
-	var missing []Entry
-	for id, e := range m.byIdentity {
-		if e.adopted && !hadRow[id] {
-			missing = append(missing, *e)
-		}
-	}
-	m.mu.Unlock()
-	for _, e := range missing {
-		if err := m.persist(ctx, e); err != nil {
-			m.persistErrors.Add(1)
-			// The flag, not the counter, is what makes this heal. Reap and the reuse path both look for
-			// it; a recovered lease whose row was never written is otherwise in memory unmarked, so the
-			// sweep never touches it and the next restart loses it -- the cold start this change exists
-			// to remove.
-			m.markUnpersisted(e.Identity, e.Instance.ID)
-			if firstErr == nil {
-				firstErr = fmt.Errorf("record the recovered lease for %s: %w", shortIdentity(e.Identity), err)
-			}
-		}
-	}
 
 	// Whatever is left matched no live instance.
 	for identity, b := range known {
@@ -1192,6 +1290,10 @@ func (m *Manager) adopt(ctx context.Context, known map[string]StoredBinding) (in
 		}
 		var doomed []discard
 		var kept []backend.Instance
+		// Leases taken over from their annotation alone have no row in the store. Writing one is what
+		// makes the table durable instead of "recovered afresh on every restart"; it happens outside
+		// the lock, below, after the rows are committed.
+		var needsRow []Entry
 		now := m.now()
 
 		// Decide under the lock, act outside it: Release is a backend call, and holding the table lock
@@ -1226,8 +1328,10 @@ func (m *Manager) adopt(ctx context.Context, known map[string]StoredBinding) (in
 			// With a store present it decides which instance this identity is bound to, so an instance
 			// whose annotation disagrees with it is the leftover: created before the binding moved, or
 			// by a process that lost the race.
+			hadRow := false
 			if known != nil {
 				if b, ok := known[id]; ok {
+					hadRow = true
 					delete(known, id)
 					if b.Instance != "" && b.Instance != in.ID {
 						doomed = append(doomed, discard{in, "the lease table binds this identity to another instance"})
@@ -1239,7 +1343,7 @@ func (m *Manager) adopt(ctx context.Context, known map[string]StoredBinding) (in
 					}
 				}
 			}
-			m.byIdentity[id] = &Entry{
+			entry := &Entry{
 				Identity: id,
 				Backend:  name,
 				Instance: in,
@@ -1248,10 +1352,31 @@ func (m *Manager) adopt(ctx context.Context, known map[string]StoredBinding) (in
 				state:    stateLeased,
 				adopted:  true,
 			}
+			m.byIdentity[id] = entry
 			m.adopted++
 			adopted++
+			if !hadRow {
+				needsRow = append(needsRow, *entry)
+			}
 		}
 		m.mu.Unlock()
+
+		// Record every lease that was taken over from an annotation alone. Leaving this to the caller
+		// is what produced the state an operator could not explain: two leases in memory, zero
+		// ByreLease objects, and byre_leases_unpersisted reporting zero -- the gauge only knew about
+		// writes that failed, not about rows that were never attempted.
+		for _, e := range needsRow {
+			if err := m.recordAdopted(ctx, e); err != nil {
+				m.persistErrors.Add(1)
+				// The flag, not the counter, is what makes this heal: Reap and the reuse path both
+				// look for it, so a lease whose row was never written gets retried instead of being
+				// lost at the next restart.
+				m.markUnpersisted(e.Identity, e.Instance.ID)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("record the adopted lease for %s: %w", shortIdentity(e.Identity), err)
+				}
+			}
+		}
 
 		for _, d := range doomed {
 			if err := drv.Release(ctx, d.in); err != nil {

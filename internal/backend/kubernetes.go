@@ -447,6 +447,50 @@ func (k *Kubernetes) Alive(ctx context.Context, in Instance) error {
 	}
 }
 
+// Refresh implements backend.Refresher with one GET on the claim, re-deriving the address from the
+// status it reads now.
+//
+// The claim is the stable handle: its name and UID do not change when the object it selected is deleted
+// and replaced, and the replacement gets a new name, so the FQDN cached at creation stops resolving.
+// That case is invisible to Alive — the claim exists throughout — which is why the address has to be
+// asked for separately instead of being inferred from existence.
+//
+// A claim that advertises no endpoint is not "gone": the controller is between a deleted instance and
+// its replacement, and the address the caller already has may still answer. Saying "unknown" there is
+// what keeps a reconnect from destroying a lease that is about to become usable again.
+func (k *Kubernetes) Refresh(ctx context.Context, in Instance) (Instance, error) {
+	switch k.cfg.Provider.Kind {
+	case KindWorkloads:
+		// A pod's address is part of the pod. If the pod is deleted or replaced, Alive reports that as
+		// gone; there is no name whose status could move underneath it.
+		return in, nil
+	case KindClaims:
+		obj, err := k.dyn.Resource(k.gvr()).Namespace(k.cfg.Namespace).Get(ctx, in.ID, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return Instance{}, fmt.Errorf("%w: %s %s", ErrInstanceGone, k.claimKind(), in.ID)
+		}
+		if err != nil {
+			return Instance{}, fmt.Errorf("get %s %s: %w", k.cfg.Provider.Resource, in.ID, err)
+		}
+		if obj.GetDeletionTimestamp() != nil {
+			return Instance{}, fmt.Errorf("%w: %s %s is terminating", ErrInstanceGone, k.claimKind(), in.ID)
+		}
+		addr := k.addrFromObject(obj)
+		if addr == "" {
+			return Instance{}, fmt.Errorf("%s %s advertises no address yet (endpoint field %s)",
+				k.claimKind(), in.ID, strings.Join(k.cfg.Provider.EndpointField, "."))
+		}
+		// Only the address moves. The ID is the claim's name, which is what the lease and the store
+		// are keyed on, and the UID is the claim's own object identity — neither is affected by the
+		// sandbox behind it being replaced.
+		out := in
+		out.Addr = addr
+		return out, nil
+	default:
+		return Instance{}, fmt.Errorf("backend %q cannot refresh an address (kind %q)", k.cfg.Name, k.cfg.Provider.Kind)
+	}
+}
+
 // List returns instances this driver created (by label), so a restarted process can adopt them.
 //
 // Every object the label selects is returned, including one this driver can no longer address. That is
@@ -571,6 +615,8 @@ func (k *Kubernetes) Adopt(ctx context.Context, ins []Instance) error {
 func (k *Kubernetes) AnonymousInstancesAreStale() bool { return true }
 
 var _ StaleCapacity = (*Kubernetes)(nil)
+var _ Liveness = (*Kubernetes)(nil)
+var _ Refresher = (*Kubernetes)(nil)
 
 // ---------------------------------------------------------------- pods
 
