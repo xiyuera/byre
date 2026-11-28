@@ -9,6 +9,46 @@ date. See [docs/release.md](docs/release.md) for the rule and the mechanics.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-28
+
+An instance that is replaced behind a stable claim no longer leaves the gateway dialling an address that
+no longer answers. The claim is a stable handle on purpose — the sandbox behind it is allowed to be
+replaced — but only the *name* was re-read on reuse, never the endpoint it now advertises, so every
+reconnecting client was handed the old FQDN while `byre_lease_dead_instance_total` stayed at zero. Two
+identities lost their terminals for 28 minutes on 2026-11-27 with every dashboard green.
+
+The same incident exposed a second gap: leases adopted from their annotation alone were never written to
+the store, so a process could hold two leases in memory against zero `ByreLease` objects and report
+`byre_leases_unpersisted` as zero — the gauge only counted writes that failed, not writes that were never
+attempted.
+
+### Fixed
+
+- **A claim's address is refreshed when the sandbox behind it is replaced.** `Acquire` now calls an
+  optional `backend.Refresher` on the reuse path. For the claims backend it re-reads the claim and
+  recomputes the endpoint from its current `status`, then updates the lease's address in place: same
+  identity, same lease, same client files — the instance is simply the new one. A refresh that fails with
+  an unknown error keeps the cached address (ADR-0008 semantics) rather than dropping a working lease.
+  Dropping the lease instead was rejected: it would reset the per-identity `refs` count and drain state and
+  force a pointless client teardown. See `docs/adr/0015-a-claim-is-a-stable-handle.md`.
+- **Adopted leases are written to the store.** `adopt()` records every lease it takes over from an
+  annotation alone, outside the table lock and after the rows are committed. A row written by another
+  replica for the same instance is accepted; one that binds a different instance wins, as in ADR-0013.
+  Without this, `byre_leases_unpersisted` could not distinguish "the store is fine" from "nothing was ever
+  written", which is what made the 2026-11-27 incident look like an unexplained count.
+
+### Added
+
+- **The chart ships the `ByreLease` CRD and exposes the lease store.** `lease.store` and
+  `lease.namespace` are values, and the CRD is installed by the chart so `store: crd` works without a
+  separate `kubectl apply`. CI now lints and renders the chart.
+
+### Documentation
+
+- **A Chinese edition, and a site that reads as a usage manual.** handbook and examples are translated
+  under `/zh/`; process records and release notes were moved out of the site. Every page has its own
+  description, and links stay in-site instead of handing the reader to GitHub.
+
 ## [0.5.0] - 2026-11-24
 
 The lease table can live in the cluster. Until now `byre` held every identity → instance binding in
