@@ -13,7 +13,7 @@
   "./docs/getting-started/quickstart.zh.md": {"source": "./docs/getting-started/quickstart.md", "digest": "28edf644ca836b99c540caf223407c2d780b41653f1c8a51e13ad1ccbedd3669"},
   "./docs/handbook/architecture.zh.md": {"source": "./docs/handbook/architecture.md", "digest": "6d721f96e9f05e41e7d2e096746e239c9101e8e9e601fde70c0cb1efec636f66"},
   "./docs/handbook/backends.zh.md": {"source": "./docs/handbook/backends.md", "digest": "18fdec81f13106cf4d7220a0c9a555120d7b568558a09111fe263c1ba02efe10"},
-  "./docs/handbook/operations.zh.md": {"source": "./docs/handbook/operations.md", "digest": "baccbbb1eb9c0683ecf8dcbb91e0bdcdfe1b41f6fcbd712a4840cf402abd8d87"},
+  "./docs/handbook/operations.zh.md": {"source": "./docs/handbook/operations.md", "digest": "4b47db7d1adc0aab40b3e712d1c1684d8a7b1a8204e20f99862f78e6cb64a847"},
   "./docs/handbook/troubleshooting.zh.md": {"source": "./docs/handbook/troubleshooting.md", "digest": "043b518b944e2ab6bf9cf65ba20987f8e36be806313d409ef97684b94605df58"},
   "./docs/index.zh.md": {"source": "./docs/index.md", "digest": "bcb1d21a535d5934fb3b6520053d7760576150d403997b52864f9df9166b8c78"},
   "./docs/limits.zh.md": {"source": "./docs/limits.md", "digest": "c4e01177f9ce05604ea01f844c73f5ea1913f8cefabea5edc97433f80c87ebef"},

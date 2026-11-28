@@ -359,7 +359,9 @@ lease:
    `spec.name` 为空，说明指纹拼写不匹配——见该 store 的 `identityNames` 里的说明。
 3. **重启。** 启动日志对 N 个存活 lease 报告 `adopted: N`，来自同一
    identity 的重连返回**同一个** `spec.instance`。这就是全部要点；在 ADR-0013 之前，这一步
-   会让大家全部冷启动。
+   会让大家全部冷启动。只靠注解才知道的 lease 会在此刻补写它的 `ByreLease`，所以
+   `kubectl get byreleases` 立刻就能看到每个被接管的 lease 一行；如果这次写入失败，
+   `byre_leases_unpersisted` 会说明，sweep 会重试（ADR-0015）。
 4. **删除一个 instance 对象。** 几秒内 `kubectl get byreleases` 丢掉那一行，下一条
    连接拿到一个全新的 instance，无需重启。这检验了 watch（第 4 部分）。
 
@@ -420,6 +422,7 @@ byre -config /etc/byre/config.yaml -listen 127.0.0.1:2223   # 第二个端口，
 {"level":"WARN","msg":"stale-binding","identity":"a1b2c3d4e5f60718","backend":"k8s-claims","instance":"byre-4k2p9","reason":"instance no longer exists","cause":"...","action":"lease dropped; the next connection provisions a replacement"}
 {"level":"WARN","msg":"cannot reach instance","identity":"a1b2c3d4e5f60718","instance":"byre-4k2p9","error":"dial ..."}
 {"level":"INFO","msg":"lease replaced after the instance disappeared","identity":"a1b2c3d4e5f60718","backend":"k8s-claims","old_instance":"byre-4k2p9","new_instance":"byre-7xw2m"}
+{"level":"INFO","msg":"lease address refreshed","identity":"a1b2c3d4e5f60718","backend":"k8s-claims","instance":"byre-4k2p9","old":"sandbox-2b47c.ns.svc:22","new":"sandbox-vk77n.ns.svc:22"}
 {"level":"WARN","msg":"instance discarded at adoption","backend":"k8s-claims","instance":"byre-warm1","reason":"no identity annotation (stale warm capacity)"}
 ```
 
@@ -441,6 +444,7 @@ identity 以指纹的前 16 个字符出现——够用来关联，不够用来�
 | 换密钥后 `unable to authenticate` | 新指纹不在 `identities` 里 | 加上它（追加），重新加载 |
 | 启动以很长的错误列表退出 | 配置违规 | 修掉列出的每一项；不要「改一个再重试」 |
 | instance 在集群里存在但没人引用它 | 一次 `Acquire` 返回了不可用的 instance，或 adoption 发现重复的 identity annotation | 查 `byre_instances_discarded`；driver 本应已释放它——如果没有，提一个 bug |
+| claim（或 pod）是 READY 的，但每次重连都以 `Broken pipe` 死掉，且没有任何 instance 被替换 | claim 背后的对象被删掉、以新名字重建了，于是 lease 缓存的地址不再能解析；`Alive` 只看得到 claim | 升级到带地址刷新的版本（ADR-0015）。用 `kubectl get sandboxclaim <name> -o jsonpath='{.status.sandbox.serviceFQDN}'` 拿到的地址，与网关 `session open` 那行里的地址比一比；正在发生这件事时两者不同，而 `lease address refreshed` 标记了恢复 |
 
 ## 安全重启或升级
 
